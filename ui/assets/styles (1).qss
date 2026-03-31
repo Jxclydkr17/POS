@@ -1,0 +1,218 @@
+/* =============================================================
+   styles.qss — Estilos compartidos de la aplicación
+   Centraliza CSS que antes estaba inline en cada vista.
+   ============================================================= */
+
+
+/* ----------------------------------------------------------
+   SuppliersView
+   ---------------------------------------------------------- */
+
+/* Título principal */
+QLabel#suppliersTitle {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 10px;
+    color: #D9D9D9;
+}
+
+/* Buscador */
+QLineEdit#suppliersSearch {
+    padding: 6px;
+    font-size: 13px;
+}
+
+/* Tabla: fila seleccionada */
+QTableWidget#suppliersTable::item:selected {
+    background-color: #0078d7;
+    color: white;
+}
+
+/* Panel lateral de detalles */
+QFrame#SupplierDetailsPanel {
+    background-color: #2C2F33;
+    border: 1px solid #3A3F44;
+    border-radius: 12px;
+    padding: 12px;
+}
+QFrame#SupplierDetailsPanel QLabel {
+    color: #D9D9D9;
+}
+
+/* Título del panel */
+QLabel#panelTitle {
+    font-size: 15px;
+    font-weight: bold;
+    margin-bottom: 8px;
+}
+
+/* Nombre del proveedor */
+QLabel#supplierName {
+    font-size: 14px;
+    font-weight: bold;
+    color: #5B9BD5;
+}
+
+/* Labels de métricas genéricos (via objectName "metricLabel") */
+QLabel#metricLabel {
+    font-size: 13px;
+    padding: 4px 0;
+}
+
+/* Score (base — el color se pone dinámicamente) */
+QLabel#supplierScore {
+    font-size: 13px;
+    padding: 4px 0;
+    font-weight: bold;
+}
+
+/* Promedio de compra */
+QLabel#avgPurchaseGap {
+    font-size: 12px;
+    padding: 3px 0;
+    color: #DDDDDD;
+}
+
+/* Títulos de sección en panel lateral */
+QLabel#sectionTitle {
+    font-size: 13px;
+    font-weight: bold;
+    color: #AAAAAA;
+    padding: 6px 0;
+}
+
+/* Título de contacto (padding menor) */
+QLabel#contactTitle {
+    font-size: 13px;
+    font-weight: bold;
+    color: #AAAAAA;
+    padding: 2px 0;
+}
+
+/* Labels de compras recientes */
+QLabel#recentPurchaseLabel {
+    font-size: 13px;
+    padding: 2px 0;
+    color: #D9D9D9;
+}
+
+/* Labels de contacto */
+QLabel#contactLabel {
+    font-size: 13px;
+    padding: 4px 0;
+}
+
+/* Separador horizontal */
+QFrame#panelSeparator {
+    color: #3A3F44;
+    margin: 6px 0;
+}
+
+/* Labels de alerta */
+QLabel#alertLabel {
+    font-size: 12px;
+    padding: 3px 0;
+    color: #EB5757;
+    font-weight: bold;
+}
+
+
+/* =============================================================
+   SalesAnalyticsView + PurchasesAnalyticsView (estilos compartidos)
+   ============================================================= */
+
+/* Título principal */
+QLabel#analyticsTitle {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 8px;
+    color: #f0f0f0;
+}
+
+/* Etiqueta de estado */
+QLabel#analyticsStatus {
+    color: #9ca3af;
+    font-size: 13px;
+}
+
+/* KPI cards */
+QLabel#analyticsKpiLabel {
+    background-color: #222;
+    border-radius: 8px;
+    padding: 8px 12px;
+    border: 1px solid #333;
+    color: #f0f0f0;
+}
+
+/* Tabs de gráficos */
+QTabWidget#analyticsChartTabs::pane {
+    border: none;
+    background-color: #1c1c1c;
+    border-radius: 10px;
+}
+QTabWidget#analyticsChartTabs > QTabBar::tab {
+    background-color: #2A2A2A;
+    color: white;
+    padding: 10px 20px;
+    margin-right: 4px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}
+QTabWidget#analyticsChartTabs > QTabBar::tab:selected {
+    background-color: #3a86ff;
+    font-weight: bold;
+}
+
+/* Tabla top productos */
+QTableWidget#analyticsTopTable {
+    background-color: #1e1e1e;
+    alternate-background-color: #262626;
+    color: #f0f0f0;
+    gridline-color: transparent;
+    border: none;
+    selection-background-color: #1e3a5f;
+    selection-color: #f9fafb;
+}
+QTableWidget#analyticsTopTable QHeaderView::section {
+    background-color: #2c2c2c;
+    color: #9ca3af;
+    padding: 6px 10px;
+    border: none;
+    border-bottom: 2px solid #374151;
+    font-weight: bold;
+    font-size: 12px;
+}
+QTableWidget#analyticsTopTable::item {
+    padding: 4px 10px;
+}
+
+/* Botón Actualizar */
+QPushButton#analyticsRefreshBtn {
+    background-color: #3a86ff;
+    color: white;
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-weight: 600;
+    border: none;
+}
+QPushButton#analyticsRefreshBtn:hover {
+    background-color: #2563eb;
+}
+QPushButton#analyticsRefreshBtn:disabled {
+    background-color: #374151;
+    color: #6b7280;
+}
+
+/* Botones de exportación */
+QPushButton#analyticsExportBtn {
+    background-color: #374151;
+    color: #e5e7eb;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-weight: 600;
+    border: 1px solid #4b5563;
+}
+QPushButton#analyticsExportBtn:hover {
+    background-color: #4b5563;
+    border-color: #6b7280;
+}

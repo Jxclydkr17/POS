@@ -1,0 +1,695 @@
+# app/db/crud/sale_crud.py
+"""
+FASE 4.1 — Lógica de negocio de ventas extraída del router.
+El router solo valida entrada, llama a estas funciones y devuelve respuesta.
+"""
+import math
+from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
+
+from fastapi import HTTPException
+from sqlalchemy.orm import Session, joinedload
+
+from app.db.models.sale import Sale
+from app.db.models.sale_detail import SaleDetail
+from app.db.models.product import Product
+from app.db.models.customer import Customer
+from app.db.models.cash_session import CashSession
+from app.db.models.electronic_invoice import ElectronicInvoice
+from app.db.models.issuer_profile import IssuerProfile
+from app.db.models.inventory_movement import MovementType
+from app.db.models.credit_sale import CreditSale
+from app.db.models.credit import Credit
+from app.db.models.user import User
+from app.db.crud.product_crud import log_inventory_movement
+
+from app.schemas.sale import (
+    SaleCreate, SaleUpdate, SaleListOut,
+    PaginatedSalesResponse, SaleItemCreate,
+)
+from app.services.credit_service import add_credit_sale
+from app.services.pdf_reports import generate_sale_pdf
+from app.utils.email_utils import send_sale_email
+from app.services.cash_movement_service import register_cash_movement
+from app.core.logger import logger
+from app.einvoice.sequence import next_sequence_number, build_consecutivo, build_clave
+from app.utils.dt import today_cr
+
+# 📏 Helper de unidades de medida
+from app.utils.unit_helpers import is_unit_based
+
+
+# ─── Helpers ────────────────────────────────────────────────────
+
+
+def is_efectivo(pm: str) -> bool:
+    return (pm or "").strip().lower() == "efectivo"
+
+
+def is_credit_method(pm: str) -> bool:
+    return (pm or "").strip().lower() in ("credito", "crédito")
+
+
+def normalize_tax_rate(raw_rate) -> Decimal:
+    rate = Decimal(str(raw_rate or 0))
+    if 0 < rate < 1:
+        rate *= Decimal("100")
+    return rate
+
+
+def calc_line_tax(
+    unit_price: Decimal,
+    quantity: Decimal,
+    discount_percent: Decimal,
+    tax_rate_pct: Decimal,
+):
+    """
+    Calcula montos de una línea.
+    unit_price: precio CON IVA incluido.
+    quantity: ahora Decimal para soportar fracciones (kg, m, L).
+    Retorna: (subtotal_base, tax_amount, total_linea)
+    """
+    rate_frac = tax_rate_pct / Decimal("100")
+    tax_factor = Decimal("1") + rate_frac
+
+    unit_net = unit_price / tax_factor if rate_frac > 0 else unit_price
+    gross = unit_net * Decimal(str(quantity))
+    disc_amt = gross * (discount_percent / Decimal("100"))
+    subtotal = gross - disc_amt
+    tax_amt = subtotal * rate_frac if rate_frac > 0 else Decimal("0")
+    total = subtotal + tax_amt
+
+    Q = lambda v: v.quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)
+    return Q(subtotal), Q(tax_amt), Q(total)
+
+
+def _get_open_cash_session(db: Session) -> CashSession:
+    cs = (
+        db.query(CashSession)
+        .filter(CashSession.status == "open", CashSession.date == today_cr())
+        .first()
+    )
+    if not cs:
+        raise HTTPException(status_code=400, detail="No hay una caja abierta para registrar la venta.")
+    return cs
+
+
+def _get_or_create_issuer(db: Session) -> IssuerProfile:
+    issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
+    if not issuer:
+        issuer = IssuerProfile(
+            legal_name="Mi Negocio", id_type="01",
+            id_number="000000000", email="facturacion@tudominio.com",
+            branch_code="101", terminal_code="00001",
+        )
+        db.add(issuer)
+        db.flush()
+    return issuer
+
+
+def _process_sale_lines(
+    db: Session,
+    sale_id: int,
+    items: List[SaleItemCreate],
+    validate_price: bool = True,
+) -> Decimal:
+    """
+    Procesa las líneas de una venta: valida producto, stock, precio,
+    descuenta stock, crea SaleDetail. Retorna el total.
+    """
+    total = Decimal("0")
+
+    for item in items:
+
+        # ─── PRODUCTO COMÚN: no toca inventario ───
+        if getattr(item, "is_common", False):
+            unit_price_dec = Decimal(str(item.unit_price))
+            discount_pct = Decimal(str(item.discount_percent or 0))
+            qty_dec = Decimal(str(item.quantity))
+            gross = unit_price_dec * qty_dec
+            disc_amt = gross * (discount_pct / Decimal("100"))
+            total_linea = gross - disc_amt
+            total += total_linea
+
+            db.add(SaleDetail(
+                sale_id=sale_id,
+                product_id=None,
+                quantity=qty_dec,
+                unit_price=unit_price_dec,
+                discount_percent=discount_pct,
+                subtotal=total_linea,
+                tax_rate=0,
+                tax_amount=0,
+                is_common=True,
+                common_description=(item.common_description or "Producto común").strip(),
+            ))
+            continue
+        # ─── FIN PRODUCTO COMÚN ───
+
+        product = (
+            db.query(Product)
+            .filter(Product.id == item.product_id)
+            .with_for_update()
+            .first()
+        )
+        if not product:
+            raise HTTPException(status_code=404, detail=f"Producto ID {item.product_id} no existe.")
+        if not product.is_active:
+            raise HTTPException(status_code=400, detail=f"El producto '{product.name}' está desactivado.")
+
+        # 📏 Convertir cantidad a Decimal
+        qty_dec = Decimal(str(item.quantity))
+
+        # 📏 VALIDACIÓN: productos tipo "Unid" no aceptan fracciones
+        if is_unit_based(product.unit_type or "Unid"):
+            if qty_dec != qty_dec.to_integral_value():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"'{product.name}' se vende por unidad. No se permiten fracciones.",
+                )
+
+        if product.stock < qty_dec:
+            raise HTTPException(status_code=400, detail=f"Stock insuficiente para '{product.name}'.")
+
+        if validate_price:
+            db_price = float(product.price or 0)
+            sent_price = float(item.unit_price or 0)
+            if db_price > 0 and abs(sent_price - db_price) > 0.50:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Precio de '{product.name}' difiere del registrado. Recargue productos.",
+                )
+
+        log_inventory_movement(
+            db, product, type=MovementType.venta,
+            quantity=qty_dec, reference=f"Venta #{sale_id}",
+        )
+        product.stock -= qty_dec
+
+        tax_rate_pct = normalize_tax_rate(product.tax_rate)
+        unit_price_dec = Decimal(str(item.unit_price))
+        discount_pct = Decimal(str(item.discount_percent or 0))
+
+        # 📏 quantity ya es Decimal — no necesita int()
+        subtotal_base, tax_amount, total_linea = calc_line_tax(
+            unit_price=unit_price_dec, quantity=qty_dec,
+            discount_percent=discount_pct, tax_rate_pct=tax_rate_pct,
+        )
+        total += total_linea
+
+        db.add(SaleDetail(
+            sale_id=sale_id, product_id=product.id,
+            quantity=qty_dec, unit_price=unit_price_dec,
+            discount_percent=discount_pct, subtotal=total_linea,
+            tax_rate=tax_rate_pct, tax_amount=tax_amount,
+        ))
+
+    return total
+
+
+def _restore_stock_from_details(db: Session, sale_id: int, reference_prefix: str = "Anulación"):
+    """Restaura stock de todas las líneas de una venta (omite productos comunes)."""
+    details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale_id).all()
+    for d in details:
+        # Producto común → no tiene stock que restaurar
+        if d.is_common or d.product_id is None:
+            continue
+        product = (
+            db.query(Product)
+            .filter(Product.id == d.product_id)
+            .with_for_update()
+            .first()
+        )
+        if product:
+            log_inventory_movement(
+                db, product, type=MovementType.anulacion,
+                quantity=d.quantity, reference=f"{reference_prefix} Venta #{sale_id}",
+            )
+            product.stock += d.quantity
+    return details
+
+
+def _revert_cash_movement(db: Session, sale: Sale, concept: str, source: str):
+    """Si la venta fue en efectivo, registra salida de caja.
+    Bug 4.2: usa el cash_session_id de la venta en vez de buscar por fecha."""
+    if not is_efectivo(sale.payment_method):
+        return
+    # Primero intentar la sesión original de la venta
+    target_session = (
+        db.query(CashSession)
+        .filter(CashSession.id == sale.cash_session_id, CashSession.status == "open")
+        .first()
+    )
+    # Si la sesión original ya se cerró, usar la sesión abierta actual
+    if not target_session:
+        target_session = (
+            db.query(CashSession)
+            .filter(CashSession.status == "open", CashSession.date == today_cr())
+            .first()
+        )
+    if target_session:
+        register_cash_movement(
+            db=db, cash_session_id=target_session.id,
+            movement_type="OUT", amount=sale.total,
+            concept=concept, source=source,
+            description=f"{concept} #{sale.id}",
+            reference_id=sale.id,
+        )
+
+
+def _revert_credit(db: Session, sale: Sale, payment_method_label: str):
+    """Si la venta fue a crédito, revierte saldo del cliente."""
+    credit_sale = db.query(CreditSale).filter(CreditSale.sale_id == sale.id).first()
+    if not credit_sale:
+        return
+    customer = db.query(Customer).filter(Customer.id == credit_sale.customer_id).first()
+    if customer:
+        customer.credit_balance = max(
+            Decimal("0"), Decimal(str(customer.credit_balance or 0)) - Decimal(str(credit_sale.total_amount))
+        )
+        db.add(Credit(
+            customer_id=credit_sale.customer_id,
+            amount=credit_sale.total_amount,
+            type="payment", payment_method=payment_method_label,
+            description=f"{payment_method_label} Venta #{sale.id} (credit_sale_id:{credit_sale.id})",
+        ))
+
+
+# ═════════════════════════════════════════════════════════════
+# Funciones principales de negocio
+# ═════════════════════════════════════════════════════════════
+
+
+def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
+    """Crea una venta completa: líneas, stock, crédito, factura, caja, PDF."""
+    customer_id = sale_in.customer_id
+    payment_method = sale_in.payment_method
+    document_type = sale_in.document_type or "04"
+    details = sale_in.details or []
+
+    if document_type not in ("01", "04"):
+        raise HTTPException(status_code=400, detail="document_type inválido. Use '01' o '04'.")
+    if not details:
+        raise HTTPException(status_code=400, detail="La venta no tiene productos.")
+
+    cash_session = _get_open_cash_session(db)
+
+    new_sale = Sale(
+        customer_id=customer_id,
+        user_id=current_user.id,
+        cash_session_id=cash_session.id,
+        total=0.0,
+        payment_method=payment_method,
+        document_type=document_type,
+        status="ACTIVA",
+    )
+
+    # CondicionVenta
+    cond_code = (sale_in.condicion_venta_code or "").strip()
+    if cond_code:
+        if not cond_code.isdigit() or len(cond_code) > 2:
+            raise HTTPException(status_code=400, detail="condicion_venta_code inválido.")
+        cond_code = cond_code.zfill(2)
+        if cond_code not in ("01", "02", "10"):
+            raise HTTPException(status_code=400, detail="condicion_venta_code no soportado.")
+        new_sale.condicion_venta_code = cond_code
+
+    effective_cond = new_sale.condicion_venta_code or ("02" if is_credit_method(payment_method) else "01")
+
+    if effective_cond in ("02", "10"):
+        if not sale_in.credit_days or int(sale_in.credit_days) <= 0:
+            raise HTTPException(status_code=400, detail="credit_days obligatorio y > 0 para crédito.")
+        new_sale.credit_days = int(sale_in.credit_days)
+        if effective_cond == "10" and new_sale.credit_days > 90:
+            raise HTTPException(status_code=400, detail="Plazo máximo 90 días para CondicionVenta=10.")
+
+    _is_credit = effective_cond in ("02", "10") or is_credit_method(payment_method)
+
+    db.add(new_sale)
+    db.flush()
+
+    # Procesar líneas
+    total = _process_sale_lines(db, new_sale.id, details)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Total de venta inválido.")
+    new_sale.total = total
+
+    # Crédito
+    if _is_credit:
+        if not customer_id or customer_id == 1:
+            raise HTTPException(status_code=400, detail="No se puede asignar crédito al Cliente General.")
+        customer = db.query(Customer).filter(Customer.id == customer_id).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+        add_credit_sale(db, customer_id, new_sale.id)
+
+    # Factura electrónica
+    einv = ElectronicInvoice(sale_id=new_sale.id, document_type=document_type, status="PENDING")
+    db.add(einv)
+    db.flush()
+
+    issuer = _get_or_create_issuer(db)
+    branch = (issuer.branch_code or "101").zfill(3)
+    terminal = (issuer.terminal_code or "00001").zfill(5)
+
+    seq_num = next_sequence_number(db, branch, terminal, document_type)
+    consecutivo = build_consecutivo(branch, terminal, document_type, seq_num)
+    clave = build_clave(issuer.id_number, consecutivo, situation="1")
+    einv.consecutivo = consecutivo
+    einv.clave = clave
+
+    # Caja
+    if is_efectivo(payment_method):
+        register_cash_movement(
+            db=db, cash_session_id=cash_session.id, movement_type="IN",
+            amount=total, concept="Venta en efectivo",
+            source="SALE_CASH", description=f"Venta #{new_sale.id}",
+            reference_id=new_sale.id,
+        )
+
+    db.commit()
+    db.refresh(new_sale)
+
+    # PDF/Email (no bloquea la venta si falla)
+    customer_db = db.query(Customer).filter(Customer.id == customer_id).first() if customer_id else None
+    customer_name = customer_db.name if customer_db else "Cliente General"
+    pdf_path = _generate_pdf_and_email(db, new_sale, customer_db, customer_name, payment_method, document_type, total)
+
+    return {
+        "message": "Venta registrada correctamente.",
+        "sale": {
+            "id": new_sale.id, "customer": customer_name,
+            "total": float(total), "payment_method": payment_method,
+            "document_type": document_type, "user_id": current_user.id,
+            "created_at": new_sale.created_at.isoformat(),
+        },
+        "pdf_path": pdf_path,
+    }
+
+
+def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):
+    from app.services.settings_service import get_business_info
+    biz = get_business_info(db)
+
+    sale_data = {
+        "id": sale.id,
+        "customer": {"name": customer_name},
+        "details": [],
+        "total": float(total),
+        "payment_method": payment_method,
+        "document_type": document_type,
+        "created_at": sale.created_at.strftime("%Y-%m-%d %H:%M"),
+        "business": biz,
+    }
+
+    # ⚡ Prefetch: cargar todos los productos necesarios en UNA sola query
+    product_ids = [d.product_id for d in sale.details if d.product_id and not getattr(d, "is_common", False)]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(product_ids)).all()
+        products_map = {p.id: p for p in products}
+
+    for d in sale.details:
+        _unit_type = "Unid"
+        # ✅ PRODUCTO COMÚN: usar common_description en vez de buscar Product
+        if getattr(d, "is_common", False) or d.product_id is None:
+            prod_name = f"📦 {d.common_description or 'Producto común'}"
+        else:
+            prod = products_map.get(d.product_id)
+            prod_name = prod.name if prod else f"Producto #{d.product_id}"
+            # 📏 Obtener unit_type del producto (si existe)
+            if prod:
+                _unit_type = prod.unit_type or "Unid"
+
+        sale_data["details"].append({
+            "product": prod_name,
+            "quantity": float(d.quantity), "unit_price": float(d.unit_price),
+            "subtotal": float(d.subtotal),
+            "tax_rate": float(d.tax_rate or 0), "tax_amount": float(d.tax_amount or 0),
+            "unit_type": _unit_type,
+        })
+    try:
+        pdf_path = generate_sale_pdf(sale_data)
+        if customer_db and customer_db.email:
+            send_sale_email(customer_db.email, pdf_path, sale_data["id"], business_name=biz["name"])
+        return pdf_path
+    except Exception as e:
+        logger.warning(f"Error PDF/Email: {e}")
+        return None
+
+
+def list_sales_paginated(
+    db: Session,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 50,
+) -> PaginatedSalesResponse:
+    page = max(1, page)
+    page_size = max(1, min(500, page_size))
+
+    query = db.query(Sale).filter(Sale.status != "ANULADA")
+    if search:
+        query = query.join(Customer, isouter=True).filter(Customer.name.ilike(f"%{search}%"))
+
+    total_count = query.count()
+    total_pages = max(1, math.ceil(total_count / page_size))
+    offset = (page - 1) * page_size
+
+    sales = query.order_by(Sale.created_at.desc()).offset(offset).limit(page_size).all()
+
+    return PaginatedSalesResponse(
+        data=[SaleListOut.model_validate(s) for s in sales],
+        total_count=total_count, page=page,
+        page_size=page_size, total_pages=total_pages,
+    )
+
+
+def get_sales_by_range(
+    db: Session, start: datetime, end: datetime,
+    skip: int = 0, limit: int = 500,
+) -> list[dict]:
+    sales = (
+        db.query(Sale)
+        .options(joinedload(Sale.customer))
+        .filter(Sale.created_at >= start, Sale.created_at <= end, Sale.status != "ANULADA")
+        .order_by(Sale.created_at.desc())
+        .offset(skip).limit(limit)
+        .all()
+    )
+    result = []
+    for s in sales:
+        cname = s.customer.name if s.customer else "Cliente General"
+        result.append({
+            "id": s.id, "customer": cname,
+            "payment_method": s.payment_method or "Efectivo",
+            "total": float(s.total), "status": s.status,
+            "user_id": s.user_id,
+            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+    return result
+
+
+def get_sale_detail(db: Session, sale_id: int) -> dict:
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+
+    details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale.id).all()
+    return {
+        "id": sale.id, "customer_id": sale.customer_id,
+        "user_id": sale.user_id, "total": sale.total,
+        "payment_method": sale.payment_method, "status": sale.status,
+        "created_at": sale.created_at,
+        "details": [
+            {
+                "product_id": d.product_id, "quantity": d.quantity,
+                "unit_price": d.unit_price, "subtotal": d.subtotal,
+                "discount_percent": float(d.discount_percent or 0),
+                "tax_rate": float(d.tax_rate or 0),
+                "tax_amount": float(d.tax_amount or 0),
+                "is_common": bool(d.is_common),
+                "common_description": d.common_description,
+            }
+            for d in details
+        ],
+    }
+
+
+def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate) -> dict:
+    """Edita líneas de una venta cuya FE esté en PENDING."""
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada.")
+    if sale.status == "ANULADA":
+        raise HTTPException(status_code=400, detail="No se puede editar una venta anulada.")
+
+    einv = db.query(ElectronicInvoice).filter(ElectronicInvoice.sale_id == sale_id).first()
+    if not einv or einv.status != "PENDING":
+        raise HTTPException(status_code=400, detail="Solo se pueden editar ventas con FE en estado PENDING.")
+
+    if not sale_in.details:
+        raise HTTPException(status_code=400, detail="La venta debe tener al menos un producto.")
+
+    # Restaurar stock viejo (omite productos comunes)
+    old_details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale.id).all()
+    for d in old_details:
+        if d.is_common or d.product_id is None:
+            db.delete(d)
+            continue
+        product = db.query(Product).filter(Product.id == d.product_id).with_for_update().first()
+        if product:
+            log_inventory_movement(
+                db, product, type=MovementType.ajuste,
+                quantity=d.quantity, reference=f"Edición Venta #{sale_id} (restaurar)",
+            )
+            product.stock += d.quantity
+        db.delete(d)
+    db.flush()
+
+    # Nuevas líneas
+    total = _process_sale_lines(db, sale.id, sale_in.details)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Total de venta inválido.")
+
+    old_total = Decimal(str(sale.total or 0))
+    new_total = total
+    diff = new_total - old_total
+    sale.total = new_total
+
+    # Ajustar caja
+    if is_efectivo(sale.payment_method) and abs(diff) > Decimal("0.01"):
+        # Bug 4.2: usar la sesión de la venta, fallback a la abierta hoy
+        current_cash = (
+            db.query(CashSession)
+            .filter(CashSession.id == sale.cash_session_id, CashSession.status == "open")
+            .first()
+        )
+        if not current_cash:
+            current_cash = (
+                db.query(CashSession)
+                .filter(CashSession.status == "open", CashSession.date == today_cr())
+                .first()
+            )
+        if current_cash:
+            register_cash_movement(
+                db=db, cash_session_id=current_cash.id,
+                movement_type="IN" if diff > 0 else "OUT", amount=abs(diff),
+                concept="Ajuste por edición de venta", source="SALE_EDIT",
+                description=f"Edición Venta #{sale_id} (dif: {float(diff):+.2f})",
+                reference_id=sale.id,
+            )
+
+    # Ajustar crédito
+    cs = db.query(CreditSale).filter(CreditSale.sale_id == sale.id).first()
+    if cs and abs(diff) > Decimal("0.01"):
+        customer = db.query(Customer).filter(Customer.id == cs.customer_id).first()
+        if customer:
+            customer.credit_balance = Decimal(str(customer.credit_balance or 0)) + diff
+            cs.total_amount = new_total
+
+    db.commit()
+    db.refresh(sale)
+    return {"message": f"Venta #{sale_id} actualizada.", "sale_id": sale_id, "total": float(new_total)}
+
+
+def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de comprobante") -> dict:
+    """Anula venta con Nota de Crédito (solo si FE fue ACEPTADA)."""
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada.")
+    if sale.status == "ANULADA":
+        raise HTTPException(status_code=400, detail="Ya fue anulada.")
+
+    original_einv = (
+        db.query(ElectronicInvoice)
+        .filter(ElectronicInvoice.sale_id == sale_id, ElectronicInvoice.document_type.in_(["01", "04"]))
+        .first()
+    )
+    if not original_einv:
+        raise HTTPException(status_code=400, detail="No hay factura electrónica para esta venta.")
+    if original_einv.status != "ACCEPTED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Solo se puede emitir NC sobre facturas ACEPTADAS. Estado: {original_einv.status}",
+        )
+
+    _restore_stock_from_details(db, sale_id, "NC")
+    _revert_cash_movement(db, sale, "Nota de Crédito (anulación)", "SALE_NC")
+    _revert_credit(db, sale, "Nota de Crédito")
+
+    # Generar NC
+    issuer = _get_or_create_issuer(db)
+    branch = (issuer.branch_code or "101").zfill(3)
+    terminal = (issuer.terminal_code or "00001").zfill(5)
+
+    seq_num = next_sequence_number(db, branch, terminal, "03")
+    consecutivo = build_consecutivo(branch, terminal, "03", seq_num)
+    clave = build_clave(issuer.id_number, consecutivo, situation="1")
+
+    nc_einv = ElectronicInvoice(
+        sale_id=sale.id, document_type="03", status="PENDING",
+        consecutivo=consecutivo, clave=clave,
+    )
+    db.add(nc_einv)
+
+    sale.status = "ANULADA"
+    db.commit()
+
+    return {
+        "message": f"Nota de Crédito generada para Venta #{sale_id}.",
+        "sale_id": sale_id, "status": "ANULADA",
+        "nc": {"document_type": "03", "clave": clave, "consecutivo": consecutivo, "status": "PENDING"},
+    }
+
+
+def void_sale_simple(db: Session, sale_id: int) -> dict:
+    """Soft-delete sin NC (solo si FE no fue ACEPTADA)."""
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail="Venta no encontrada")
+    if sale.status == "ANULADA":
+        raise HTTPException(status_code=400, detail="Ya fue anulada.")
+
+    einv = (
+        db.query(ElectronicInvoice)
+        .filter(ElectronicInvoice.sale_id == sale_id, ElectronicInvoice.document_type.in_(["01", "04"]))
+        .first()
+    )
+    if einv and einv.status == "ACCEPTED":
+        raise HTTPException(
+            status_code=400,
+            detail="Factura aceptada por Hacienda. Use POST /sales/{id}/cancel para NC.",
+        )
+
+    _restore_stock_from_details(db, sale_id, "Anulación")
+    _revert_cash_movement(db, sale, "Anulación de venta en efectivo", "SALE_VOID")
+    _revert_credit(db, sale, "Anulación")
+
+    sale.status = "ANULADA"
+    db.commit()
+
+    return {"message": f"Venta #{sale_id} anulada.", "sale_id": sale_id, "status": "ANULADA"}
+
+
+# ═══════════════════════════════════════════════════
+# Regenerar PDF de una venta existente
+# ═══════════════════════════════════════════════════
+def regenerate_sale_pdf(db: Session, sale_id: int) -> dict:
+    """Regenera el PDF de una venta existente."""
+    sale = db.query(Sale).filter(Sale.id == sale_id).first()
+    if not sale:
+        raise HTTPException(status_code=404, detail=f"Venta #{sale_id} no encontrada.")
+
+    customer_db = db.query(Customer).filter(Customer.id == sale.customer_id).first() if sale.customer_id else None
+    customer_name = customer_db.name if customer_db else "Cliente general"
+
+    pdf_path = _generate_pdf_and_email(
+        db, sale, customer_db, customer_name,
+        sale.payment_method, sale.document_type, sale.total,
+    )
+
+    if not pdf_path:
+        raise HTTPException(status_code=500, detail="No se pudo generar el PDF.")
+
+    return {"message": "PDF regenerado", "pdf_path": pdf_path}

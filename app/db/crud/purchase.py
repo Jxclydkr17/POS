@@ -1,0 +1,624 @@
+# app/db/crud/purchase.py
+
+from __future__ import annotations
+
+from datetime import date
+from typing import List, Optional
+
+from fastapi import HTTPException, status
+from sqlalchemy.orm import Session, joinedload, subqueryload
+
+from app.db.models.purchase import Purchase
+from app.db.models.purchase_detail import PurchaseDetail
+from app.db.models.purchase_payment import PurchasePayment
+from app.db.models.purchase_credit_note import PurchaseCreditNote
+from app.db.models.product import Product
+from app.db.models.inventory_movement import InventoryMovement, MovementType
+from app.schemas.purchase import (
+    PurchaseCreate,
+    PurchaseUpdate,
+    PurchaseStatus,
+    PurchaseItemCreate,
+    PurchasePaymentCreate,
+    PurchaseCreditNoteCreate,
+)
+from app.services.expense_service import add_expense_service
+from app.constants.expense_categories import CAT_COMPRAS_PROVEEDORES
+
+import logging
+
+_logger = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------
+# Helpers internos
+# ------------------------------------------------------------
+_ALLOWED_STATUS = {
+    PurchaseStatus.pendiente,
+    PurchaseStatus.recibido,
+    PurchaseStatus.parcial,
+    PurchaseStatus.pagado,
+    PurchaseStatus.vencido,
+}
+
+
+def _validate_status(value: Optional[PurchaseStatus]) -> Optional[PurchaseStatus]:
+    if value is None:
+        return None
+    if value not in _ALLOWED_STATUS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Estado de compra invalido: {value}",
+        )
+    return value
+
+
+def _sync_supplier_products(db: Session, purchase: Purchase) -> None:
+    """
+    Fase 5 — Upsert automático en supplier_products.
+
+    Recorre los purchase_details de la compra y para cada producto:
+      - Si ya existe (supplier_id, product_id) → actualiza unit_cost y
+        last_purchase_date (solo si la compra es más reciente).
+      - Si no existe → crea el registro.
+
+    Se ejecuta dentro de la transacción activa (antes del commit final
+    del caller), así que NO hace commit propio.
+    """
+    from app.db.models.supplier_product import SupplierProduct
+
+    if not purchase.details:
+        return
+
+    supplier_id = purchase.supplier_id
+    purchase_date = purchase.entry_date  # date
+
+    for detail in purchase.details:
+        product_id = detail.product_id
+        unit_cost = detail.unit_cost
+
+        try:
+            existing = (
+                db.query(SupplierProduct)
+                .filter_by(supplier_id=supplier_id, product_id=product_id)
+                .first()
+            )
+
+            if existing:
+                # Solo actualizar si esta compra es más reciente
+                should_update = (
+                    existing.last_purchase_date is None
+                    or purchase_date >= (
+                        existing.last_purchase_date.date()
+                        if hasattr(existing.last_purchase_date, "date")
+                        else existing.last_purchase_date
+                    )
+                )
+                if should_update:
+                    existing.unit_cost = unit_cost
+                    existing.last_purchase_date = purchase_date
+            else:
+                # Determinar si es proveedor preferido (coincide con product.supplier_id)
+                product = db.query(Product).filter(Product.id == product_id).first()
+                is_preferred = (
+                    product is not None
+                    and product.supplier_id == supplier_id
+                )
+
+                sp = SupplierProduct(
+                    supplier_id=supplier_id,
+                    product_id=product_id,
+                    unit_cost=unit_cost,
+                    last_purchase_date=purchase_date,
+                    is_preferred=is_preferred,
+                )
+                db.add(sp)
+
+        except Exception as e:
+            # No romper la compra si falla el sync
+            _logger.warning(
+                "Error sincronizando supplier_products para "
+                "supplier=%s product=%s: %s",
+                supplier_id, product_id, e,
+            )
+
+
+def _build_details(
+    db: Session,
+    purchase: Purchase,
+    items: List[PurchaseItemCreate],
+) -> float:
+    total = 0.0
+    for item in items:
+        product = db.query(Product).filter(Product.id == item.product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto ID {item.product_id} no encontrado.",
+            )
+
+        # 📏 quantity es Decimal — convertir a float para multiplicar con unit_cost
+        subtotal = round(float(item.quantity) * item.unit_cost, 2)
+        total += subtotal
+
+        detail = PurchaseDetail(
+            purchase_id=purchase.id,
+            product_id=item.product_id,
+            quantity=item.quantity,
+            unit_cost=item.unit_cost,
+            subtotal=subtotal,
+        )
+        db.add(detail)
+
+    return round(total, 2)
+
+
+def _sync_payment_status(purchase: Purchase):
+    """
+    Recalcula el estado de pago basado en el saldo pendiente.
+    NO toca estados de recepción ni vencimiento — solo el flujo de pago.
+    """
+    bal = purchase.balance
+
+    if bal <= 0:
+        purchase.status = PurchaseStatus.pagado
+        if not purchase.paid_at:
+            purchase.paid_at = date.today()
+    elif purchase.paid_amount > 0 or purchase.credit_notes_total > 0:
+        # Hay abonos o NC pero no se ha saldado completamente
+        if purchase.status == PurchaseStatus.pagado:
+            pass  # no revertir desde pagado
+        elif purchase.status not in (PurchaseStatus.recibido,):
+            purchase.status = PurchaseStatus.parcial
+        # Si está en recibido y tiene abonos parciales, cambiar a parcial
+        elif purchase.status == PurchaseStatus.recibido:
+            purchase.status = PurchaseStatus.parcial
+
+
+# ------------------------------------------------------------
+# Listar compras
+# ------------------------------------------------------------
+def get_purchases(
+    db: Session,
+    status_filter: Optional[PurchaseStatus] = None,
+    supplier_id: Optional[int] = None,
+    search: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 100,
+):
+    today = date.today()
+
+    # Auto-sync vencidas (excluir pagadas, recibidas, parciales)
+    db.query(Purchase).filter(
+        Purchase.status.notin_([
+            PurchaseStatus.pagado,
+            PurchaseStatus.vencido,
+            PurchaseStatus.recibido,
+            PurchaseStatus.parcial,
+        ]),
+        Purchase.due_date < today,
+    ).update(
+        {"status": PurchaseStatus.vencido},
+        synchronize_session=False,
+    )
+
+    db.query(Purchase).filter(
+        Purchase.status == PurchaseStatus.vencido,
+        Purchase.due_date >= today,
+    ).update(
+        {"status": PurchaseStatus.pendiente},
+        synchronize_session=False,
+    )
+
+    db.commit()
+
+    q = db.query(Purchase).options(
+        subqueryload(Purchase.details),
+        subqueryload(Purchase.payments),
+        subqueryload(Purchase.credit_notes),
+    )
+
+    if status_filter:
+        q = q.filter(Purchase.status == status_filter)
+
+    if supplier_id:
+        q = q.filter(Purchase.supplier_id == supplier_id)
+
+    if search:
+        like = f"%{search}%"
+        q = q.filter(Purchase.invoice_number.ilike(like))
+
+    total = q.count()
+
+    items = (
+        q.order_by(Purchase.entry_date.desc(), Purchase.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+    return items, total
+
+
+# ------------------------------------------------------------
+# Obtener una compra
+# ------------------------------------------------------------
+def get_purchase(db: Session, purchase_id: int) -> Purchase:
+    purchase = (
+        db.query(Purchase)
+        .options(
+            subqueryload(Purchase.details),
+            subqueryload(Purchase.payments),
+            subqueryload(Purchase.credit_notes),
+        )
+        .filter(Purchase.id == purchase_id)
+        .first()
+    )
+    if not purchase:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Compra no encontrada",
+        )
+    return purchase
+
+
+# ------------------------------------------------------------
+# Crear compra
+# ------------------------------------------------------------
+def create_purchase(db: Session, data: PurchaseCreate) -> Purchase:
+    status_value = _validate_status(data.status) or PurchaseStatus.pendiente
+
+    purchase = Purchase(
+        invoice_number=data.invoice_number,
+        supplier_id=data.supplier_id,
+        entry_date=data.entry_date,
+        due_date=data.due_date,
+        amount=data.amount,
+        status=status_value,
+        payment_method=data.payment_method,
+        notes=data.notes,
+    )
+
+    db.add(purchase)
+    db.flush()
+
+    if data.items:
+        calculated_total = _build_details(db, purchase, data.items)
+        purchase.amount = calculated_total
+
+    # Fase 5: sincronizar supplier_products con los nuevos detalles
+    db.flush()  # asegurar que details estén en session
+    _sync_supplier_products(db, purchase)
+
+    db.commit()
+    db.refresh(purchase)
+    return purchase
+
+
+# ------------------------------------------------------------
+# Actualizar compra
+# ------------------------------------------------------------
+def update_purchase(
+    db: Session,
+    purchase_id: int,
+    data: PurchaseUpdate,
+) -> Purchase:
+    purchase = get_purchase(db, purchase_id)
+    update_data = data.model_dump(exclude_unset=True)
+
+    new_items = update_data.pop("items", None)
+
+    if "status" in update_data:
+        update_data["status"] = _validate_status(update_data["status"])
+
+    for field, value in update_data.items():
+        setattr(purchase, field, value)
+
+    if new_items is not None:
+        if purchase.status in (PurchaseStatus.recibido, PurchaseStatus.pagado, PurchaseStatus.parcial):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No se pueden modificar líneas de una compra ya recibida, pagada o con abonos.",
+            )
+
+        db.query(PurchaseDetail).filter(
+            PurchaseDetail.purchase_id == purchase.id
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        items_parsed = [
+            PurchaseItemCreate(**i) if isinstance(i, dict) else i
+            for i in new_items
+        ]
+        calculated_total = _build_details(db, purchase, items_parsed)
+        purchase.amount = calculated_total
+
+    if purchase.status not in (
+        PurchaseStatus.pagado, PurchaseStatus.recibido, PurchaseStatus.parcial
+    ) and purchase.due_date:
+        today = date.today()
+        purchase.status = (
+            PurchaseStatus.vencido
+            if purchase.due_date < today
+            else PurchaseStatus.pendiente
+        )
+
+    # Fase 5: re-sincronizar supplier_products si cambiaron ítems o proveedor
+    if new_items is not None or "supplier_id" in data.model_dump(exclude_unset=True):
+        db.flush()
+        _sync_supplier_products(db, purchase)
+
+    db.commit()
+    db.refresh(purchase)
+    return purchase
+
+
+# ------------------------------------------------------------
+# Recibir mercadería
+# ------------------------------------------------------------
+def receive_purchase(db: Session, purchase_id: int) -> Purchase:
+    purchase = get_purchase(db, purchase_id)
+
+    if purchase.received_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta compra ya fue recibida.",
+        )
+    if purchase.status == PurchaseStatus.pagado:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta compra ya está pagada.",
+        )
+
+    if not purchase.details:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La compra no tiene líneas de detalle.",
+        )
+
+    for detail in purchase.details:
+        product = db.query(Product).filter(Product.id == detail.product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto ID {detail.product_id} no encontrado.",
+            )
+
+        stock_before = product.stock
+        qty = detail.quantity
+
+        movement = InventoryMovement(
+            product_id=product.id,
+            type=MovementType.entrada,
+            quantity=qty,
+            stock_before=stock_before,
+            stock_after=stock_before + qty,
+            reference=f"Compra #{purchase.invoice_number}",
+            notes=f"Recepción de compra ID {purchase.id}",
+        )
+        db.add(movement)
+
+        product.stock = stock_before + qty
+        product.cost = float(detail.unit_cost)
+
+    purchase.received_at = date.today()
+
+    # Estado: si ya tiene abonos parciales → parcial, sino → recibido
+    if purchase.paid_amount > 0 and purchase.balance > 0:
+        purchase.status = PurchaseStatus.parcial
+    elif purchase.balance <= 0:
+        purchase.status = PurchaseStatus.pagado
+    else:
+        purchase.status = PurchaseStatus.recibido
+
+    db.commit()
+    db.refresh(purchase)
+    return purchase
+
+
+# ============================================================
+# PAGOS PARCIALES (ABONOS)
+# ============================================================
+def add_payment(
+    db: Session,
+    purchase_id: int,
+    data: PurchasePaymentCreate,
+) -> Purchase:
+    purchase = get_purchase(db, purchase_id)
+
+    if purchase.status == PurchaseStatus.pagado:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Esta compra ya está pagada en su totalidad.",
+        )
+
+    current_balance = purchase.balance
+
+    if data.amount > current_balance + 0.01:  # tolerancia redondeo
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"El abono (₡{data.amount:.2f}) excede el saldo pendiente (₡{current_balance:.2f}).",
+        )
+
+    payment = PurchasePayment(
+        purchase_id=purchase.id,
+        amount=data.amount,
+        payment_method=data.payment_method,
+        date=data.date or date.today(),
+        notes=data.notes,
+    )
+    db.add(payment)
+    db.flush()
+
+    # Registrar como gasto operativo
+    expense_payload = {
+        "category": CAT_COMPRAS_PROVEEDORES,
+        "description": f"Abono factura #{purchase.invoice_number}",
+        "amount": float(data.amount),
+        "payment_method": data.payment_method,
+        "date": (data.date or date.today()).strftime("%Y-%m-%d"),
+    }
+    add_expense_service(expense_payload, db)
+
+    # Si la compra tiene detalles y NO fue recibida, recibirla automáticamente al saldar
+    db.refresh(purchase)
+    if purchase.balance <= 0 and purchase.details and not purchase.received_at:
+        for detail in purchase.details:
+            product = db.query(Product).filter(Product.id == detail.product_id).first()
+            if product:
+                stock_before = product.stock
+                qty = detail.quantity
+                movement = InventoryMovement(
+                    product_id=product.id,
+                    type=MovementType.entrada,
+                    quantity=qty,
+                    stock_before=stock_before,
+                    stock_after=stock_before + qty,
+                    reference=f"Compra #{purchase.invoice_number}",
+                    notes=f"Recepción automática al saldar compra ID {purchase.id}",
+                )
+                db.add(movement)
+                product.stock = stock_before + qty
+                product.cost = float(detail.unit_cost)
+        purchase.received_at = date.today()
+
+    # Sincronizar estado de pago
+    _sync_payment_status(purchase)
+
+    db.commit()
+    db.refresh(purchase)
+    return purchase
+
+
+def get_payments(db: Session, purchase_id: int) -> List[PurchasePayment]:
+    purchase = get_purchase(db, purchase_id)  # valida existencia
+    return (
+        db.query(PurchasePayment)
+        .filter(PurchasePayment.purchase_id == purchase_id)
+        .order_by(PurchasePayment.date.desc())
+        .all()
+    )
+
+
+# ============================================================
+# NOTAS DE CRÉDITO / DEVOLUCIONES
+# ============================================================
+def add_credit_note(
+    db: Session,
+    purchase_id: int,
+    data: PurchaseCreditNoteCreate,
+) -> Purchase:
+    purchase = get_purchase(db, purchase_id)
+
+    current_balance = purchase.balance
+
+    if data.amount > float(purchase.amount):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La nota de crédito no puede exceder el monto total de la compra.",
+        )
+
+    cn = PurchaseCreditNote(
+        purchase_id=purchase.id,
+        amount=data.amount,
+        reason=data.reason,
+        date=data.date or date.today(),
+        product_id=data.product_id,
+        quantity_returned=data.quantity_returned or 0,
+        stock_reverted=False,
+    )
+    db.add(cn)
+    db.flush()
+
+    # Si hay devolución de producto → revertir stock
+    if data.product_id and data.quantity_returned and data.quantity_returned > 0:
+        product = db.query(Product).filter(Product.id == data.product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Producto ID {data.product_id} no encontrado.",
+            )
+
+        stock_before = product.stock
+
+        if data.quantity_returned > stock_before:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No hay suficiente stock para devolver {data.quantity_returned} unidades "
+                       f"(stock actual: {stock_before}).",
+            )
+
+        # Movimiento de inventario tipo devolución (resta stock)
+        movement = InventoryMovement(
+            product_id=product.id,
+            type=MovementType.devolucion,
+            quantity=data.quantity_returned,
+            stock_before=stock_before,
+            stock_after=stock_before - data.quantity_returned,
+            reference=f"NC Compra #{purchase.invoice_number}",
+            notes=f"Devolución a proveedor - {data.reason}",
+        )
+        db.add(movement)
+
+        product.stock = stock_before - data.quantity_returned
+        cn.stock_reverted = True
+
+    # Sincronizar estado
+    db.refresh(purchase)
+    _sync_payment_status(purchase)
+
+    db.commit()
+    db.refresh(purchase)
+    return purchase
+
+
+def get_credit_notes(db: Session, purchase_id: int) -> List[PurchaseCreditNote]:
+    get_purchase(db, purchase_id)  # valida existencia
+    return (
+        db.query(PurchaseCreditNote)
+        .filter(PurchaseCreditNote.purchase_id == purchase_id)
+        .order_by(PurchaseCreditNote.date.desc())
+        .all()
+    )
+
+
+# ------------------------------------------------------------
+# Marcar como pagada (legacy — ahora registra pago por saldo completo)
+# ------------------------------------------------------------
+def mark_as_paid(
+    db: Session,
+    purchase_id: int,
+    payment_method: Optional[str] = None,
+) -> Purchase:
+    purchase = get_purchase(db, purchase_id)
+
+    if purchase.status == PurchaseStatus.pagado:
+        return purchase
+
+    remaining = purchase.balance
+    if remaining <= 0:
+        # Ya saldada por abonos/NC
+        purchase.status = PurchaseStatus.pagado
+        purchase.paid_at = date.today()
+        db.commit()
+        db.refresh(purchase)
+        return purchase
+
+    # Registrar pago por el saldo completo
+    payment_data = PurchasePaymentCreate(
+        amount=remaining,
+        payment_method=payment_method or "Efectivo",
+        date=date.today(),
+        notes="Pago total del saldo restante",
+    )
+
+    return add_payment(db, purchase_id, payment_data)
+
+
+# ------------------------------------------------------------
+# Eliminar compra
+# ------------------------------------------------------------
+def delete_purchase(db: Session, purchase_id: int) -> None:
+    purchase = get_purchase(db, purchase_id)
+    db.delete(purchase)
+    db.commit()

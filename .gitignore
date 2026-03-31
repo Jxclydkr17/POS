@@ -1,0 +1,57 @@
+# ============================================================
+# Violette POS — .gitignore
+# ============================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Entorno ---
+.env
+.venv/
+venv/
+env/
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Base de datos local ---
+*.db
+*.db-journal
+*.db-wal
+
+# --- Archivos generados en runtime ---
+app/pdfs/
+app/backups/*.sql
+generated_pdfs/
+exports/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- PyInstaller ---
+*.spec
+dist/
+build/
+
+# --- Mantener estructura de carpetas vacías ---
+!app/pdfs/.gitkeep
+!app/backups/.gitkeep
+!generated_pdfs/.gitkeep
+!exports/.gitkeep

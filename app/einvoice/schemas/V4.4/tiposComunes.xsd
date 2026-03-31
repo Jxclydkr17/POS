@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns="https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/tiposComunes" targetNamespace="https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/tiposComunes" elementFormDefault="qualified">
+  <xs:simpleType name="DecimalDineroType">
+    <xs:restriction base="xs:decimal">
+      <xs:totalDigits value="18" />
+      <xs:fractionDigits value="5" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="DecimalCantidadesType">
+    <xs:restriction base="xs:decimal">
+      <xs:totalDigits value="16" />
+      <xs:fractionDigits value="3" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="ClaveType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{50}" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="NumeroConsecutivoType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{20}" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="IdentificacionType">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="\d{9,12}" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="SubtotalTipoType">
+    <xs:restriction base="xs:decimal">
+      <xs:totalDigits value="18" />
+      <xs:fractionDigits value="5" />
+    </xs:restriction>
+  </xs:simpleType>
+  <xs:simpleType name="MontoTipoType">
+    <xs:restriction base="xs:decimal">
+      <xs:totalDigits value="18" />
+      <xs:fractionDigits value="5" />
+    </xs:restriction>
+  </xs:simpleType>
+</xs:schema>

@@ -1,0 +1,204 @@
+codigo_atv,nombre_atv,codigo_tribu,nombre_tribu
+11701,CULTIVO DE CANA DE AZUCAR,0114.0,Cultivo de caña de azúcar
+11104,CULTIVO DE TABACO,0115.0,Cultivo de tabaco
+11106,CULTIVO DE ALGODON,0116.0,Cultivo de plantas de fibras
+11901,CULTIVO DE FLORES DE TODO TIPO,0119.1,Cultivo de Flores
+11501,CULTIVO DE BANANO,0122.1,Cultivo de banano
+11340,CULTIVO DE PINA,0122.3,Cultivo de piña
+11302,CULTIVO DE FRUTAS,0122.9,Cultivo de otras frutas tropicales y subtropicales
+11322,CULTIVO DE SEMILLAS COMESTIBLES Y GERMINACION DE SEMILLAS OLEAGINOSAS,0125.0,Cultivo de otros frutos y nueces de árboles y arbustos
+11102,CULTIVO DE PALMA AFRICANA Y OTROS FRUTOS OLEAGINOSOS,0126.1,Cultivo de palma africana (aceitera)
+11401,CULTIVO DE CAFE,0127.1,Cultivo de café
+11301,CULTIVO DE ESPECIAS DE TODO TIPO,0128.0,Cultivo de especies de plantas aromáticas medicinales y farmacéuticas
+12301,CRIA Y VENTA DE GANADO BOVINO (VACUNO) Y BUFALO,0141.1,Cría de ganado Bovino (vacuno) para carne
+12302,PRODUCCION DE LECHE CRUDA Y OTROS PRODUCTOS LACTEOS SIN PROCESAMIENTO INCLUIDOS EN CANASTA BASICA,0141.2,Cría de ganado Bovino (vacuno) para producción de leche cruda
+12102,PRODUCCION DE SEMEN BOVINO VENTA DE SEMEN CONGELADO Y DILUYENTE PARA SEMEN,0141.9,Cría de Búfalos y otra producción de ganado bovino (vacuno)
+12101,CRIA DE CABALLOS Y OTROS EQUINOS,0142.0,Cría de caballos y otros equinos
+12103,CRIA DE ANIMALES DOMESTICOS COMO:OVEJAS Y CABRAS,0144.0,Cría de ovejas y cabras
+12201,CRIA DE CERDOS,0145.0,Cría de cerdos
+12403,PRODUCCION DE HUEVOS DE GALLINA INCLUIDOS EN LA CANASTA BASICA,0146.2,Actividades de granja para la producción de huevos de gallina
+13001,CULTIVO DE PRODUCTOS AGRICOLAS EN COMBINACION CON LA CRIA DE ANIMALES (EXPLOTACI,0150.0,Cultivo de productos agrícolas en combinación con la cría de animales (explotación mixta)
+930908,SERVICIO DE HERRADURA,0162.9,Otras actividades de apoyo a la ganadería
+154904,BENEFICIO O PROCESAMIENTO DE CAFE,0163.1,Beneficio de café
+14002,RECOLECCION DE COSECHAS Y ACTIVIDADES CONEXAS,0163.9,Otras actividades posteriores a la cosecha
+15001,CAZA ORDINARIA MEDIANTE TRAMPAS Y REPOBLACION DE ANIMALES DE CAZA INCLUSO LAS ACTIVIDADES DE SERVICIOS CONEXAS.,0170.0,Caza ordinaria mediante trampas y actividades de servicio conexas
+20002,EXTRACCION Y/O VENTA DE MADERA,0220.0,Extracción de madera
+50003,CRIADERO DE PECES CRUSTACEOS O MOLUSCOS. COMERCIALIZACION DE LARVAS DE ESPECIES MARINAS,0321.0,Acuicultura marina
+101001,EXTRACCION Y AGLOMERACION DE CARBON DE PIEDRA,0510.0,Extracción de carbón de piedra
+111001,EXTRACCION DE PETROLEO CRUDO Y GAS NATURAL,0620.0,Extracción de gas natural
+120001,EXTRACCION DE MINERALES DE URANIO Y TORIO,0721.0,Extracción de minerales metalíferos no ferrosos
+141001,EXTRACCION DE PIEDRA ARENA Y ARCILLA,0810.0,Extracción de piedra arena y arcilla
+142101,EXTRACCION DE MINERALES Y SUSTANCIAS PARA LA FABRICACION DE ABONOS,0891.0,Extracción de minerales para la fabricación de abonos y productos químicos
+142201,EXTRACCION DE SAL,0893.0,Extracción de sal
+151101,ELABORACION Y CONSERVACION DE CARNE Y EMBUTIDOS DE GANADO VACUNO PORCINO Y DE AVES,1010.9,Elaboración y conservación de otro tipo de carnes n.c.p
+151201,ELABORACION Y CONSERVACION DE PESCADO Y SUS DERIVADOS,1020.0,Elaboración y conservación de pescados crustáceos y moluscos
+151401,ELABORACION DE ACEITES Y GRASAS DE ORIGEN VEGETAL Y ANIMAL,1040.0,Elaboración de aceites y grasas de origen vegetal y animal
+153103,BENEFICIO DE ARROZ,1061.1,Beneficio de arroz
+153201,ELABORACION DE PRODUCTOS DERIVADOS DE ALMIDON,1062.0,Elaboración de almidones y productos derivados del almidón
+155403,ELABORACION DE BEBIDAS NO ALCOHOLICAS / GASEOSAS / AGUA MINERAL Y DE MANANTIAL,1104.0,Elaboración de bebidas no alcohólicas; producción de aguas minerales y otras aguas embotelladas
+160001,ELABORACION DE PRODUCTOS DE TABACO,1200.0,Elaboración de productos de tabaco
+171101,FABRICACION DE TODO TIPO DE TELAS Y/O HILOS,1312.0,Tejedura de productos textiles
+173001,FABRICACION DE TEJDOS Y ARTICULOS DE PUNTO Y GANCHILLO,1391.0,Fabricación de tejidos de punto y ganchillo
+172101,FABRICACION DE ARTICULOS CONFECCIONADOS DE MATERIALES TEXTILES EXEPTO PRENDAS DE VESTIR,1392.0,Fabricación de artículos confeccionados con materiales textiles excepto prendas de vestir
+172201,FABRICACION DE TAPICES Y ALFOMBRAS,1393.0,Fabricación de tapices y alfombras
+182001,ADOBO Y TENIDO DE PIELES; FABRICACION DE ARTICULOS DE PIEL NATURAL O ARTIFICIAL,1511.0,Curtido y adobo de cueros; adobo y teñido de pieles
+191101,FABRICACION DE MALETAS BOLSOS DE MANO Y ARTICULOS SIMILARES,1512.0,Fabricación de maletas bolsos de mano y de artículos similares y artículos de talabartería o guarnicione
+192001,FABRICACION DE TODO TIPO DE ZAPATOS EXEPTO EL ORTOPEDICO,1520.0,Fabricación de calzado
+201002,ASERRADO Y ACEPILLADURA DE MADERA,1610.0,Aserrado y acepilladura de madera
+202101,FABRICACION DE HOJAS DE MADERA PARA ENCHAPADO Y TABLEROS COMO PLYWOOD DURPANEL Y SIMILARES,1621.0,Fabricación de hojas de madera para enchapado y tableros a base de madera
+210101,FABRICACION DE PAPEL Y CARTON Y ENVASES DE PAPEL Y CARTON,1701.0,Fabricación de pasta de madera papel y cartón
+210201,FABRICACION DE OTROS ARTICULOS DE PAPEL Y CARTON,1709.0,Fabricación de otros artículos del papel y cartón
+223001,REPRODUCCION DE GRABACIONES,1820.0,Reproducción de grabaciones
+241201,FABRICACION DE ABONOS Y COMPUESTOS DE NITROGENO (ORGANICOS Y QUIMICOS),2012.0,Fabricación abonos y compuestos de nitrógeno
+242101,FABRICACION DE PLAGUICIDAS Y OTROS PRODUCTOS QUIMICOS DE USO AGROPECUARIO,2021.0,Fabricación de plaguicidas y de otros productos químicos de uso agropecuario
+242404,FABRICACION DE JABONES DE TOCADOR,2023.2,Fabricación de perfumes y preparados de tocador
+243001,FABRICACION DE FIBRAS SINTETICAS,2030.0,Fabricación de fibras artificiales
+242301,FABRICACION PRODUCTOS FARMACEUTICOS SUSTANCIAS QUIMICAS YPRODUCTOS BOTANICOS,2100.0,Fabricación de productos farmacéuticos sustancias químicas medicinales y de productos botánicos de u
+251901,FABRICACION DE OTROS PRODUCTOS DE CAUCHO,2219.0,Fabricación de otros productos de caucho
+252001,FABRICACION DE ARTICULOS DE PLASTICO,2220.9,Fabricación de otros productos de plástico
+261001,FABRICACION DE VIDRIO Y PRODUCTOS DE VIDRIO,2310.0,Fabricación de vidrio y de productos de vidrio
+269201,FABRICACION DE PRODUCTOS DE CERAMICA REFRACTARIA,2391.0,Fabricación de productos refractarios
+269301,FABRICACION DE PRODUCTOS DE ARCILLA Y CERAMICA NO REFRACTARIAS PARA USO ESTRUCTURAL,2392.0,Fabricación de material de arcilla para la construcción
+269101,FABRICACION PRODUCTOS DE CERAMICA BARRO LOZA Y/O PORCELANANO REFRACTARIA USO NO ESTRUCTURAL,2393.0,Fabricación de otros productos de cerámica y porcelana
+269501,FABRICACION DE ARTICULOS DE CEMENTO YESO Y HORMIGON PARA LA CONSTRUCCION,2395.0,Fabricación de artículos de hormigón de cemento y de yeso
+269601,CORTE TALLADO Y ACABADO DE LA PIEDRA,2396.0,Corte tallado y acabado de la piedra
+269901,FABRICACION DE OTROS PRODUCTOS MINERALES NO METALICOS N.C.P.,2399.0,Fabricación de otros productos minerales no metálicos n.c.p
+271001,INDUSTRIAS BASICAS DE HIERRO Y ACERO,2410.0,Industrias básicas de hierro y acero
+272001,FABRICACION DE PRODUCTOS PRIMARIOS DE METALES PRECIOSOS Y METALES NO FERROSOS,2420.0,Fabricación de productos primarios de metales preciosos y metales no ferrosos
+273101,FUNDICION DE HIERRO Y ACERO,2431.0,Fundición de hierro y acero
+273201,FUNDICION DE METALES NO FERROSOS,2432.0,Fundición de metales no ferrosos
+281101,FABRICACION DE PRODUCTOS METALICOS PARA USO ESTRUCTURAL,2511.0,Fabricación de productos metálicos para uso estructural
+281201,FABRICACION DE TANQUES DEPOSITOS Y RECIPIENTES DE METAL,2512.0,Fabricación de tanques depósitos y recipientes de metal
+281301,FABRICACION GENERADORES DE VAPOR EXCEPTO CALDERAS DE AGUA CALIENTE PARA CALEFACION CENTRAL,2513.0,Fabricación de los generadores del vapor excepto calderas de agua caliente para calefacción central
+292701,FABRICACION DE ARMAS Y MUNICIONES,2520.0,Fabricación de armas y municiones
+322001,FABRICACION DE TRANSMISORES Y RECEPTORES DE RADIO Y TELEVISION,2630.0,Fabricación de equipos de comunicaciones
+331201,FABRICACION DE EQUIPOS PARA MEDIR VERIFICAR Y NAVEGAR Y DE EQUIPOS DE CONTROL,2651.0,Fabricación de equipos de medición prueba verificación navegación y de equipo de control
+333001,FABRICACION DE RELOJES DE TODO TIPO,2652.0,Fabricación de relojes
+332001,FABRICACION DE INSTRUMENTOS OPTICOS Y EQUIPO FOTOGRAFICO,2670.0,Fabricación de instrumentos ópticos de equipo fotográfico
+314001,FABRICACION DE PILAS BATERIAS Y ACUMULADORES,2720.0,Fabricación de baterias y acumuladores
+313001,FABRICACION DE HILOS Y CABLES AISLADOS,2732.0,Fabricación de otros hilos y cables eléctricos
+315001,FABRICACION DE LAMPARAS ELECTRICAS Y EQUIPO DE ILUMINACION,2740.0,Fabricación de equipos de iluminación eléctricos
+293001,FABRICACION DE APARATOS DE USO DOMESTICO N.C.P.,2750.0,Fabricación de aparatos de uso doméstico
+319001,FABRICACION DE OTROS TIPOS DE EQUIPO ELECTRICO N.C.P.,2790.0,Fabricación de otro equipo eléctrico
+291101,FABRICACION DE MOTORES Y TURBINAS EXCEPTO MOTORES PARA AERONAVES VEHICULOS AUTOMOTORES Y MOTOCICLETAS,2811.0,Fabricación de motores y turbinas excepto motores para aeronaves vehículos automotores y motociclet
+291201,FABRICACION DE BOMBAS COMPRESORES GRIFOS Y VALVULAS,2813.0,Fabricación de otras bombas compresores grifos y válvulas
+291401,FABRICACION DE HORNOS Y QUEMADORES,2815.0,Fabricación de hornos hogueras y quemadores
+300001,FABRICACION DE MAQUINARIA DE OFICINA CONTABILIDAD E INFORMATICA,2817.0,Fabricación de maquinaria y equipo de oficina (excepto computadoras y equipos periféricos)
+292101,FABRICACION DE MAQUINARIA AGRICOLA,2821.0,Fabricación de maquinaria agropecuaria y forestal
+292201,FABRICACION DE MAQUINAS HERRAMIENTA,2822.0,Fabricación de maquinarias para la conformación de metales y de máquinas herramienstas
+292301,FABRICACION DE MAQUINARIA METALURGICA,2823.0,Fabricación de maquinaria para metalúrgica
+292401,FABRICACION DE MAQUINARIA PARA LA EXPLOTACION DE MINAS Y CANTERAS Y PARA OBRAS DE CONSTRUCCION,2824.0,Fabricación de maquinaria para explotación de minas y canteras y para obras de construcción
+292501,FABRICACION DE MAQUINARIA PARA LA ELABORACION DE ALIMENTOS BEBIDAS Y TABACO,2825.0,Fabricación de maquinaria para la elaboración de alimentos bebidas y tabaco
+292601,FABRICACION MAQUINARIA PARA LA ELABORACION DE PRODUCTOS TEXTILES PRENDAS DE VESTIR Y CUEROS,2826.0,Fabricación de maquinaria para la elaboración de productos textiles prendas de vestir y cueros
+292901,FABRICACION DE OTROS TIPOS DE MAQUINARIA DE USO ESPECIAL,2829.0,Fabricación de otros tipos de maquinaria de uso especial
+341001,FABRICACION DE VEHICULOS AUTOMOTORES,2910.0,Fabricación de vehículos automotores
+343001,FABRICACION DE PARTES PIEZAS Y ACCESORIOS PARA VEHICULOS AUTOMOTORES,2930.0,Fabricación de partes y accesorios para motores de vehículos
+351102,CONSTRUCCION DE EMBARCACIONES Y ESTRUCTURAS FLOTANTES,3012.0,Construcción de embarcaciones de recreo y deporte
+352001,FABRICACION DE LOCOMOTORAS Y MATERIAL RODANTE PARA FERROCARRILES Y TRANVIAS,3020.0,Fabricación de locomotoras y de material rodante
+353001,FABRICACION DE AERONAVES Y NAVES ESPACIALES Y MAQUINARIA CONEXA,3030.0,Fabricación de aeronaves y naves espaciales y de maquinaria conexa
+359101,FABRICACION DE MOTOCICLETAS PARTES PIEZAS Y SUS ACCESORIOS,3091.0,Fabricación de motocicletas
+359201,FABRICACION DE BICICLETAS Y SILLAS DE RUEDAS PARTES PIEZAS Y SUS ACCESORIOS,3092.0,Fabricación de bicicletas y sillas de ruedas para personas con discapacidad
+359901,FABRICACION DE OTROS TIPOS DE EQUIPO DE TRANSPORTE N.C.P.,3099.0,Fabricación de otros tipos de equipo de transporte n.c.p
+361001,FABRICACION Y/O REPARACION DE MUEBLES Y ACCESORIOS (INCLUYECOLCHONES),3100.1,Fabricación de muebles de madera
+361004,MAQUILA DE MUEBLES,3100.9,Fabricación de muebles de otro tipo de material (excepto de madera piedra cemento o cerámica)
+369101,FABRICACION DE JOYAS BISUTERIA Y ARTICULOS CONEXOS,3211.0,Fabricación de joyas y artículos conexos
+369201,FABRICACION DE INSTRUMENTOS MUSICALES PARTES Y PIEZAS Y SUS ACCESORIOS,3220.0,Fabricación de Instrumentos musicales
+369301,FABRICACION DE ARTICULOS DE DEPORTE,3230.0,Fabricación de artículos de deporte
+369401,FABRICACION DE JUEGOS Y JUGUETES,3240.0,Fabricación de juegos y juguetes
+242903,REPARACION DE ARMAS DE FUEGO,3311.0,Reparación de productos elaborados de metal
+453009,REPARACION DE PORTONES ELECTRICOS,3314.0,Reparación de equipo eléctrico
+351101,SERVICIO DE REPARACION DE EMBARCACIONES Y SUS PARTES Y/O ESTRUCTURAS FLOTANTES,3315.0,Reparación de equipo de transporte excepto los vehículos automotores
+401002,GENERACION Y/O DISTRIBUCION DE ENERGIA ELECTRICA (HIDRAULICA CONVENCIONAL TERMICO ETC),3510.0,Generación transmisión y distribución de energía eléctrica
+402001,FABRICACION DE GAS; DISTRIBUCION DE COMBUSTIBLES GASEOSOS POR TUBERIAS,3520.0,Fabricación de gas; distribución de combustibles gaseosos por tuberías
+900002,LIMPIEZA DE TANQUES SEPTICOS Y AGUAS REDISUALES,3700.0,Evacuación de aguas residuales
+900001,ASESORAMIENTO Y ELIMINACION DE DESPERDICIOS SANEAMIENTO (EXCEPTO LIMPIEZA DE TANQUES SEPTICOS),3811.0,Recolección de desechos no peligrosos
+452002,CONSTRUCCION DE EDIFICIOS APARTAMENTOS CONDOMINIOS Y CASAS DE HABITACION,4100.0,Construcción de edificios
+452005,CONSTRUCCION Y MANTENIMIENTO DE CARRETERAS Y OTRAS VIAS,4210.0,Construcción de carreteras y vías férreas
+451001,DEMOLICION DE EDIFICIOS Y OTRAS ESTRUCTURAS,4311.0,Demolición
+451002,PREPARACION DE TERRENOS,4312.0,Preparación del terreno
+511001,COMISIONISTAS AGENTES DE VENTAS ORGANIZADORES DE SUBASTAS TIQUETERAS ETC.,4610.0,Venta al por mayor a cambio de una retribución o por contrato
+513101,VENTA AL POR MAYOR DE CALZADO PRODUCTOS TEXTILES; PRENDASDE VESTIR;,4641.1,Venta al por mayor de productos textiles y prendas de vestir
+513906,VENTA AL POR MAYOR DE ARTICULOS ARTEFACTOS DISCOS Y MUEBLES PARA EL HOGAR,4649.1,Venta al por mayor de aparatos artículos y equipo de uso doméstico
+515201,VENTA AL POR MAYOR DE EQUIPO DE COMPUTO SUS PARTES Y ACCESORIOS,4651.0,Venta al por mayor de computadoras equipo informático periférico y programas informáticos
+519016,VENTA AL POR MAYOR DE ARTICULOS Y ACCESORIOS ELECTRONICOS,4652.0,Venta al por mayor de equipo partes y piezas electrónicas y de telecomunicaciones
+514201,VENTA AL POR MAYOR DE METALES Y MINERALES METALIFEROS,4662.0,Venta al por mayor de metales y de minerales metalíferos
+514903,VENTA AL POR MAYOR DE PRODUCTOS PARA USO AGROPECUARIO Y VENTA DESECHOS ORGANICOS E INORGANICOS,4669.1,Venta al por mayor de fertilizantes y productos agroquímicos
+521101,SUPERMERCADOS Y ALMACENES DE ABARROTES EN CADENA,4711.1,Venta al por menor en supermercados almacenes y similares
+521901,TIENDAS O ALMACENES POR DEPARTAMENTOS,4719.1,Venta al por menor en tiendas por departamentos
+523201,BAZARES,4719.9,Venta al por menor en bazares y otros establecimientos no especializados n.c.p
+522016,COMERCIO AL POR MENOR DE PRODUCTOS DE TABACO,4723.0,Venta al por menor de tabaco en comercios especializados
+523918,VENTA AL POR MENOR DE EQUIPO DE AUDIO Y VIDEO,4742.0,Venta al por menor de equipo de audio y video en comercios especializados
+523404,VENTA AL POR MENOR DE VIDRIO PARA LA CONSTRUCCION,4752.2,Venta al por menor de productos de vidrio en comercios especializados
+525901,VENTA DE ALFOMBRAS Y TAPICES,4753.0,Venta al por menor de tapices alfombras cubrimientos para paredes y pisos en comercios especializado
+523910,VENTA AL POR MENOR DE JUGUETES Y/O ARTICULOS DE ESPARCIMIENTO,4764.0,Venta al por menor de juegos y de juguetes en almacenes especializados
+523203,VENTA AL POR MENOR DE CALZADO (ZAPATAERIAS),4771.2,Venta al por menor de zapatos en comercios especializados
+601001,SERVICIO DE TRANSPORTE POR VIA FERREA,4911.0,Transporte de pasajeros por ferrocarril
+602102,SERVICIO DE TRANSPORTE REGULAR DE PERSONAS POR VIA TERRESTRE,4921.0,Transporte terrestre de pasajeros del área urbana suburbana por vía terrestre
+602101,TRANSPORTE REGULAR DE ESTUDIANTES Y EMPLEADOS POR VIA TERRESTRE,4922.1,Transporte terrestre de estudiantes y de empleados
+602201,TRANSPORTE NO REGULAR DE PASAJEROS POR VIA TERRESTRE(EXCURSIONES),4922.3,Transporte terrestre no regular de pasajeros en buses
+602304,SERVICIO DE MUDANZA INTERNACIONAL,4923.1,Transporte terrestre local e internacional de contenedores
+603001,SERVICIO DE TRANSPORTE POR TUBERIAS,4930.0,Transporte por tuberías
+611001,TRANSPORTE DE CARGA POR VIA ACUATICA,5012.0,Transporte marítimo y de cabotaje de carga
+621001,SERVICIO DE TRANSPORTE DE CARGA POR VIA AEREA,5120.0,Transporte de carga por vía aérea
+630201,SERVICIOS DE ALMACENAJE,5210.0,Almacenamiento y depósito
+602302,SERVICIOS DE GRUA,5221.1,Remolque y asistencia para vehículo destinado al transporte terrestre
+630303,PERMISO DE PASO POR PROPIEDADES PRIVADAS (PEAJE),5221.9,Servicios de administración de carreteras puentes y otros servicios auxiliares
+630101,SERVICIO DE CONSOLIDACION DE CARGA Y DESCARGA,5224.0,Manipulación de carga
+641101,ACTIVIDADES POSTALES Y DE CORREO,5310.0,Servicios postales (Correo)
+551001,ALQUILER DE BIENES INMUEBLES DE USO HABITACIONAL POR PERIODOS INFERIORES A UN MES,5510.9,Otras actividades de alojamiento para estancias cortas n.c.p
+853103,RESIDENCIAS UNIVERSITARIAS CON SERVICIOS INTEGRADOS,5590.0,Otras actividades de alojamientos
+552003,SERVICIOS DE CATERING SERVICE,5621.0,Suministros de comidas por encargo
+552001,BARES CANTINAS O TABERNAS,5630.0,Actividades de servicio de bebidas
+221101,EDICION DE LIBROS DE TEXTOS,5811.0,Edición de libros
+221201,EDICION DE PERIODICOS REVISTAS Y OTRAS PUBLICACIONES PERIODICAS,5813.0,Edición de periódicos diarios y revistas
+921101,ACTIVIDADES PRODUCCION POSTPRODUCCION Y DISTRIBUCION DE PELICULAS CINEMATOGRAFICAS (VIDEOS),5911.0,Actividades de producción de películas cinematográficas videos y programas de televisión
+921201,EXHIBICION DE FILMES Y VIDEOCINTAS (SALAS DE CINE),5914.0,Actividades de proyección de películas
+924906,GRABACION DE SONIDO (MUSICA ETC.) EN DISCOS GRAMOFONICOS YEN CINTA MAGNETOFONICA,5920.0,Actividades de grabación y publicación de grabaciones sonoras
+642008,SERVICIO DE TRANSMISION DE DATOS TEXTO SONIDO VOZ Y VIDEO POR MEDIO DE LA RED DE INTERNET,6120.0,Actividades de telecomunicaciones inalámbricas
+712301,SERVICIOS DE INTERNET EN LOCALES PUBLICOS ( CAFE INTERNET ),6190.1,Servicios de café internet
+722003,DISENADOR GRAFICO DE SOFTWARE Y PAGINAS WEB,6201.0,Actividades de programación informática
+721001,CONSULTORES INFORMATICOS,6202.0,Actividades de consultoría informática y gestión de instalaciones informáticas
+729001,OTRAS ACTIVIDADES DE INFORMATICA,6209.0,Otras actividades de la tecnología de información y servicio informáticos
+922001,ACTIVIDADES DE AGENCIAS DE NOTICIAS,6391.0,Actividades de agencias de noticias
+651101,BANCA CENTRAL,6411.0,Banca Central
+659906,ACTIVIDADES DE SOCIEDADES DE CARTERA (HOLDING),6420.0,Actividades de sociedades de cartera
+659101,ARRENDAMIENTO OPERATIVO EN FUNCION FINANCIERA CON OPCION DECOMPRA O RENOVACION (LEASING OPERATIVO),6491.0,Arrendamiento financiero
+660101,SEGUROS DE VIDA,6511.0,Seguros de vida
+660303,PLANES DE SEGUROS GENERALES,6512.0,Seguros generales
+671101,ADMINISTRACION DE MERCADOS FINANCIEROS,6611.0,Administración de mercados financieros
+672001,ACTIVIDADES AUXILIARES DE LA FINANCIACION DE PLANES DE SEGUROS Y DE PENSIONES,6629.0,Otras actividades auxiliares de seguros y fondos de pensiones
+702001,AGENTES O CORREDORES DE BIENES RAICES,6820.0,Actividades inmobiliarias realizadas a cambio de una retribución o por contrata
+751401,ACTIVIDADES DE SERVICIOS AUXILIARES PARA LA ADMINISTRACION PUBLICA EN GENERAL,7010.0,Actividades de oficinas principales
+741402,ASESORAMIENTO EMPRESARIAL Y EN MATERIA DE GESTION,7020.0,Actividades de consultoría en gestión
+731001,INVESTIGACION Y DESARROLLO EXPERIMENTAL EN EL CAMPO DE LAS CIENCIAS NATURALES Y LA INGENIERIA,7210.0,Investigaciones y desarrollo experimental en el campo de las ciencias naturales y la ingeniería
+732001,INVESTIGACIONES Y DESARROLLO EXPERIMENTAL EN EL CAMPO DE LAS CIENCIAS SOCIALES Y LAS HUMANIDADES,7220.0,Investigación y desarrollo experimental en el campo de las ciencias sociales y las humanidades
+711101,ALQUILER DE AUTOMOVILES DE TODO TIPO,7710.1,Alquiler de automóviles sin conductor
+712904,ALQUILER DE PELICULAS CINEMATOGRAFICAS (VIDEO CLUB) Y/O VIDEO JUEGOS,7722.0,Alquiler de cintas de vídeo y discos
+749101,SERVICIOS DE ADMINISTRACION DE PERSONAL,7830.0,Otras actividades de dotación de recursos humanos
+630401,AGENCIAS DE VIAJES Y EXCURSIONES,7911.0,Actividades de agencias de viajes
+702003,MANTENIMIENTO REPARACION Y LIMPIEZA DE LOS SERVICIOS Y BIENES COMUNES DE LA PROPIEDAD EN CONDOMINIO,8110.0,Actividades combinadas de apoyo a instalaciones
+749302,SERVICIOS DE LIMPIEZA (INTERIORES Y EXTERIORES),8121.0,Limpieza general de edificios
+749301,SERVICIOS DE FUMIGACION (NO AGRICOLA),8129.0,Otras actividades de limpieza de edificios e instalaciones industriales
+14001,SERVICIO DE JARDINERIA Y/O DISENO PAISAJISTA,8130.0,Actividades de paisajismo y servicios de mantenimiento conexos
+749905,SERVICIO DE CONTESTACION DE TELEFONOS (CALL CENTER),8220.0,Actividades de centros de llamadas
+749501,SERVICIOS DE ENVASE Y EMPAQUE,8292.0,Actividades de envasado y empacado
+749908,SERVICIO DE RECOLECCION DE MONEDAS DE LOS TELEFONOS PUBLICOS,8299.0,Otras actividades de servicios de apoyo a las empresas n.c.p
+752101,RELACIONES EXTERIORES,8421.0,Relaciones exteriores
+753001,ACTIVIDADES DE PLANES DE SEGURIDAD SOCIAL DE AFILIACION OBLIGATORIA,8430.0,Actividades de planes de seguridad social de afiliación obligatoria
+802202,ENSENANZA SECUNDARIA DE FORMACION TECNICA Y PROFESIONAL NO AUTORIZADA POR EL MEP.,8522.0,Enseñanza de formación técnica y profesional
+802201,ENSENANZA DE FORMACION TECNICA Y PARAUNIVERSITARIA,8530.2,Enseñanza parauniversitaria
+851207,SERVICIOS DE ODONTOLOGO Y CONEXOS,8620.2,Actividades de odontólogos
+919905,ASOCIACION PROAYUDA A PERSONAS ADICTAS A DROGAS E INDIGENTES,8720.0,Actividades de atención en instituciones para personas con retraso mental enfermos mentales y toxicóm
+853101,FUNDACIONES DE SERVICIO SOCIAL SIN ALOJAMIENTO,8810.0,Asistencia social sin alojamiento para el adulto mayor y personas con discapacidad
+923101,ACTIVIDADES DE BIBLIOTECAS Y ARCHIVOS,9101.0,Actividades de Bibliotecas y archivos
+923201,GALERIAS DE ARTE,9102.0,Actividades de museos y preservación de lugares históricos
+923301,ACTIVIDADES DE JARDINES BOTANICOS ZOOLOGICOS PARQUES NACIONALES Y RESERVAS NACIONALES,9103.0,Actividades de jardines botánicos zoológicos y parques naturales
+911201,ACTIVIDADES DE ORGANIZACIONES PROFESIONALES,9412.0,Actividades de asociaciones profesionales
+919101,ACTIVIDADES DE ORGANIZACIONES RELIGIOSAS,9491.0,Actividades de organizaciones religiosas
+919201,ACTIVIDADES DE ORGANIZACIONES POLITICAS,9492.0,Actividades de organizaciones políticas
+526011,REPARACION Y MANTENIMIENTO DE EQUIPO PARA TELECOMUNICACIONES,9512.0,Reparación de equipos de comunicaciones
+523927,REPARACION EQUIPO DE AUDIO Y VIDEO,9521.0,Reparación de aparatos electrónicos de consumo eléctrico
+526006,REPARACION DE ARTICULOS ELECTRICOS,9522.0,Reparación de aparatos de uso doméstico y equipo doméstico y de jardinería
+526001,SERVICIOS DE REPARACION DE ZAPATOS,9523.0,Reparación de calzado y artículos de cuero
+930202,SALONES DE BELLEZA PELUQUERIA Y BARBERIA,9602.0,Actividades de peluquería y otros tratamientos de belleza
+950001,HOGARES PRIVADOS CON SERVICIO DOMESTICO,9700.0,Actividades de los hogares como empleadores de personal doméstico
