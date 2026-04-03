@@ -70,6 +70,14 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # ── FASE 1 — Fix 1.2: Rechazar refresh tokens usados como access ──
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tipo de token inválido. Use un access token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     username: str = payload.get("sub")
     if username is None:
         raise HTTPException(

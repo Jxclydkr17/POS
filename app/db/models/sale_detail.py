@@ -12,9 +12,11 @@ class SaleDetail(Base):
     # 📏 Cantidad
     quantity = Column(Numeric(12, 3), nullable=False)
 
-    unit_price = Column(Numeric, nullable=False)
+    # ── FASE 2 — Fix 2.2: Numeric sin precisión → Numeric(18, 5) ──
+    # Sin escala, MySQL almacena enteros y se pierden los decimales.
+    unit_price = Column(Numeric(18, 5), nullable=False)
     discount_percent = Column(Numeric(5, 2), nullable=False, default=0)
-    subtotal = Column(Numeric, nullable=False)
+    subtotal = Column(Numeric(18, 5), nullable=False)
 
     # Impuesto por línea
     tax_rate = Column(Numeric(5, 2), nullable=True, default=0)

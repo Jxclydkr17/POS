@@ -84,8 +84,12 @@ def pay_credit(
         )
 
     except ValueError as ve:
+        # ── FASE 2 — Fix 2.3: rollback para evitar sesión sucia ──
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
+        # ── FASE 2 — Fix 2.3: rollback para evitar sesión sucia ──
+        db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
 

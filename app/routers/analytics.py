@@ -17,7 +17,11 @@ from app.db.models.purchase_detail import PurchaseDetail
 from app.db.models.purchase_payment import PurchasePayment
 from app.db.models.supplier import Supplier
 from app.db.models.category import Category
+from app.db.models.user import User
 from app.utils.dt import utcnow, today_cr
+
+# ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
+from app.core.dependencies import get_current_user
 
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
@@ -52,6 +56,7 @@ def kpis(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -102,6 +107,7 @@ def daily_sales(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -132,6 +138,7 @@ def payment_methods(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -163,6 +170,7 @@ def compare_periods(
     previous_start: Optional[str] = Query(None),
     previous_end: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     cur_start = parse_date(current_start)
     cur_end = parse_date(current_end)
@@ -202,6 +210,7 @@ def sales_by_category(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -272,6 +281,7 @@ def top_products(
     end_date: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     start = parse_date(start_date)
     end = parse_date(end_date)
@@ -318,6 +328,7 @@ def top_products(
 def products_no_rotation(
     days: int = Query(30, ge=1, le=365, description="Días sin ventas para considerar sin rotación"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Retorna productos activos con stock > 0 que no han tenido ventas
@@ -422,6 +433,7 @@ def purchases_spending_by_supplier(
     end_date: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Top N proveedores por gasto total en compras.
@@ -474,6 +486,7 @@ def purchases_spending_by_supplier(
 def purchases_monthly_evolution(
     months: int = Query(12, ge=1, le=36),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Monto total de compras agrupado por mes, últimos N meses.
@@ -536,6 +549,7 @@ def purchases_avg_payment_days(
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Promedio de días entre entry_date y paid_at para compras pagadas.
@@ -604,6 +618,7 @@ def purchases_top_products(
     end_date: Optional[str] = Query(None),
     limit: int = Query(10, ge=1, le=100),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Top N productos más comprados, usando PurchaseDetail.
@@ -694,6 +709,7 @@ def purchases_top_products(
 def supplier_comparison(
     product_id: int = Query(..., gt=0, description="ID del producto a comparar"),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Para un producto dado, compara todos los proveedores que lo han vendido:
@@ -846,6 +862,7 @@ def supplier_comparison(
 def multi_supplier_products(
     min_suppliers: int = Query(2, ge=2, le=10),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Lista productos que han sido comprados a 2+ proveedores distintos.

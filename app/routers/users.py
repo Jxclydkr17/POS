@@ -14,7 +14,8 @@ from typing import Optional
 # ── Schemas de validación (Fase 8 — Bug 8.2) ─────────────
 class UserRegister(BaseModel):
     username: str = Field(..., min_length=3, max_length=100)
-    password: str = Field(..., min_length=4, max_length=255)
+    # ── FASE 1 — Fix 1.3: Password mínimo 8 caracteres ──
+    password: str = Field(..., min_length=8, max_length=255)
     full_name: Optional[str] = Field(None, max_length=150)
     role: str = Field("vendedor", pattern=r"^(admin|vendedor|cajero)$")
 

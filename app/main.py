@@ -161,14 +161,18 @@ _CORS_ORIGINS = [
     "http://localhost:3000",
 ]
 
-# En desarrollo, permitir todo para comodidad
+# ── FASE 1 — Fix 1.5: CORS seguro ──
+# En desarrollo, permitir todo pero SIN credentials (la spec lo prohíbe con "*")
+# En producción, origins explícitos con credentials habilitado
 if settings.app_debug:
     _CORS_ORIGINS = ["*"]
+
+_allow_credentials = _CORS_ORIGINS != ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_CORS_ORIGINS,
-    allow_credentials=True,
+    allow_credentials=_allow_credentials,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
 )

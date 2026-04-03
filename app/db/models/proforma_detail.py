@@ -1,6 +1,6 @@
 # app/db/models/proforma_detail.py
 
-from sqlalchemy import Column, Integer, Numeric, Float, ForeignKey, Boolean, String
+from sqlalchemy import Column, Integer, Numeric, ForeignKey, Boolean, String
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 
@@ -20,7 +20,8 @@ class ProformaDetail(Base):
     subtotal = Column(Numeric(18, 5), nullable=False)
 
     # Impuesto por línea (mismo esquema que SaleDetail)
-    tax_rate = Column(Float, nullable=True, default=0)
+    # ── FASE 2 — Fix 2.1: Float → Numeric ──
+    tax_rate = Column(Numeric(5, 2), nullable=True, default=0)
     tax_amount = Column(Numeric(18, 5), nullable=True, default=0)
 
     # Producto común (línea sin inventario)

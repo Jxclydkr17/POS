@@ -1,6 +1,6 @@
 # app/db/models/proforma.py
 
-from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey, String, Text
+from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Text, Numeric
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.utils.dt import utcnow
@@ -23,7 +23,8 @@ class Proforma(Base):
     # VIGENTE | CONVERTIDA | VENCIDA | ANULADA
     status = Column(String(20), nullable=False, default="VIGENTE")
 
-    total = Column(Float, nullable=False, default=0)
+    # ── FASE 2 — Fix 2.1: Float → Numeric para consistencia con Sale.total ──
+    total = Column(Numeric(12, 2), nullable=False, default=0)
 
     # Notas libres del vendedor
     notes = Column(Text, nullable=True)

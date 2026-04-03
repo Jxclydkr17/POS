@@ -20,8 +20,9 @@ class Product(Base):
     cabys_name = Column(String(500), nullable=True)        
 
     # 🧾 IVA
-    tax_type = Column(String(100), nullable=True)          
-    tax_rate = Column(Float, nullable=True)                
+    tax_type = Column(String(100), nullable=True)
+    # ── FASE 2 — Fix 2.1: Float → Numeric ──
+    tax_rate = Column(Numeric(5, 2), nullable=True)
 
     # 🏷️ Categoría (RELACIÓN REAL)
     category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
@@ -40,8 +41,9 @@ class Product(Base):
     )
 
     # 💰 Valores
-    price = Column(Float, nullable=False)
-    cost = Column(Float, nullable=True)
+    # ── FASE 2 — Fix 2.1: Float → Numeric para evitar redondeo IEEE 754 ──
+    price = Column(Numeric(12, 2), nullable=False)
+    cost = Column(Numeric(12, 2), nullable=True)
 
     # 📦 Stock
     stock = Column(Numeric(12, 3), nullable=False, default=0)
@@ -74,19 +76,13 @@ class Product(Base):
     # ═══════════════════════════════════════════════════════════
 
     # Código de impuesto principal (nota 8). Default "01" = IVA.
-    # Valores: 01=IVA, 02=Selectivo Consumo, 03=Combustibles,
-    #          04=Bebidas Alcohólicas, 05=Bebidas sin alcohol/jabón,
-    #          06=Tabaco, 07=IVA cálculo especial, 08=IVA Bienes Usados,
-    #          12=Cemento, 99=Otros
     impuesto_code = Column(String(2), nullable=True, default="01")
 
     # Factor para IVA Bienes Usados (código 08 nota 8).
-    # Formato decimal ej: 0.5714 para factor de bienes usados.
-    factor_calculo_iva = Column(Float, nullable=True)
+    # ── FASE 2 — Fix 2.1: Float → Numeric ──
+    factor_calculo_iva = Column(Numeric(5, 4), nullable=True)
 
     # TipoTransaccion (nota 22): default para este producto.
-    # 01=Venta Normal, 02=Autoconsumo exento, 03=Autoconsumo gravado,
-    # 08=Bienes Capital emisor, 09=Bienes Capital receptor, etc.
     tipo_transaccion = Column(String(2), nullable=True)
 
     # Número VIN o Serie para vehículos/aeronaves/embarcaciones (máx 17).
@@ -99,31 +95,27 @@ class Product(Base):
     forma_farmaceutica = Column(String(3), nullable=True)
 
     # IVA cobrado a nivel de fábrica (nota 21).
-    # NULL=no aplica, "01"=cobrando IVA fábrica, "02"=exento por fábrica
     iva_cobrado_fabrica = Column(String(2), nullable=True)
 
     # Código de descuento default para este producto (nota 20).
-    # 01=Regalía, 02=Regalía/Bonif IVA cobrado, 03=Bonificación,
-    # 04=Volumen, 05=Temporada, 06=Promocional, 07=Comercial,
-    # 08=Frecuencia, 09=Sostenido, 99=Otros
     discount_code_default = Column(String(2), nullable=True, default="07")
 
     # ═══════════════════════════════════════════════════════════
     # FASE 3.5 — Datos para impuestos específicos (códigos 03-06)
-    # Estos campos se usan cuando impuesto_code es 03, 04, 05 o 06.
+    # ── FASE 2 — Fix 2.1: Todos Float → Numeric ──
     # ═══════════════════════════════════════════════════════════
 
     # Impuesto por unidad (obligatorio para códigos 03,04,05,06)
-    imp_esp_impuesto_unidad = Column(Float, nullable=True)
+    imp_esp_impuesto_unidad = Column(Numeric(18, 5), nullable=True)
 
     # Porcentaje alcohol (obligatorio para código 04 bebidas alcohólicas)
-    imp_esp_porcentaje = Column(Float, nullable=True)
+    imp_esp_porcentaje = Column(Numeric(5, 2), nullable=True)
 
     # Volumen por unidad de consumo en mL (obligatorio para código 05)
-    imp_esp_volumen_unidad_consumo = Column(Float, nullable=True)
+    imp_esp_volumen_unidad_consumo = Column(Numeric(12, 3), nullable=True)
 
     # Cantidad de la unidad de medida (litros para 03, mL envase para 04/05)
-    imp_esp_cantidad_unidad_medida = Column(Float, nullable=True)
+    imp_esp_cantidad_unidad_medida = Column(Numeric(12, 3), nullable=True)
 
     def __repr__(self):
         return f"<Product(name='{self.name}', price={self.price}, unit={self.unit_type})>"

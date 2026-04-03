@@ -15,6 +15,7 @@ import sys
 import secrets
 import logging
 from pathlib import Path
+from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings
 from pydantic import field_validator
@@ -84,7 +85,8 @@ _ensure_secret_key()
 class Settings(BaseSettings):
     app_name: str = "Violette POS"
     app_env: str = "development"
-    app_debug: bool = True
+    # ── FASE 1 — Fix 1.5: Default seguro (False) para producción ──
+    app_debug: bool = False
 
     # ── FASE 4: Motor de BD ──
     # "sqlite" = standalone (default para .exe)
@@ -169,8 +171,12 @@ def get_database_url() -> str:
         db_path = APP_DIR / settings.db_sqlite_path
         return f"sqlite:///{db_path}"
     else:
+        # ── FASE 1 — Fix 1.4: URL-encode usuario y password ──
+        # Caracteres como @, #, /, % en el password rompen la URL de conexión.
+        user = quote_plus(settings.db_user)
+        password = quote_plus(settings.db_password)
         return (
-            f"mysql+pymysql://{settings.db_user}:{settings.db_password}"
+            f"mysql+pymysql://{user}:{password}"
             f"@{settings.db_host}:{settings.db_port}/{settings.db_name}"
         )
 

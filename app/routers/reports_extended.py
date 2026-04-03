@@ -8,8 +8,12 @@ from app.db.models.sale_detail import SaleDetail
  
 from app.db.models.product import Product
 from app.db.models.customer import Customer
+from app.db.models.user import User
 
 from app.utils.dt import TZ_CR
+
+# ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
+from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/reports", tags=["Reportes Ext"])
 
@@ -34,7 +38,8 @@ def sales_history(
     payment: Optional[str] = Query(None, description="efectivo|tarjeta|sinpe|crédito"),
     status: Optional[str] = Query(None, description="aprobada|pendiente|anulada"),
     q: Optional[str] = Query(None, description="número de venta o nombre cliente"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     qset = db.query(Sale)
 
@@ -90,7 +95,11 @@ def sales_history(
 # ----------------------------------------------------------------------
 
 @router.get("/sales/{sale_id}")
-def get_sale_detail(sale_id: int, db: Session = Depends(get_db)):
+def get_sale_detail(
+    sale_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Devuelve el detalle completo de una venta con sus productos"""
     sale = db.query(Sale).filter(Sale.id == sale_id).first()
 

@@ -6,6 +6,7 @@ from app.utils.dt import today_cr
 from app.db.database import get_db
 from app.db.models.cash_session import CashSession
 from app.db.models.cash_movement import CashMovement
+from app.db.models.user import User
 from app.services.cash_movement_service import register_cash_movement
 from app.schemas.cash import CashCloseSchema
 from app.services.cash_close_service import close_cash_session
@@ -27,6 +28,9 @@ from app.schemas.cash import (
 
 from app.utils.responses import success_response, error_response
 
+# ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
+from app.core.dependencies import get_current_user
+
 router = APIRouter(prefix="/cash", tags=["Caja"])
 
 
@@ -34,7 +38,10 @@ router = APIRouter(prefix="/cash", tags=["Caja"])
 # 🟦 Sesión de hoy
 # ==========================================================
 @router.get("/today")
-def get_today(db: Session = Depends(get_db)):
+def get_today(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     session = get_today_session(db)
 
     if not session:
@@ -53,7 +60,11 @@ def get_today(db: Session = Depends(get_db)):
 # 🟩 Abrir caja
 # ==========================================================
 @router.post("/open")
-def open_cash(data: CashSessionCreate, db: Session = Depends(get_db)):
+def open_cash(
+    data: CashSessionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         session = open_session(db, data.opening_amount)
 
@@ -70,7 +81,11 @@ def open_cash(data: CashSessionCreate, db: Session = Depends(get_db)):
 # 🟨 Registrar movimiento
 # ==========================================================
 @router.post("/movements")
-def create_movement(data: CashMovementCreate, db: Session = Depends(get_db)):
+def create_movement(
+    data: CashMovementCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     session = get_today_session(db)
 
     if not session:
@@ -100,7 +115,8 @@ def create_movement(data: CashMovementCreate, db: Session = Depends(get_db)):
 @router.post("/close")
 def close_cash(
     data: CashCloseSchema,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     session = get_today_session(db)
 
@@ -134,7 +150,10 @@ def close_cash(
 # 🟧 Reporte de hoy (SIMPLIFICADO - USA EL CRUD)
 # ==========================================================
 @router.get("/report/today")
-def cash_report_today(db: Session = Depends(get_db)):
+def cash_report_today(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Obtiene el reporte completo del día.
     Funciona tanto si la caja está abierta como cerrada.
@@ -158,7 +177,8 @@ def cash_report_today(db: Session = Depends(get_db)):
 def get_today_movements(
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if limit > 100:
         limit = 100
@@ -206,7 +226,8 @@ def get_movements_by_date(
     report_date: str,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if limit > 100:
         limit = 100
@@ -258,7 +279,11 @@ def get_movements_by_date(
 # 🟫 Reporte por fecha
 # ==========================================================
 @router.get("/report/{report_date}")
-def cash_report(report_date: str, db: Session = Depends(get_db)):
+def cash_report(
+    report_date: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         d = date.fromisoformat(report_date)
     except ValueError:
@@ -276,7 +301,10 @@ def cash_report(report_date: str, db: Session = Depends(get_db)):
 
 
 @router.get("/current")
-def get_current_cash(db: Session = Depends(get_db)):
+def get_current_cash(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     session = get_open_session(db)
 
     if not session:
@@ -298,7 +326,12 @@ def get_current_cash(db: Session = Depends(get_db)):
 # 🟨 Retiro de efectivo (WITHDRAW)
 # ==========================================================
 @router.post("/withdraw")
-def withdraw_cash(amount: float, reason: str, db: Session = Depends(get_db)):
+def withdraw_cash(
+    amount: float,
+    reason: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     session = get_open_session(db)
 
     if not session:
@@ -336,7 +369,12 @@ def withdraw_cash(amount: float, reason: str, db: Session = Depends(get_db)):
 # 🟪 Ajuste manual de caja (ADJUSTMENT)
 # ==========================================================
 @router.post("/adjust")
-def adjust_cash(amount: float, reason: str, db: Session = Depends(get_db)):
+def adjust_cash(
+    amount: float,
+    reason: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     amount:
       > 0  => sobrante (IN)
@@ -383,7 +421,8 @@ def get_cash_session_report(
     cash_session_id: int,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if limit > 100:
         limit = 100
@@ -429,7 +468,8 @@ def get_cash_session_report(
 def cash_history(
     skip: int = 0,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if limit > 50:
         limit = 50

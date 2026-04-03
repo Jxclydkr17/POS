@@ -16,6 +16,13 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             detail="Token inválido o expirado"
         )
 
+    # ── FASE 1 — Fix 1.2: Rechazar refresh tokens usados como access ──
+    if payload.get("type") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Tipo de token inválido. Use un access token."
+        )
+
     username = payload.get("sub")
     if username is None:
         raise HTTPException(status_code=401, detail="Token inválido")
