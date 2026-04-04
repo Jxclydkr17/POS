@@ -1,6 +1,7 @@
 # app/ai/chat.py
 from __future__ import annotations
 
+import logging
 import re
 import time
 import uuid
@@ -37,6 +38,9 @@ from app.ai.ui_context import UIContext, build_context_prompt, generate_contextu
 from app.ai.hybrid_router import route as hybrid_route, RouteDecision
 from app.ai.llm_engine import call_llm, is_llm_available
 
+# FASE 6b: Capa inteligente de interpretación
+from app.ai.llm_interpreter import interpret, execute_interpreted_intent
+
 # FASE 7: Alertas proactivas
 from app.ai.proactive_alerts import get_proactive_alerts, format_alerts_as_message
 
@@ -48,6 +52,8 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 
 if TYPE_CHECKING:
     from app.db.models.product import Product
+    
+logger = logging.getLogger(__name__)
 
 
 # -----------------------------
@@ -1216,6 +1222,41 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
             suggestions=generate_contextual_suggestions(ui_ctx),
             session_id=session_id, memory=out_mem,
         )
+
+    # -----------------------------------------
+    # FASE 6b: Capa inteligente de interpretación
+    # Si hay LLM configurado y NO hay estados pendientes,
+    # intentar interpretar la intención con el LLM ANTES
+    # del regex/fuzzy. Si falla → cae al flujo legacy intacto.
+    # -----------------------------------------
+    _has_pending_state = any(
+        _has_pending(ui_memory, a)
+        for a in ("confirm_sale", "choose_product", "confirm_recommended", "await_payment")
+    )
+
+    if not _has_pending_state and is_llm_available():
+        try:
+            _intent = interpret(text_raw, db, ui_ctx)
+            if _intent and _intent.is_actionable:
+                _exec = execute_interpreted_intent(_intent, db, ui_ctx)
+                if _exec:
+                    logger.info(
+                        f"LLM interpreter: intent={_intent.intent} "
+                        f"conf={_intent.confidence:.2f} params={_intent.params}"
+                    )
+                    out_mem = _push_turn(ui_memory, "user", text_raw)
+                    out_mem = _push_turn(out_mem, "assistant", _exec["reply_text"])
+                    return ChatResponse(
+                        reply_text=_exec["reply_text"],
+                        cards=_exec.get("cards", []),
+                        actions=_exec.get("actions", []),
+                        suggestions=generate_contextual_suggestions(ui_ctx),
+                        session_id=session_id,
+                        memory=out_mem,
+                    )
+        except Exception as e:
+            logger.debug(f"LLM interpreter fallthrough: {e}")
+            # Silencioso — caer al flujo legacy
 
     # -----------------------------------------
     # 0) Navegación a stock bajo

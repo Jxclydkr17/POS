@@ -13,9 +13,9 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QMessageBox, QFormLayout, QGroupBox,
     QTabWidget, QProgressDialog, QScrollArea, QCheckBox,
-    QFileDialog, QSpinBox, QDoubleSpinBox,
+    QFileDialog, QSpinBox, QDoubleSpinBox, QTextEdit,
 )
-from PySide6.QtCore import Qt, QObject, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QThread, Signal, QTimer
 from PySide6.QtGui import QPixmap
 import logging
 import os
@@ -197,6 +197,62 @@ class _ImportConfigWorker(QObject):
             self.failed.emit(str(e))
 
 
+# ── FASE 5 AI: Workers para configuración de IA ──
+
+class _LoadAIConfigWorker(QObject):
+    """Carga la config de IA desde el backend."""
+    finished = Signal(dict, list)  # ai_config, providers
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            from ui.services.settings_service import fetch_ai_config, fetch_ai_providers
+            config = fetch_ai_config()
+            try:
+                providers = fetch_ai_providers()
+            except Exception:
+                providers = []
+            self.finished.emit(config, providers)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _SaveAIConfigWorker(QObject):
+    """Guarda la config de IA."""
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict, parent=None):
+        super().__init__(parent)
+        self._payload = payload
+
+    def run(self):
+        try:
+            from ui.services.settings_service import save_ai_config
+            result = save_ai_config(self._payload)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _TestAIConfigWorker(QObject):
+    """Prueba la conexión con el proveedor de IA."""
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict, parent=None):
+        super().__init__(parent)
+        self._payload = payload
+
+    def run(self):
+        try:
+            from ui.services.settings_service import test_ai_connection
+            result = test_ai_connection(self._payload)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
 # ================================================================
 # Vista principal
 # ================================================================
@@ -270,6 +326,7 @@ class SettingsView(QWidget):
         self.tab_widget.addTab(self._build_tab_pos(), "🛒 POS")
         self.tab_widget.addTab(self._build_tab_facturacion(), "📄 Facturación")
         self.tab_widget.addTab(self._build_tab_impresora(), "🖨️ Impresora")
+        self.tab_widget.addTab(self._build_tab_ai(), "🤖 Asistente IA")
         self.tab_widget.addTab(self._build_tab_avanzado(), "⚙️ Avanzado")
 
         root.addWidget(self.tab_widget, 1)
@@ -1271,6 +1328,424 @@ class SettingsView(QWidget):
         self._worker.finished.connect(self._thread.quit)
         self._worker.failed.connect(self._thread.quit)
         self._thread.start()
+
+    # ==========================================================
+    # FASE 5 AI: Tab Asistente IA
+    # ==========================================================
+    def _build_tab_ai(self) -> QWidget:
+        """Construye la pestaña de configuración del asistente IA."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(16)
+
+        # ── Mapa de proveedores → modelos (se actualiza al cargar) ──
+        self._ai_provider_models = {
+            "none": [],
+            "anthropic": ["claude-sonnet-4-20250514"],
+            "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+            "google": ["gemini-2.0-flash"],
+        }
+
+        # ── Estado ──
+        grp_status = QGroupBox("Estado del Asistente")
+        grp_status.setStyleSheet(self._group_style())
+        status_layout = QHBoxLayout(grp_status)
+
+        self.ai_status_led = QLabel("●")
+        self.ai_status_led.setFixedWidth(20)
+        self.ai_status_led.setStyleSheet("font-size: 18px; color: #ef4444;")
+        status_layout.addWidget(self.ai_status_led)
+
+        self.ai_status_label = QLabel("Sin configurar")
+        self.ai_status_label.setStyleSheet("font-size: 13px; color: #9ca3af;")
+        status_layout.addWidget(self.ai_status_label)
+        status_layout.addStretch()
+
+        self.btn_ai_reload = QPushButton("🔄 Recargar")
+        self.btn_ai_reload.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_reload.setStyleSheet(self._small_btn_style())
+        self.btn_ai_reload.clicked.connect(self._load_ai_config)
+        status_layout.addWidget(self.btn_ai_reload)
+
+        layout.addWidget(grp_status)
+
+        # ── Proveedor y API Key ──
+        grp_provider = QGroupBox("Proveedor de IA")
+        grp_provider.setStyleSheet(self._group_style())
+        form_provider = QFormLayout(grp_provider)
+        form_provider.setSpacing(12)
+
+        self.combo_ai_provider = QComboBox()
+        self.combo_ai_provider.addItem("— Ninguno —", "none")
+        self.combo_ai_provider.addItem("🟣 Claude (Anthropic)", "anthropic")
+        self.combo_ai_provider.addItem("🟢 ChatGPT (OpenAI)", "openai")
+        self.combo_ai_provider.addItem("🔵 Gemini (Google)", "google")
+        self.combo_ai_provider.currentIndexChanged.connect(self._on_ai_provider_changed)
+        form_provider.addRow("Proveedor:", self.combo_ai_provider)
+
+        # API Key con toggle de visibilidad
+        key_row = QHBoxLayout()
+        self.input_ai_key = QLineEdit()
+        self.input_ai_key.setEchoMode(QLineEdit.Password)
+        self.input_ai_key.setPlaceholderText("Pegá tu API key aquí...")
+        self.input_ai_key.setMinimumWidth(300)
+        key_row.addWidget(self.input_ai_key)
+
+        self.btn_ai_show_key = QPushButton("👁")
+        self.btn_ai_show_key.setFixedSize(32, 28)
+        self.btn_ai_show_key.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_show_key.setToolTip("Mostrar/ocultar API key")
+        self.btn_ai_show_key.setStyleSheet(self._small_btn_style())
+        self.btn_ai_show_key.clicked.connect(self._toggle_ai_key_visibility)
+        key_row.addWidget(self.btn_ai_show_key)
+        form_provider.addRow("API Key:", key_row)
+
+        self.ai_key_hint = QLabel("")
+        self.ai_key_hint.setStyleSheet("font-size: 11px; color: #6b7280;")
+        form_provider.addRow("", self.ai_key_hint)
+
+        # Modelo
+        self.combo_ai_model = QComboBox()
+        form_provider.addRow("Modelo:", self.combo_ai_model)
+
+        # Habilitado
+        self.chk_ai_enabled = QCheckBox("Asistente IA habilitado")
+        self.chk_ai_enabled.setStyleSheet("font-size: 13px; color: #e5e7eb;")
+        form_provider.addRow("", self.chk_ai_enabled)
+
+        layout.addWidget(grp_provider)
+
+        # ── Botón probar conexión ──
+        test_row = QHBoxLayout()
+        self.btn_ai_test = QPushButton("🔌 Probar conexión")
+        self.btn_ai_test.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_test.setMinimumHeight(34)
+        self.btn_ai_test.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #e5e7eb;
+                font-weight: bold; font-size: 13px;
+                padding: 6px 20px; border-radius: 8px;
+                border: 1px solid #334155;
+            }
+            QPushButton:hover { background-color: #334155; }
+            QPushButton:disabled { color: #555; }
+        """)
+        self.btn_ai_test.clicked.connect(self._on_test_ai)
+        test_row.addWidget(self.btn_ai_test)
+        test_row.addStretch()
+        layout.addLayout(test_row)
+
+        # ── Opciones avanzadas (colapsable) ──
+        self.btn_ai_advanced_toggle = QPushButton("▶ Opciones avanzadas")
+        self.btn_ai_advanced_toggle.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_advanced_toggle.setStyleSheet("""
+            QPushButton {
+                background: transparent; border: none;
+                color: #6366f1; font-size: 12px; text-align: left;
+                padding: 4px 0;
+            }
+            QPushButton:hover { color: #818cf8; }
+        """)
+        self.btn_ai_advanced_toggle.clicked.connect(self._toggle_ai_advanced)
+        layout.addWidget(self.btn_ai_advanced_toggle)
+
+        self.ai_advanced_container = QWidget()
+        adv_form = QFormLayout(self.ai_advanced_container)
+        adv_form.setSpacing(10)
+
+        self.spin_ai_temperature = QDoubleSpinBox()
+        self.spin_ai_temperature.setRange(0.0, 1.0)
+        self.spin_ai_temperature.setSingleStep(0.1)
+        self.spin_ai_temperature.setDecimals(1)
+        self.spin_ai_temperature.setValue(0.3)
+        adv_form.addRow("Temperature:", self.spin_ai_temperature)
+
+        self.spin_ai_max_tokens = QSpinBox()
+        self.spin_ai_max_tokens.setRange(256, 4096)
+        self.spin_ai_max_tokens.setSingleStep(256)
+        self.spin_ai_max_tokens.setValue(1024)
+        adv_form.addRow("Max tokens:", self.spin_ai_max_tokens)
+
+        self.input_ai_custom_prompt = QTextEdit()
+        self.input_ai_custom_prompt.setPlaceholderText(
+            "Instrucciones adicionales para el asistente...\n"
+            "Ej: \"Somos una ferretería en Heredia. "
+            "Nuestros clientes principales son contratistas.\""
+        )
+        self.input_ai_custom_prompt.setMaximumHeight(100)
+        self.input_ai_custom_prompt.setStyleSheet(
+            "background-color: #1c1c1c; color: #e5e7eb; border: 1px solid #333; "
+            "border-radius: 6px; padding: 6px; font-size: 12px;"
+        )
+        adv_form.addRow("Prompt personalizado:", self.input_ai_custom_prompt)
+
+        self.ai_advanced_container.setVisible(False)
+        layout.addWidget(self.ai_advanced_container)
+
+        # ── Botón guardar AI config ──
+        save_row = QHBoxLayout()
+        save_row.addStretch()
+        self.btn_ai_save = QPushButton("💾 Guardar configuración IA")
+        self.btn_ai_save.setCursor(Qt.PointingHandCursor)
+        self.btn_ai_save.setMinimumHeight(38)
+        self.btn_ai_save.setStyleSheet("""
+            QPushButton {
+                background-color: #3a86ff; color: white;
+                font-weight: bold; font-size: 14px;
+                padding: 8px 28px; border-radius: 8px; border: none;
+            }
+            QPushButton:hover { background-color: #2b6fe0; }
+            QPushButton:disabled { background-color: #555; color: #999; }
+        """)
+        self.btn_ai_save.clicked.connect(self._on_save_ai)
+        save_row.addWidget(self.btn_ai_save)
+        save_row.addStretch()
+        layout.addLayout(save_row)
+
+        layout.addStretch()
+        scroll.setWidget(content)
+
+        wrapper = QVBoxLayout(tab)
+        wrapper.setContentsMargins(0, 0, 0, 0)
+        wrapper.addWidget(scroll)
+
+        # Cargar la config al iniciar
+        QTimer.singleShot(500, self._load_ai_config)
+
+        return tab
+
+    # ── Helpers de estilo para la tab AI ──
+
+    @staticmethod
+    def _group_style() -> str:
+        return """
+            QGroupBox {
+                font-size: 14px; font-weight: bold; color: #e5e7eb;
+                border: 1px solid #2a2a2a; border-radius: 8px;
+                margin-top: 12px; padding-top: 18px;
+            }
+            QGroupBox::title {
+                subcontrol-origin: margin;
+                left: 12px; padding: 0 6px;
+            }
+        """
+
+    @staticmethod
+    def _small_btn_style() -> str:
+        return """
+            QPushButton {
+                background-color: #1e293b; color: #e5e7eb;
+                border: 1px solid #334155; border-radius: 4px;
+                padding: 2px 8px; font-size: 12px;
+            }
+            QPushButton:hover { background-color: #334155; }
+        """
+
+    # ── Eventos de la tab AI ──
+
+    def _on_ai_provider_changed(self, index: int):
+        """Actualiza los modelos disponibles al cambiar proveedor."""
+        provider = self.combo_ai_provider.currentData() or "none"
+        models = self._ai_provider_models.get(provider, [])
+        self.combo_ai_model.clear()
+        for m in models:
+            self.combo_ai_model.addItem(m, m)
+
+        # Deshabilitar campos si no hay proveedor
+        has_provider = provider != "none"
+        self.input_ai_key.setEnabled(has_provider)
+        self.btn_ai_test.setEnabled(has_provider)
+        self.combo_ai_model.setEnabled(has_provider)
+        self.chk_ai_enabled.setEnabled(has_provider)
+
+    def _toggle_ai_key_visibility(self):
+        """Alterna entre mostrar y ocultar la API key."""
+        if self.input_ai_key.echoMode() == QLineEdit.Password:
+            self.input_ai_key.setEchoMode(QLineEdit.Normal)
+            self.btn_ai_show_key.setText("🙈")
+        else:
+            self.input_ai_key.setEchoMode(QLineEdit.Password)
+            self.btn_ai_show_key.setText("👁")
+
+    def _toggle_ai_advanced(self):
+        """Muestra u oculta las opciones avanzadas."""
+        visible = not self.ai_advanced_container.isVisible()
+        self.ai_advanced_container.setVisible(visible)
+        self.btn_ai_advanced_toggle.setText(
+            "▼ Opciones avanzadas" if visible else "▶ Opciones avanzadas"
+        )
+
+    # ── Cargar AI config ──
+
+    def _load_ai_config(self):
+        """Carga la config de IA desde el backend en un hilo."""
+        self._cleanup_thread()
+        self._worker = _LoadAIConfigWorker()
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_ai_config_loaded)
+        self._worker.failed.connect(self._on_ai_config_load_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_ai_config_loaded(self, config: dict, providers: list):
+        """Rellena los campos con la config de IA cargada."""
+        # Actualizar mapa de modelos si el backend envió proveedores
+        if providers:
+            for p in providers:
+                name = p.get("name", "")
+                models = p.get("models", [])
+                if name and models:
+                    self._ai_provider_models[name] = models
+
+        # Seleccionar proveedor
+        provider = config.get("provider", "none")
+        for i in range(self.combo_ai_provider.count()):
+            if self.combo_ai_provider.itemData(i) == provider:
+                self.combo_ai_provider.setCurrentIndex(i)
+                break
+
+        # Key hint
+        has_key = config.get("has_api_key", False)
+        hint = config.get("api_key_hint", "")
+        if has_key and hint:
+            self.ai_key_hint.setText(f"🔑 Key guardada: {hint}")
+            self.input_ai_key.setPlaceholderText("Dejá vacío para mantener la key actual...")
+        else:
+            self.ai_key_hint.setText("")
+            self.input_ai_key.setPlaceholderText("Pegá tu API key aquí...")
+
+        # Modelo
+        model = config.get("model") or ""
+        if model:
+            idx = self.combo_ai_model.findData(model)
+            if idx >= 0:
+                self.combo_ai_model.setCurrentIndex(idx)
+
+        # Habilitado
+        self.chk_ai_enabled.setChecked(config.get("is_enabled", False))
+
+        # Avanzado
+        self.spin_ai_temperature.setValue(config.get("temperature", 0.3))
+        self.spin_ai_max_tokens.setValue(config.get("max_tokens", 1024))
+        self.input_ai_custom_prompt.setPlainText(config.get("custom_prompt") or "")
+
+        # Status LED
+        if config.get("is_enabled") and has_key and provider != "none":
+            self.ai_status_led.setStyleSheet("font-size: 18px; color: #10b981;")
+            prov_names = {"anthropic": "Claude", "openai": "ChatGPT", "google": "Gemini"}
+            self.ai_status_label.setText(f"Conectado — {prov_names.get(provider, provider)}")
+            self.ai_status_label.setStyleSheet("font-size: 13px; color: #10b981;")
+        else:
+            self.ai_status_led.setStyleSheet("font-size: 18px; color: #ef4444;")
+            self.ai_status_label.setText("Sin configurar")
+            self.ai_status_label.setStyleSheet("font-size: 13px; color: #9ca3af;")
+
+    def _on_ai_config_load_failed(self, error: str):
+        logger.debug(f"No se pudo cargar AI config (normal si es primera vez): {error}")
+        self.ai_status_led.setStyleSheet("font-size: 18px; color: #f59e0b;")
+        self.ai_status_label.setText("No disponible")
+        self.ai_status_label.setStyleSheet("font-size: 13px; color: #f59e0b;")
+
+    # ── Guardar AI config ──
+
+    def _on_save_ai(self):
+        """Guarda la configuración de IA."""
+        provider = self.combo_ai_provider.currentData() or "none"
+
+        payload = {
+            "provider": provider,
+            "model": self.combo_ai_model.currentData() or self.combo_ai_model.currentText(),
+            "is_enabled": self.chk_ai_enabled.isChecked(),
+            "max_tokens": self.spin_ai_max_tokens.value(),
+            "temperature": self.spin_ai_temperature.value(),
+            "custom_prompt": self.input_ai_custom_prompt.toPlainText().strip() or None,
+        }
+
+        # Solo enviar api_key si el usuario escribió algo nuevo
+        key_text = self.input_ai_key.text().strip()
+        if key_text:
+            payload["api_key"] = key_text
+
+        self.btn_ai_save.setEnabled(False)
+        self.btn_ai_save.setText("Guardando...")
+
+        self._cleanup_thread()
+        self._worker = _SaveAIConfigWorker(payload)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_ai_save_success)
+        self._worker.failed.connect(self._on_ai_save_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_ai_save_success(self, result: dict):
+        self.btn_ai_save.setEnabled(True)
+        self.btn_ai_save.setText("💾 Guardar configuración IA")
+        self.input_ai_key.clear()
+        show_toast("✅ Configuración de IA guardada", success=True, parent=self.main_window)
+        self._load_ai_config()
+
+    def _on_ai_save_failed(self, error: str):
+        self.btn_ai_save.setEnabled(True)
+        self.btn_ai_save.setText("💾 Guardar configuración IA")
+        show_toast(f"Error guardando config IA: {error}", success=False, parent=self.main_window)
+
+    # ── Test de conexión ──
+
+    def _on_test_ai(self):
+        """Prueba la conexión con el proveedor seleccionado."""
+        provider = self.combo_ai_provider.currentData() or "none"
+        if provider == "none":
+            show_toast("Seleccioná un proveedor primero", success=False, parent=self.main_window)
+            return
+
+        key = self.input_ai_key.text().strip()
+        if not key:
+            show_toast("Ingresá la API key para probar", success=False, parent=self.main_window)
+            return
+
+        payload = {
+            "provider": provider,
+            "api_key": key,
+            "model": self.combo_ai_model.currentData() or self.combo_ai_model.currentText() or None,
+        }
+
+        self.btn_ai_test.setEnabled(False)
+        self.btn_ai_test.setText("Probando...")
+
+        self._cleanup_thread()
+        self._worker = _TestAIConfigWorker(payload)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_ai_test_result)
+        self._worker.failed.connect(self._on_ai_test_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_ai_test_result(self, result: dict):
+        self.btn_ai_test.setEnabled(True)
+        self.btn_ai_test.setText("🔌 Probar conexión")
+        success = result.get("success", False)
+        message = result.get("message", "Sin respuesta")
+        show_toast(message, success=success, parent=self.main_window)
+
+    def _on_ai_test_failed(self, error: str):
+        self.btn_ai_test.setEnabled(True)
+        self.btn_ai_test.setText("🔌 Probar conexión")
+        show_toast(f"Error en test: {error}", success=False, parent=self.main_window)
 
     # ==========================================================
     # Dirty tracking y utilidades

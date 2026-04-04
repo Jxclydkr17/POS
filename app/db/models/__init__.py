@@ -32,6 +32,9 @@ from .settings_audit import SettingsAuditLog
 from .document_sequence import DocumentSequence
 from .supplier_product import SupplierProduct
 
+# ── FASE 2 AI: Configuración de proveedor IA ──
+from .ai_config import AIConfig
+
 
 __all__ = [
     "User",
@@ -67,4 +70,6 @@ __all__ = [
     "DocumentSequence",
     # ── Fase 1: Relación M2M proveedor↔producto ──
     "SupplierProduct",
+    # ── Fase 2 AI: Config de proveedor IA ──
+    "AIConfig",
 ]

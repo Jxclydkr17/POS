@@ -487,3 +487,104 @@ def _mask(value: str) -> str:
     if not value or len(value) < 4:
         return "***"
     return value[:3] + "***"
+
+
+# ============================================================
+# FASE 2 AI: Configuración del Asistente IA
+# ============================================================
+
+from app.schemas.ai_config import (
+    AIConfigOut,
+    AIConfigUpdate,
+    AIConfigTestRequest,
+    AIConfigTestResponse,
+    AIProviderInfo,
+)
+from app.services.ai_config_service import (
+    get_ai_config_out,
+    update_ai_config,
+)
+from app.ai.providers.provider_registry import get_available_providers
+
+
+# GET /settings/ai-config — Config actual (sin key completa)
+@router.get("/ai-config", response_model=APIResponse[AIConfigOut],
+            dependencies=[Depends(get_current_user)])
+def get_ai_config_endpoint(db: Session = Depends(get_db)):
+    """Retorna la configuración actual del asistente IA."""
+    config = get_ai_config_out(db)
+    return APIResponse(message="Configuración de IA cargada", data=config)
+
+
+# PUT /settings/ai-config — Actualizar config
+@router.put("/ai-config", response_model=APIResponse[AIConfigOut],
+            dependencies=[Depends(require_role("admin"))])
+def update_ai_config_endpoint(
+    data: AIConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Actualiza la configuración del asistente IA."""
+    try:
+        updated = update_ai_config(db, data)
+
+        log_audit(
+            db, "update_ai_config",
+            {k: v for k, v in data.model_dump(exclude_unset=True).items() if k != "api_key"},
+            user_id=getattr(current_user, "id", None),
+            username=getattr(current_user, "username", None),
+        )
+
+        return APIResponse(message="Configuración de IA actualizada", data=updated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# POST /settings/ai-config/test — Probar conexión
+@router.post("/ai-config/test", response_model=APIResponse[AIConfigTestResponse],
+             dependencies=[Depends(get_current_user)])
+def test_ai_config_endpoint(req: AIConfigTestRequest):
+    """Prueba la conexión con un proveedor y API key."""
+    from app.ai.providers.provider_registry import _PROVIDER_CLASSES, _get_provider_instance
+
+    if req.provider not in _PROVIDER_CLASSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Proveedor no soportado: {req.provider}",
+        )
+
+    provider = _get_provider_instance(req.provider)
+    model_used = req.model or provider.default_model
+
+    # Validar la API key
+    is_valid = provider.validate_api_key(req.api_key.strip())
+
+    if is_valid:
+        result = AIConfigTestResponse(
+            success=True,
+            message=f"Conexión exitosa con {provider.display_name} ✅",
+            provider=req.provider,
+            model_used=model_used,
+        )
+    else:
+        result = AIConfigTestResponse(
+            success=False,
+            message=f"No se pudo conectar con {provider.display_name}. Verificá tu API key.",
+            provider=req.provider,
+            model_used=model_used,
+        )
+
+    return APIResponse(
+        message="Test completado",
+        data=result,
+    )
+
+
+# GET /settings/ai-providers — Lista proveedores disponibles
+@router.get("/ai-providers", response_model=APIResponse[list[AIProviderInfo]],
+            dependencies=[Depends(get_current_user)])
+def get_ai_providers_endpoint(db: Session = Depends(get_db)):
+    """Lista los proveedores de IA disponibles con sus modelos."""
+    providers_raw = get_available_providers(db)
+    providers = [AIProviderInfo(**p) for p in providers_raw]
+    return APIResponse(message="Proveedores disponibles", data=providers)

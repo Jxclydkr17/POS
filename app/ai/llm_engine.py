@@ -1,21 +1,25 @@
 # app/ai/llm_engine.py
 """
-FASE 6 — Motor LLM con function calling.
-Llama a la API de Anthropic cuando el clasificador local no resuelve la consulta.
-Soporta tool_use (function calling) para ejecutar acciones contra la BD.
+Motor LLM con function calling — Refactorizado con capa de abstracción.
+Usa el provider registry para seleccionar el proveedor activo (Anthropic, OpenAI, etc.)
+en lugar de hablar directo con una API específica.
+
+FASE 2: Lee max_tokens, custom_prompt y model desde la config de BD.
 """
 from __future__ import annotations
 
 import json
-import os
 import logging
 from typing import Any, Dict, List, Optional
 
-import requests
 from sqlalchemy.orm import Session
 
 from app.ai.llm_tools import TOOL_DEFINITIONS, execute_tool
 from app.ai.ui_context import UIContext, build_context_prompt
+from app.ai.providers.provider_registry import (
+    get_active_provider,
+    is_any_provider_available,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +27,10 @@ logger = logging.getLogger(__name__)
 # Configuración
 # ─────────────────────────────────────────────────────
 
-_API_URL = "https://api.anthropic.com/v1/messages"
-_MODEL = "claude-sonnet-4-20250514"
-_MAX_TOKENS = 1024
+_DEFAULT_MAX_TOKENS = 1024
 _MAX_TOOL_ROUNDS = 3  # máx ciclos tool_use → result → tool_use
 
-# System prompt para el LLM
+# System prompt base para el LLM (compartido por todos los proveedores)
 _SYSTEM_PROMPT = """Eres Violette, el asistente inteligente de un sistema POS (punto de venta) para una ferretería en Costa Rica.
 
 REGLAS ESTRICTAS:
@@ -50,36 +52,20 @@ CONTEXTO DEL SISTEMA:
 """
 
 
-def _get_api_key() -> Optional[str]:
-    """Obtiene la API key de Anthropic."""
-    # 1) Variable de entorno
-    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if key:
-        return key
-
-    # 2) Archivo .env en raíz del proyecto
-    for env_path in [".env", "../.env", "../../.env"]:
-        try:
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("ANTHROPIC_API_KEY="):
-                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if val:
-                            return val
-        except (FileNotFoundError, PermissionError):
-            continue
-
-    return None
+def _build_full_system_prompt(custom_prompt: str = "") -> str:
+    """Combina el system prompt base con el prompt personalizado del usuario."""
+    if not custom_prompt or not custom_prompt.strip():
+        return _SYSTEM_PROMPT
+    return f"{_SYSTEM_PROMPT}\n\nINSTRUCCIONES ADICIONALES DEL NEGOCIO:\n{custom_prompt.strip()}"
 
 
 def is_llm_available() -> bool:
-    """Verifica si hay una API key configurada."""
-    return bool(_get_api_key())
+    """Verifica si hay un proveedor LLM configurado con API key."""
+    return is_any_provider_available()
 
 
 # ─────────────────────────────────────────────────────
-# Conversión de memoria al formato Anthropic
+# Conversión de memoria al formato de mensajes
 # ─────────────────────────────────────────────────────
 
 def _build_messages(
@@ -88,8 +74,8 @@ def _build_messages(
     ui_ctx: Optional[UIContext] = None,
 ) -> list[dict]:
     """
-    Construye la lista de messages para la API de Anthropic.
-    Incluye historial de conversación + contexto UI.
+    Construye la lista de messages en formato interno.
+    El proveedor se encargará de ajustar al formato de su API.
     """
     messages = []
 
@@ -100,15 +86,6 @@ def _build_messages(
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
 
-    # Asegurar alternancia correcta (Anthropic requiere user/assistant alternados)
-    cleaned = []
-    last_role = None
-    for msg in messages:
-        if msg["role"] == last_role:
-            continue  # skip duplicados consecutivos
-        cleaned.append(msg)
-        last_role = msg["role"]
-
     # Agregar contexto UI como prefijo al mensaje actual
     context_prefix = ""
     if ui_ctx:
@@ -117,20 +94,16 @@ def _build_messages(
             context_prefix = f"{ctx_text}\n\n"
 
     # Mensaje actual del usuario
-    cleaned.append({
+    messages.append({
         "role": "user",
         "content": f"{context_prefix}{user_text}" if context_prefix else user_text,
     })
 
-    # Anthropic requiere que el primer mensaje sea "user"
-    if cleaned and cleaned[0]["role"] != "user":
-        cleaned = cleaned[1:]
-
-    return cleaned
+    return messages
 
 
 # ─────────────────────────────────────────────────────
-# Llamada al LLM con tool use loop
+# Llamada al LLM con tool use loop (agnóstico al proveedor)
 # ─────────────────────────────────────────────────────
 
 def call_llm(
@@ -142,6 +115,7 @@ def call_llm(
     """
     Llama al LLM con function calling.
     Maneja el loop de tool_use automáticamente.
+    Usa el proveedor activo del registry.
 
     Retorna:
         {
@@ -151,134 +125,119 @@ def call_llm(
             "used_llm": True,
         }
     """
-    api_key = _get_api_key()
-    if not api_key:
+    # ── Obtener proveedor activo, API key y config extra ──
+    try:
+        provider, api_key, extras = get_active_provider(db)
+    except RuntimeError:
         return {
-            "reply_text": "⚠️ No hay API key de Anthropic configurada. Configurá la variable ANTHROPIC_API_KEY para habilitar respuestas inteligentes.",
+            "reply_text": (
+                "⚠️ No hay API key de IA configurada. "
+                "Configurá tu API key en Ajustes > Asistente IA para habilitar respuestas inteligentes."
+            ),
             "actions": [],
             "cards": [],
             "used_llm": False,
         }
 
-    messages = _build_messages(user_text, memory, ui_ctx)
+    # ── Leer parámetros de config ──
+    max_tokens = extras.get("max_tokens", _DEFAULT_MAX_TOKENS)
+    custom_prompt = extras.get("custom_prompt", "")
+    model_override = extras.get("model", "")
+
+    # ── Preparar mensajes y herramientas ──
+    raw_messages = _build_messages(user_text, memory, ui_ctx)
+    messages = provider.format_messages(raw_messages)
+    system = provider.format_system_prompt(_build_full_system_prompt(custom_prompt))
+    tools = provider.format_tools(TOOL_DEFINITIONS)
+
     all_actions: list[dict] = []
     all_cards: list[dict] = []
     final_text = ""
 
-    headers = {
-        "x-api-key": api_key,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
-
+    # ── Loop de tool_use ──
     for _round in range(_MAX_TOOL_ROUNDS + 1):
-        payload = {
-            "model": _MODEL,
-            "max_tokens": _MAX_TOKENS,
-            "system": _SYSTEM_PROMPT,
-            "messages": messages,
-            "tools": TOOL_DEFINITIONS,
-        }
 
-        try:
-            resp = requests.post(
-                _API_URL,
-                headers=headers,
-                json=payload,
-                timeout=30,
-            )
+        # Llamar al proveedor
+        result = provider.call_completion(
+            api_key=api_key,
+            messages=messages,
+            tools=tools,
+            system=system,
+            model=model_override or None,
+            max_tokens=max_tokens,
+        )
 
-            if resp.status_code == 401:
+        # ── Manejar errores ──
+        if not result["success"]:
+            error_type = result["error_type"]
+            error_msg = result["error_message"]
+
+            if error_type == "auth":
                 return {
-                    "reply_text": "⚠️ API key de Anthropic inválida. Revisá la configuración.",
+                    "reply_text": f"⚠️ {error_msg} Revisá la configuración.",
                     "actions": [], "cards": [], "used_llm": False,
                 }
-
-            if resp.status_code == 429:
+            if error_type == "rate_limit":
                 return {
-                    "reply_text": "⏳ Demasiadas consultas al asistente. Esperá un momento e intentá de nuevo.",
+                    "reply_text": f"⏳ {error_msg}",
                     "actions": [], "cards": [], "used_llm": True,
                 }
-
-            if resp.status_code != 200:
-                logger.warning(f"LLM API error {resp.status_code}: {resp.text[:200]}")
+            if error_type == "timeout":
                 return {
-                    "reply_text": "⚠️ Error al consultar el asistente. Intentá de nuevo.",
-                    "actions": [], "cards": [], "used_llm": False,
+                    "reply_text": f"⏳ {error_msg}",
+                    "actions": [], "cards": [], "used_llm": True,
                 }
-
-            data = resp.json()
-
-        except requests.Timeout:
+            # server_error u otros
             return {
-                "reply_text": "⏳ El asistente tardó mucho. Intentá de nuevo o usá un comando directo.",
-                "actions": [], "cards": [], "used_llm": True,
-            }
-        except Exception as e:
-            logger.error(f"LLM request error: {e}")
-            return {
-                "reply_text": "⚠️ Error de conexión con el asistente.",
+                "reply_text": f"⚠️ {error_msg}",
                 "actions": [], "cards": [], "used_llm": False,
             }
 
-        # ── Procesar la respuesta ──
-        stop_reason = data.get("stop_reason", "")
-        content_blocks = data.get("content", [])
+        raw_response = result["raw_response"]
 
-        # Extraer texto
-        text_parts = []
-        tool_uses = []
-
-        for block in content_blocks:
-            if block.get("type") == "text":
-                text_parts.append(block["text"])
-            elif block.get("type") == "tool_use":
-                tool_uses.append(block)
-
-        if text_parts:
-            final_text = "\n".join(text_parts)
+        # ── Extraer texto ──
+        text = provider.extract_text(raw_response)
+        if text:
+            final_text = text
 
         # ── Si no hay tool_use, terminamos ──
-        if stop_reason != "tool_use" or not tool_uses:
+        if not provider.is_tool_use_response(raw_response):
             break
 
         # ── Ejecutar herramientas ──
+        tool_calls = provider.extract_tool_calls(raw_response)
+
         # Agregar el response del assistant a messages
-        messages.append({"role": "assistant", "content": content_blocks})
+        messages.append(provider.build_assistant_message(raw_response))
 
+        # Ejecutar cada tool y recoger resultados
         tool_results = []
-        for tool_block in tool_uses:
-            tool_name = tool_block.get("name", "")
-            tool_id = tool_block.get("id", "")
-            tool_input = tool_block.get("input", {})
-
-            logger.info(f"LLM tool_use: {tool_name}({tool_input})")
+        for tc in tool_calls:
+            logger.info(f"LLM tool_use: {tc.name}({tc.input})")
 
             # Ejecutar herramienta
-            result = execute_tool(tool_name, tool_input, db)
+            tool_result = execute_tool(tc.name, tc.input, db)
 
             # Recoger acciones y cards del resultado
-            if result.get("actions"):
-                all_actions.extend(result["actions"])
-            if result.get("cards"):
-                all_cards.extend(result["cards"])
+            if tool_result.get("actions"):
+                all_actions.extend(tool_result["actions"])
+            if tool_result.get("cards"):
+                all_cards.extend(tool_result["cards"])
 
             # Preparar resultado para el LLM
-            result_text = result.get("reply_text", "")
-            result_data = result.get("data", {})
+            result_text = tool_result.get("reply_text", "")
+            result_data = tool_result.get("data", {})
 
             tool_result_content = result_text
             if result_data:
                 tool_result_content += f"\n\nDatos: {json.dumps(result_data, ensure_ascii=False, default=str)}"
 
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": tool_id,
-                "content": tool_result_content,
-            })
+            tool_results.append(
+                provider.format_tool_result(tc.id, tool_result_content)
+            )
 
-        # Agregar resultados de herramientas
-        messages.append({"role": "user", "content": tool_results})
+        # Agregar resultados de herramientas al historial (formato varía por proveedor)
+        messages.extend(provider.build_tool_results_messages(tool_results))
 
     return {
         "reply_text": final_text or "No pude generar una respuesta. Intentá reformular tu pregunta.",

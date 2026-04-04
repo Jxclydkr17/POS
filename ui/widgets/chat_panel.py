@@ -519,6 +519,14 @@ class ChatPanel(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(6, 2, 6, 0)
         toolbar.setSpacing(4)
+
+        # FASE 5 AI: Indicador de proveedor activo
+        self._ai_provider_label = QLabel("")
+        self._ai_provider_label.setStyleSheet(
+            f"font-size: 10px; color: {_C['text_dim']}; padding: 0 4px;"
+        )
+        toolbar.addWidget(self._ai_provider_label)
+
         toolbar.addStretch()
 
         self._btn_export = QPushButton("📥")
@@ -650,6 +658,9 @@ class ChatPanel(QWidget):
         # FASE 7: Cargar alertas proactivas al iniciar (con delay)
         QTimer.singleShot(500, self._load_proactive_alerts)
 
+        # FASE 5 AI: Cargar indicador de proveedor
+        QTimer.singleShot(800, self._load_ai_provider_indicator)
+
     # ══════════════════════════════════════════════
     # FASE 7: Alertas proactivas
     # ══════════════════════════════════════════════
@@ -697,6 +708,46 @@ class ChatPanel(QWidget):
         """Recarga alertas (llamar al re-abrir el chat)."""
         self._alerts_loaded = False
         self._load_proactive_alerts()
+
+    # ══════════════════════════════════════════════
+    # FASE 5 AI: Indicador de proveedor activo
+    # ══════════════════════════════════════════════
+
+    def _load_ai_provider_indicator(self):
+        """Carga y muestra qué proveedor de IA está activo."""
+        try:
+            r = requests.get(
+                f"{API_URL}/settings/ai-config",
+                headers={"Authorization": f"Bearer {self._get_token()}"},
+                timeout=5,
+            )
+            if r.status_code == 200:
+                data = r.json().get("data", {})
+                provider = data.get("provider", "none")
+                is_enabled = data.get("is_enabled", False)
+                has_key = data.get("has_api_key", False)
+
+                if provider != "none" and is_enabled and has_key:
+                    icons = {"anthropic": "🟣", "openai": "🟢", "google": "🔵"}
+                    names = {"anthropic": "Claude", "openai": "ChatGPT", "google": "Gemini"}
+                    icon = icons.get(provider, "🤖")
+                    name = names.get(provider, provider)
+                    self._ai_provider_label.setText(f"{icon} {name}")
+                    self._ai_provider_label.setStyleSheet(
+                        f"font-size: 10px; color: {_C['success']}; padding: 0 4px;"
+                    )
+                else:
+                    self._ai_provider_label.setText("")
+        except Exception:
+            self._ai_provider_label.setText("")
+
+    def _get_token(self) -> str:
+        """Obtiene el token de la sesión actual."""
+        try:
+            from ui.session_manager import session
+            return session.token or ""
+        except Exception:
+            return ""
 
     # ══════════════════════════════════════════════
     # FASE 7: Historial para exportación

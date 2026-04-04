@@ -174,3 +174,44 @@ def fetch_audit_log(limit: int = 50) -> list:
     r = requests.get(API_URL_AUDIT_LOG, headers=_headers(), params={"limit": limit}, timeout=10)
     r.raise_for_status()
     return r.json().get("data", [])
+
+
+# ─────────────────────────────────────────────────────────
+# FASE 5 AI: Configuración del asistente IA
+# ─────────────────────────────────────────────────────────
+
+API_URL_AI_CONFIG = f"{BASE_URL}/settings/ai-config"
+API_URL_AI_PROVIDERS = f"{BASE_URL}/settings/ai-providers"
+API_URL_AI_TEST = f"{BASE_URL}/settings/ai-config/test"
+
+
+def fetch_ai_config() -> dict:
+    """Obtiene la config actual de IA (sin API key completa)."""
+    r = requests.get(API_URL_AI_CONFIG, headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def save_ai_config(payload: dict) -> dict:
+    """Actualiza la config de IA."""
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    r = requests.put(API_URL_AI_CONFIG, headers=headers, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def test_ai_connection(payload: dict) -> dict:
+    """Prueba la conexión con un proveedor y API key."""
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    r = requests.post(API_URL_AI_TEST, headers=headers, json=payload, timeout=20)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def fetch_ai_providers() -> list:
+    """Lista los proveedores de IA disponibles con sus modelos."""
+    r = requests.get(API_URL_AI_PROVIDERS, headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", [])
