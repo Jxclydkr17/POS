@@ -133,6 +133,7 @@ class CustomersView(QWidget):
         self.table.setStyleSheet("""
             QTableWidget {
                 background-color: #2b2b2b;
+                alternate-background-color: #32383E;
                 color: #fff;
                 gridline-color: #444;
                 font-size: 13px;

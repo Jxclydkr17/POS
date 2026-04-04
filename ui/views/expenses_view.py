@@ -8,6 +8,7 @@ import requests
 import logging
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.calendar_fix import fix_calendar_colors
 from app.utils.export_utils import export_expenses_pdf
 from app.constants.expense_categories import EXPENSE_CATEGORIES, EXPENSE_CATEGORIES_FILTER
 from app.constants.payment_methods import ALL_PAYMENT_METHODS
@@ -48,8 +49,10 @@ class ExpensesView(QWidget):
         filters = QHBoxLayout()
         self.dt_from = QDateEdit(calendarPopup=True)
         self.dt_from.setDate(QDate.currentDate().addDays(-7))
+        fix_calendar_colors(self.dt_from)
         self.dt_to = QDateEdit(calendarPopup=True)
         self.dt_to.setDate(QDate.currentDate())
+        fix_calendar_colors(self.dt_to)
 
         self.cmb_category = QComboBox()
         self.cmb_category.addItems(EXPENSE_CATEGORIES_FILTER)

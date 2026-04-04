@@ -17,6 +17,7 @@ from app.utils.export_utils import export_sales_analytics_pdf
 import logging
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.calendar_fix import fix_calendar_colors
 
 API_URL = BASE_URL
 
@@ -161,12 +162,14 @@ class SalesAnalyticsView(QWidget):
         self.dt_from = QDateEdit(calendarPopup=True)
         self.dt_from.setDate(QDate.currentDate().addDays(-7))
         self.dt_from.setDisplayFormat("yyyy-MM-dd")
+        fix_calendar_colors(self.dt_from)
         filter_layout.addWidget(self.dt_from)
 
         filter_layout.addWidget(QLabel("Hasta:"))
         self.dt_to = QDateEdit(calendarPopup=True)
         self.dt_to.setDate(QDate.currentDate())
         self.dt_to.setDisplayFormat("yyyy-MM-dd")
+        fix_calendar_colors(self.dt_to)
         filter_layout.addWidget(self.dt_to)
 
         self.btn_refresh = QPushButton("🔄 Actualizar")

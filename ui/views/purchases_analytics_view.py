@@ -29,6 +29,7 @@ from matplotlib.figure import Figure
 
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.calendar_fix import fix_calendar_colors
 
 API_URL = BASE_URL
 
@@ -156,12 +157,14 @@ class PurchasesAnalyticsView(QWidget):
         self.dt_from = QDateEdit(calendarPopup=True)
         self.dt_from.setDate(QDate.currentDate().addMonths(-3))
         self.dt_from.setDisplayFormat("yyyy-MM-dd")
+        fix_calendar_colors(self.dt_from)
         fl.addWidget(self.dt_from)
 
         fl.addWidget(QLabel("Hasta:"))
         self.dt_to = QDateEdit(calendarPopup=True)
         self.dt_to.setDate(QDate.currentDate())
         self.dt_to.setDisplayFormat("yyyy-MM-dd")
+        fix_calendar_colors(self.dt_to)
         fl.addWidget(self.dt_to)
 
         self.btn_refresh = QPushButton("🔄 Actualizar")

@@ -73,7 +73,7 @@ class AgingReportView(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setStyleSheet("""
-            QTableWidget { background-color: #2b2b2b; color: #fff; gridline-color: #444; font-size: 13px; }
+            QTableWidget { background-color: #2b2b2b; alternate-background-color: #32383E; color: #fff; gridline-color: #444; font-size: 13px; }
             QHeaderView::section { background-color: #1e88e5; padding: 5px; border: none; color: white; font-weight: bold; }
         """)
         layout.addWidget(self.table, stretch=1)

@@ -29,6 +29,7 @@ API_PROFORMAS = f"{BASE_URL}/proformas"
 TABLE_STYLE = """
     QTableWidget {
         background-color: #0b1220;
+        alternate-background-color: #131d30;
         color: #e5e7eb;
         gridline-color: #1f2937;
         border: 1px solid #1f2937;

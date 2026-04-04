@@ -217,6 +217,56 @@ class MainWindow(QMainWindow):
         central_style = """
             QWidget { background-color: #111827; color: #e5e7eb; }
             QLabel { color: #e5e7eb; }
+            QCalendarWidget {
+                background-color: #1e1e2e;
+                color: #e5e7eb;
+            }
+            QCalendarWidget QAbstractItemView {
+                background-color: #1e1e2e;
+                color: #e5e7eb;
+                selection-background-color: #2563eb;
+                selection-color: #ffffff;
+                alternate-background-color: #252535;
+            }
+            QCalendarWidget QAbstractItemView:enabled {
+                color: #e5e7eb;
+            }
+            QCalendarWidget QWidget#qt_calendar_navigationbar {
+                background-color: #111827;
+            }
+            QCalendarWidget QToolButton {
+                color: #e5e7eb;
+                background-color: #1e1e2e;
+                border: none;
+                padding: 4px 8px;
+                border-radius: 4px;
+            }
+            QCalendarWidget QToolButton:hover {
+                background-color: #2563eb;
+            }
+            QCalendarWidget QMenu {
+                background-color: #1e1e2e;
+                color: #e5e7eb;
+            }
+            QCalendarWidget QSpinBox {
+                background-color: #1e1e2e;
+                color: #e5e7eb;
+                border: 1px solid #374151;
+            }
+            QDateEdit {
+                background-color: #1e1e2e;
+                color: #e5e7eb;
+                border: 1px solid #374151;
+                border-radius: 4px;
+                padding: 4px 8px;
+            }
+            QDateEdit::drop-down {
+                border: none;
+                background-color: #2563eb;
+                border-top-right-radius: 4px;
+                border-bottom-right-radius: 4px;
+                width: 20px;
+            }
         """
 
         # Root con stacked "StackAll" (overlay real)

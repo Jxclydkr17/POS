@@ -260,6 +260,23 @@ class EinvoiceMonitorView(QWidget):
         self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl.setSelectionMode(QTableWidget.SingleSelection)
         self.tbl.setAlternatingRowColors(True)
+        self.tbl.setStyleSheet("""
+            QTableWidget {
+                background-color: #2b2b2b;
+                alternate-background-color: #32383E;
+                color: #fff;
+                gridline-color: #444;
+                font-size: 13px;
+            }
+            QHeaderView::section {
+                background-color: #1e88e5;
+                padding: 5px;
+                border: none;
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
         self.tbl.horizontalHeader().setStretchLastSection(True)
         self.tbl.setColumnWidth(0, 50)
         self.tbl.setColumnWidth(1, 50)

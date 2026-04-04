@@ -11,6 +11,8 @@ import logging
 
 
 from ui.api import BASE_URL
+from ui.session_manager import session
+from ui.utils.calendar_fix import fix_calendar_colors
 
 API_URL = BASE_URL
 
@@ -43,8 +45,10 @@ class SalesHistoryView(QWidget):
         filters = QHBoxLayout()
         self.dt_from = QDateEdit(calendarPopup=True)
         self.dt_from.setDate(QDate.currentDate().addDays(-7))
+        fix_calendar_colors(self.dt_from)
         self.dt_to = QDateEdit(calendarPopup=True)
         self.dt_to.setDate(QDate.currentDate())
+        fix_calendar_colors(self.dt_to)
         self.cmb_payment = QComboBox()
         self.cmb_payment.addItems(["Todos", "Efectivo", "Tarjeta", "SINPE", "Crédito"])
         self.cmb_status = QComboBox()
@@ -153,7 +157,8 @@ class SalesHistoryView(QWidget):
             if q:
                 params["q"] = q
 
-            r = requests.get(f"{API_URL}/reports/sales/history", params=params)
+            headers = {"Authorization": f"Bearer {session.token}"}
+            r = requests.get(f"{API_URL}/reports/sales/history", params=params, headers=headers)
             r.raise_for_status()
 
             data = r.json()["sales"]
@@ -174,7 +179,8 @@ class SalesHistoryView(QWidget):
     def on_row_clicked(self, row, col):
         try:
             sale_id = int(self.tbl.item(row, 0).text())
-            r = requests.get(f"{API_URL}/reports/sales/{sale_id}")
+            headers = {"Authorization": f"Bearer {session.token}"}
+            r = requests.get(f"{API_URL}/reports/sales/{sale_id}", headers=headers)
             r.raise_for_status()
 
             d = r.json()
@@ -290,7 +296,8 @@ class SalesHistoryView(QWidget):
                 if reply != QMessageBox.Yes:
                     return
                 try:
-                    resp = requests.post(f"{API_URL}/sales/{sale_id}/regenerate-pdf", timeout=15)
+                    headers = {"Authorization": f"Bearer {session.token}"}
+                    resp = requests.post(f"{API_URL}/sales/{sale_id}/regenerate-pdf", headers=headers, timeout=15)
                     resp.raise_for_status()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{e}")

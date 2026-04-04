@@ -460,6 +460,23 @@ class SalesView(QWidget):
         self.cart_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.cart_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.cart_table.setAlternatingRowColors(True)
+        self.cart_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1e1e2e;
+                alternate-background-color: #262636;
+                color: #e5e7eb;
+                gridline-color: #333;
+                font-size: 13px;
+            }
+            QHeaderView::section {
+                background-color: #333;
+                padding: 5px;
+                border: none;
+                color: white;
+                font-weight: bold;
+                font-size: 12px;
+            }
+        """)
         self.cart_table.setFixedHeight(260)
         self.cart_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.cart_table.customContextMenuRequested.connect(self.open_cart_context_menu)

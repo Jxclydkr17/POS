@@ -10,6 +10,7 @@ from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.calendar_fix import fix_calendar_colors
 import logging
 import os
 import tempfile
@@ -197,6 +198,7 @@ class FinancialView(QWidget):
         self.dt_from.setDate(QDate.currentDate().addDays(-7))
         self.dt_from.setDisplayFormat("dd/MM/yyyy")
         self._style_date_edit(self.dt_from)
+        fix_calendar_colors(self.dt_from)
         header.addWidget(self.dt_from)
 
         lbl_to = QLabel("Hasta:")
@@ -206,6 +208,7 @@ class FinancialView(QWidget):
         self.dt_to.setDate(QDate.currentDate())
         self.dt_to.setDisplayFormat("dd/MM/yyyy")
         self._style_date_edit(self.dt_to)
+        fix_calendar_colors(self.dt_to)
         header.addWidget(self.dt_to)
 
         self.btn_refresh = QPushButton("🔍 Actualizar")
