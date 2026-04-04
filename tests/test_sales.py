@@ -106,7 +106,11 @@ def seed_customer(db_session):
 @pytest.fixture
 def open_cash_session(db_session):
     """Abre una sesión de caja para hoy."""
-    # Cerrar cualquier sesión abierta previa
+    from sqlalchemy.exc import IntegrityError
+
+    # Limpiar estado pendiente antes de consultar
+    db_session.rollback()
+
     existing = (
         db_session.query(CashSession)
         .filter(CashSession.status == "open", CashSession.date == date.today())
@@ -121,8 +125,17 @@ def open_cash_session(db_session):
         opening_amount=0.0,
     )
     db_session.add(cs)
-    db_session.commit()
-    db_session.refresh(cs)
+    try:
+        db_session.commit()
+        db_session.refresh(cs)
+    except IntegrityError:
+        # Otra sesión ya la creó (ej. el middleware del login).
+        db_session.rollback()
+        cs = (
+            db_session.query(CashSession)
+            .filter(CashSession.date == date.today())
+            .first()
+        )
     return cs
 
 

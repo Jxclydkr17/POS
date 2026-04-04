@@ -82,6 +82,6 @@ def test_ai_insights_empty_safe(test_client, auth_headers):
     assert "alerts" in data
     assert isinstance(data["alerts"], list)
 
-def test_sales_prediction_handles_zero_days(client, auth_headers):
-    res = client.get("/ai/insights/today", headers=auth_headers)
+def test_sales_prediction_handles_zero_days(test_client, auth_headers):
+    res = test_client.get("/ai/insights/today", headers=auth_headers)
     assert res.status_code == 200

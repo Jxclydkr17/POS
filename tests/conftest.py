@@ -57,6 +57,9 @@ def db_session():
 @pytest.fixture
 def test_client(db_session):
     def override_get_db():
+        # Limpiar cualquier estado pendiente (ej. IntegrityError en fixture anterior)
+        # antes de que el endpoint intente usar la sesión.
+        db_session.rollback()
         try:
             yield db_session
         finally:

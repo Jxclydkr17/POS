@@ -112,9 +112,12 @@ class TestProviderRegistry:
 
     def test_is_any_provider_available_false(self):
         from app.ai.providers.provider_registry import is_any_provider_available
-        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"):
-            os.environ.pop(key, None)
-        assert is_any_provider_available(None) is False
+        from unittest.mock import patch
+        absent = {"ANTHROPIC_API_KEY": "", "OPENAI_API_KEY": "", "GOOGLE_API_KEY": ""}
+        with patch.dict(os.environ, absent, clear=False):
+            for key in absent:
+                os.environ.pop(key, None)
+            assert is_any_provider_available(None) is False
 
     def test_is_any_provider_available_openai(self):
         from app.ai.providers.provider_registry import is_any_provider_available
