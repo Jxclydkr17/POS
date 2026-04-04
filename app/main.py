@@ -252,7 +252,7 @@ app.include_router(chat_router)
 app.include_router(dashboard_router)
 app.include_router(proformas_router)
 app.include_router(receptor_messages_router)
-app.include_router(system_router)  # FASE 5
+app.include_router(system_router)
 
 
 # ══════════════════════════════════════════════════════════════

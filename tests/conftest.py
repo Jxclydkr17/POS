@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.main import app
+from app.main import app as fastapi_app
 from app.db.database import Base, get_db
 import app.db.models
 from app.db.models.user import User
@@ -62,9 +62,15 @@ def test_client(db_session):
         finally:
             db_session.rollback()
 
-    app.dependency_overrides[get_db] = override_get_db
-    return TestClient(app)
-
+    # 2. Usa el alias aquí
+    fastapi_app.dependency_overrides[get_db] = override_get_db
+    
+    with TestClient(fastapi_app) as client:
+        yield client
+    
+    # 3. Limpia los overrides después del test para evitar comportamientos raros
+    fastapi_app.dependency_overrides.clear()
+    
 # -------------------------
 # Auth headers
 # -------------------------
