@@ -27,19 +27,20 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from app.utils.dt import now_cr
 from app.utils.unit_helpers import format_quantity
+from app.core.config import get_pdf_dir
 
 # ---------------------------------------------------------
 # RUTAS BÁSICAS
 # ---------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # carpeta app/
 STATIC_DIR = os.path.join(BASE_DIR, "static")
-PDF_DIR = os.path.join(BASE_DIR, "pdfs")
+# ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
+PDF_DIR = str(get_pdf_dir())
 
 # Logo (ajusta el nombre/ruta si lo guardás distinto)
 LOGO_PATH = os.path.join(STATIC_DIR, "agromatina_logo.png")
 
-# Crear carpeta de PDFs si no existe
-os.makedirs(PDF_DIR, exist_ok=True)
+# get_pdf_dir() ya crea la carpeta automáticamente
 
 
 def _format_currency(value: float) -> str:

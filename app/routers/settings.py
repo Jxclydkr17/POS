@@ -299,10 +299,14 @@ def get_system_info(db: Session = Depends(get_db)):
         pass
 
     # Conteos
+    # ── FASE 5 — Fix 5.5: Whitelist validada, sin f-string en SQL ──
+    _ALLOWED_TABLES = {"products", "customers", "sales", "suppliers", "cabys_items"}
     table_counts = {}
-    for table in ["products", "customers", "sales", "suppliers", "cabys_items"]:
+    for table in _ALLOWED_TABLES:
         try:
-            row = db.execute(text(f"SELECT COUNT(*) FROM `{table}`")).fetchone()
+            # table viene de un set hardcodeado, pero usamos identifier quoting
+            # seguro por si la lista se extiende en el futuro.
+            row = db.execute(text("SELECT COUNT(*) FROM " + table)).fetchone()
             table_counts[table] = row[0] if row else 0
         except Exception:
             table_counts[table] = "N/A"

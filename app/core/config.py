@@ -184,3 +184,21 @@ def get_database_url() -> str:
 def is_sqlite() -> bool:
     """Helper para saber si estamos usando SQLite."""
     return settings.db_engine == "sqlite"
+
+
+# ── FASE 5 — Fix 5.4: Versión centralizada ──────────────────
+# Fuente única de verdad. main.py y updater.py referencian esto.
+APP_VERSION = "1.0.0"
+
+
+# ── FASE 5 — Fix 5.2: Directorio de datos externo ───────────
+# Los PDFs y otros archivos generados van en APP_DIR/data/
+# para que no se pierdan al actualizar la app.
+DATA_DIR = APP_DIR / "data"
+
+
+def get_pdf_dir() -> Path:
+    """Retorna el directorio para PDFs generados, creándolo si no existe."""
+    pdf_dir = DATA_DIR / "pdfs"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    return pdf_dir

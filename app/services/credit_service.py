@@ -133,6 +133,8 @@ def add_credit_payment(db: Session, customer_id: int, amount: float, payment_met
 
 # ---------------------------------------------------------
 # 3. Obtener resumen del crédito del cliente
+# ── FASE 4 — Fix 4.2: Consolidar queries ──
+# Antes: ~6 queries separadas. Ahora: 3 queries principales.
 # ---------------------------------------------------------
 
 def get_credit_info(
@@ -149,14 +151,63 @@ def get_credit_info(
     if not customer:
         return None
 
-    # Movimientos de crédito (paginados + filtro fechas)
+    today = today_cr()
+    first_of_month = today.replace(day=1)
+
+    # ─────────────────────────────────────────────────────────
+    # QUERY 1: Agregados combinados (balance + paid_this_month + last_payment)
+    # Antes eran 3 queries separadas, ahora es 1.
+    # ─────────────────────────────────────────────────────────
+    agg = (
+        db.query(
+            func.coalesce(
+                func.sum(case((Credit.type == "sale", Credit.amount), else_=0)),
+                0,
+            ).label("total_sales"),
+            func.coalesce(
+                func.sum(case((Credit.type == "payment", Credit.amount), else_=0)),
+                0,
+            ).label("total_payments"),
+            func.coalesce(
+                func.sum(case(
+                    (
+                        (Credit.type == "payment") &
+                        (Credit.created_at >= datetime.combine(first_of_month, datetime.min.time())),
+                        Credit.amount,
+                    ),
+                    else_=0,
+                )),
+                0,
+            ).label("paid_this_month"),
+            func.max(case(
+                (Credit.type == "payment", Credit.created_at),
+                else_=None,
+            )).label("last_payment_at"),
+        )
+        .filter(Credit.customer_id == customer_id)
+        .first()
+    )
+
+    total_sales = float(agg.total_sales or 0)
+    total_payments = float(agg.total_payments or 0)
+    balance = round(total_sales - total_payments, 2)
+    paid_this_month = round(float(agg.paid_this_month or 0), 2)
+    last_payment_date = (
+        agg.last_payment_at.strftime("%Y-%m-%d %H:%M")
+        if agg.last_payment_at else None
+    )
+
+    # ─────────────────────────────────────────────────────────
+    # QUERY 2: Movimientos paginados + conteo + aging (sale movements)
+    # ─────────────────────────────────────────────────────────
+
+    # 2a. Movimientos paginados (con filtros de fecha)
     movements_query = (
         db.query(Credit)
         .filter(Credit.customer_id == customer_id)
         .order_by(Credit.created_at.desc())
     )
 
-    # Filtro de fechas
     if date_from:
         try:
             dt_from = datetime.strptime(date_from, "%Y-%m-%d")
@@ -172,50 +223,9 @@ def get_credit_info(
             pass
 
     movements_total = movements_query.count()
+    movements = movements_query.offset(mov_skip).limit(mov_limit).all()
 
-    movements = (
-        movements_query
-        .offset(mov_skip)
-        .limit(mov_limit)
-        .all()
-    )
-
-    # Obtener todas las credit_sales para mapear
-    all_credit_sales = db.query(CreditSale).filter(CreditSale.customer_id == customer_id).all()
-    credit_sale_map = {cs.id: cs.sale_id for cs in all_credit_sales}
-
-    # Ventas a crédito (paginadas)
-    sales_query = (
-        db.query(CreditSale)
-        .filter(CreditSale.customer_id == customer_id)
-        .order_by(CreditSale.created_at.desc())
-    )
-
-    credit_sales_total = sales_query.count()
-    credit_sales = sales_query.offset(sales_skip).limit(sales_limit).all()
-
-    # Cálculo de balance con SQL SUM (Fase 5 — Bug 5.4)
-    balance_row = (
-        db.query(
-            func.coalesce(
-                func.sum(case((Credit.type == "sale", Credit.amount), else_=0)),
-                0,
-            ).label("total_sales"),
-            func.coalesce(
-                func.sum(case((Credit.type == "payment", Credit.amount), else_=0)),
-                0,
-            ).label("total_payments"),
-        )
-        .filter(Credit.customer_id == customer_id)
-        .first()
-    )
-    total_sales = float(balance_row.total_sales or 0)
-    total_payments = float(balance_row.total_payments or 0)
-    balance = round(total_sales - total_payments, 2)
-
-    # ── AGING: solo cargar movimientos tipo "sale" (FIFO) ──
-    today = today_cr()
-
+    # 2b. Aging: movimientos tipo "sale" (FIFO) — necesario para distribución
     sale_movements = (
         db.query(Credit)
         .filter(Credit.customer_id == customer_id, Credit.type == "sale")
@@ -223,16 +233,14 @@ def get_credit_info(
         .all()
     )
 
-    # Total de pagos para distribuir FIFO (ya calculado arriba)
     remaining_payments = total_payments
-
     aging = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
 
     for sm in sale_movements:
         amount = float(sm.amount or 0)
         if remaining_payments >= amount:
             remaining_payments -= amount
-            continue  # esta venta ya fue pagada
+            continue
         unpaid = amount - remaining_payments
         remaining_payments = 0
 
@@ -249,27 +257,42 @@ def get_credit_info(
     for k in aging:
         aging[k] = round(aging[k], 2)
 
-    # ── Abonado este mes (SQL aggregate) ──
-    first_of_month = today.replace(day=1)
-    paid_this_month_row = (
-        db.query(func.coalesce(func.sum(Credit.amount), 0))
-        .filter(
-            Credit.customer_id == customer_id,
-            Credit.type == "payment",
-            Credit.created_at >= datetime.combine(first_of_month, datetime.min.time()),
-        )
-        .scalar()
+    # ─────────────────────────────────────────────────────────
+    # QUERY 3: Credit sales paginadas + mapa para sale_id
+    # Antes: 1 query para TODAS las credit_sales (mapa) + 1 paginada.
+    # Ahora: solo 1 query paginada. El mapa se construye de las
+    #        credit_sales referenciadas en los movimientos visibles.
+    # ─────────────────────────────────────────────────────────
+    sales_query = (
+        db.query(CreditSale)
+        .filter(CreditSale.customer_id == customer_id)
+        .order_by(CreditSale.created_at.desc())
     )
-    paid_this_month = round(float(paid_this_month_row or 0), 2)
 
-    # ── Último pago (una sola query) ──
-    last_payment = (
-        db.query(Credit.created_at)
-        .filter(Credit.customer_id == customer_id, Credit.type == "payment")
-        .order_by(Credit.created_at.desc())
-        .first()
-    )
-    last_payment_date = last_payment[0].strftime("%Y-%m-%d %H:%M") if last_payment else None
+    credit_sales_total = sales_query.count()
+    credit_sales = sales_query.offset(sales_skip).limit(sales_limit).all()
+
+    # Mapa: solo extraer credit_sale_ids referenciados en movimientos visibles
+    referenced_cs_ids = set()
+    for m in movements:
+        if m.type == "sale" and m.description and "credit_sale_id:" in m.description:
+            try:
+                cs_id = int(m.description.split("credit_sale_id:")[1].split()[0])
+                referenced_cs_ids.add(cs_id)
+            except (ValueError, IndexError):
+                pass
+
+    # Construir mapa desde credit_sales ya cargadas + query solo los faltantes
+    credit_sale_map = {cs.id: cs.sale_id for cs in credit_sales}
+    missing_ids = referenced_cs_ids - set(credit_sale_map.keys())
+    if missing_ids:
+        extra = (
+            db.query(CreditSale.id, CreditSale.sale_id)
+            .filter(CreditSale.id.in_(missing_ids))
+            .all()
+        )
+        for row in extra:
+            credit_sale_map[row.id] = row.sale_id
 
     # Construir items de movimientos con sale_id
     movement_items = []
@@ -284,12 +307,11 @@ def get_credit_info(
             "sale_id": None
         }
 
-        # Si es una venta, extraer el credit_sale_id de description y buscar el sale_id
         if m.type == "sale" and m.description and "credit_sale_id:" in m.description:
             try:
                 credit_sale_id = int(m.description.split("credit_sale_id:")[1].split()[0])
                 item["sale_id"] = credit_sale_map.get(credit_sale_id)
-            except:
+            except (ValueError, IndexError):
                 pass
 
         movement_items.append(item)

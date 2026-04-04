@@ -456,7 +456,14 @@ def list_sales_paginated(
     total_pages = max(1, math.ceil(total_count / page_size))
     offset = (page - 1) * page_size
 
-    sales = query.order_by(Sale.created_at.desc()).offset(offset).limit(page_size).all()
+    # ── FASE 4 — Fix 4.1: joinedload para evitar N+1 en sale.customer ──
+    sales = (
+        query
+        .options(joinedload(Sale.customer))
+        .order_by(Sale.created_at.desc())
+        .offset(offset).limit(page_size)
+        .all()
+    )
 
     return PaginatedSalesResponse(
         data=[SaleListOut.model_validate(s) for s in sales],

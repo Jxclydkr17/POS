@@ -31,6 +31,7 @@ env/
 *.db-wal
 
 # --- Archivos generados en runtime ---
+data/pdfs/
 app/pdfs/
 app/backups/*.sql
 generated_pdfs/
@@ -51,6 +52,7 @@ dist/
 build/
 
 # --- Mantener estructura de carpetas vacías ---
+!data/pdfs/.gitkeep
 !app/pdfs/.gitkeep
 !app/backups/.gitkeep
 !generated_pdfs/.gitkeep

@@ -5,11 +5,11 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 from app.utils.dt import now_cr
+from app.core.config import get_pdf_dir
 
-# 📂 Carpeta donde se guardarán los PDF generados
-PDF_DIR = "generated_pdfs"
+# ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
+PDF_DIR = str(get_pdf_dir())
 LOGO_PATH = "ui/assets/logoferre.jpg"  # ⚠️ Asegúrate de colocar aquí tu logo
-os.makedirs(PDF_DIR, exist_ok=True)
 
 
 def generate_invoice_pdf(sale_data, items):

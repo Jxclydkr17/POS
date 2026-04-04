@@ -33,11 +33,15 @@ class Product(Base):
     supplier = relationship("Supplier", back_populates="products")
 
     # 🚚 Proveedores múltiples (relación M2M vía supplier_products)
+    # ── FASE 4 — Fix 4.4: lazy="select" (default) en vez de "selectin".
+    # "selectin" lanza una query extra automática en cada carga de producto.
+    # Los endpoints que necesiten supplier_products deben usar
+    # .options(selectinload(Product.supplier_products)) explícitamente. ──
     supplier_products = relationship(
         "SupplierProduct",
         back_populates="product",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
 
     # 💰 Valores

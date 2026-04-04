@@ -33,10 +33,12 @@ from typing import Optional
 
 import requests
 
+from app.core.config import APP_VERSION
+
 logger = logging.getLogger(__name__)
 
-# ── Versión actual (sincronizar con app/main.py) ──
-CURRENT_VERSION = "1.0.0"
+# ── FASE 5 — Fix 5.4: Versión centralizada desde config.py ──
+CURRENT_VERSION = APP_VERSION
 
 # ── URL del servidor de actualizaciones ──
 # El usuario puede override esto en .env con UPDATE_URL=...

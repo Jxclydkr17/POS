@@ -3,15 +3,9 @@ from datetime import timedelta
 from app.utils.dt import utcnow
 from jose import jwt, JWTError
 from passlib.context import CryptContext
-from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
-from app.db.database import get_db
-from app.db.models.user import User
 
 # Configuración de encriptación
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 
 SECRET_KEY = settings.secret_key
@@ -54,42 +48,8 @@ def decode_token(token: str):
     except JWTError:
         return None
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login")
-
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db)
-):
-    """Devuelve el usuario autenticado a partir del JWT."""
-    payload = decode_token(token)
-
-    if payload is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido o expirado",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    # ── FASE 1 — Fix 1.2: Rechazar refresh tokens usados como access ──
-    if payload.get("type") != "access":
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Tipo de token inválido. Use un access token.",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    username: str = payload.get("sub")
-    if username is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido: falta el sujeto",
-        )
-
-    user = db.query(User).filter(User.username == username).first()
-    if not user:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Usuario no encontrado",
-        )
-
-    return user
+# ── FASE 3 — Fix 3.1 ──────────────────────────────────────
+# get_current_user, require_role y oauth2_scheme viven SOLO
+# en app/core/dependencies.py.  Este módulo exporta únicamente
+# utilidades de tokens y passwords.
+# ───────────────────────────────────────────────────────────

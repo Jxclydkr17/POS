@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.core.security import get_current_user
+# ── FASE 3 — Fix 3.1: Importar de dependencies (fuente única) ──
+from app.core.dependencies import get_current_user
 from app.services.credit_service import (
     add_credit_sale,
     add_credit_payment,
@@ -84,11 +85,9 @@ def pay_credit(
         )
 
     except ValueError as ve:
-        # ── FASE 2 — Fix 2.3: rollback para evitar sesión sucia ──
         db.rollback()
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
-        # ── FASE 2 — Fix 2.3: rollback para evitar sesión sucia ──
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 

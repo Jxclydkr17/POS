@@ -19,9 +19,13 @@ from app.services.dashboard_snapshot_service import ensure_dashboard_snapshot, g
 from app.utils.dt import today_cr
 
 
+# ── FASE 3 — Fix 3.3: Auth a nivel de router ──
+# Todos los endpoints heredan protección automáticamente,
+# incluyendo los que se agreguen en el futuro.
 router = APIRouter(
     prefix="/dashboard",
-    tags=["Dashboard"]
+    tags=["Dashboard"],
+    dependencies=[Depends(get_current_user)],
 )
 
 
@@ -115,7 +119,10 @@ def _build_count_trend(
     }
 
 
-@router.get("/summary", dependencies=[Depends(get_current_user)])
+# ── Fix 3.3: Se quitó dependencies=[Depends(get_current_user)] de cada
+# endpoint individual — ahora está a nivel de router arriba. ──
+
+@router.get("/summary")
 def dashboard_summary(db: Session = Depends(get_db)):
     today = today_cr()
     start = datetime.combine(today, time.min)
@@ -405,7 +412,7 @@ def _get_top_suppliers_with_critical_products(db: Session, limit: int = 5):
 # Endpoint: GET /dashboard/top-lists
 # -----------------------------
 
-@router.get("/top-lists", dependencies=[Depends(get_current_user)])
+@router.get("/top-lists")
 def dashboard_top_lists(db: Session = Depends(get_db)):
     today = today_cr()
     start = datetime.combine(today, time.min)

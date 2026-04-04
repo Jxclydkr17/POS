@@ -35,7 +35,7 @@ from app.routers import (
     proformas_router,
 )
 
-from app.core.config import settings
+from app.core.config import settings, APP_VERSION
 from app.core.logger import logger
 from app.ai.insights.router import router as ai_insights_router
 
@@ -89,7 +89,9 @@ async def lifespan(app: FastAPI):
     async def _periodic_expire():
         while True:
             await asyncio.sleep(3600)
-            _do_expire()
+            # ── FASE 3 — Fix 3.4: Ejecutar query síncrona en thread separado
+            # para no bloquear el event loop de asyncio durante el commit. ──
+            await asyncio.to_thread(_do_expire)
 
     expire_task = asyncio.create_task(_periodic_expire())
 
@@ -143,7 +145,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description="Sistema de Punto de Venta Inteligente - Violette POS",
-    version="1.0.0",
+    version=APP_VERSION,
     lifespan=lifespan,
     # En producción, ocultar docs
     docs_url="/docs" if settings.app_debug else None,

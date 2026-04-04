@@ -43,12 +43,12 @@ from app.db.models.customer import Customer
 from app.db.models.product import Product
 from app.db.models.issuer_profile import IssuerProfile
 from app.utils.dt import now_cr
+from app.core.config import get_pdf_dir
 
 logger = logging.getLogger(__name__)
 
-# Directorio de PDFs generados
-PDF_DIR = Path(__file__).resolve().parents[1] / "pdfs"
-PDF_DIR.mkdir(parents=True, exist_ok=True)
+# ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
+PDF_DIR = get_pdf_dir()
 
 # URL de verificación de Hacienda
 HACIENDA_VERIFY_URL = "https://www.hacienda.go.cr/fe/comprobantes?clave={clave}"

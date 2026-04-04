@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models.user import User
 from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token
+# ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.security import OAuth2PasswordRequestForm
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Optional
@@ -28,23 +29,45 @@ router = APIRouter(
     tags=["Usuarios"]
 )
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/users/login")
-
 # ────────────────────────────────────────────────────────────
 #  Rate limiter en memoria para login (Fase 2 — Bug 2.2)
+# ── FASE 4 — Fix 4.3: Limpieza periódica + tope de IPs ──
 # ────────────────────────────────────────────────────────────
 _login_attempts: dict[str, list[datetime]] = defaultdict(list)
 LOGIN_MAX_ATTEMPTS = 5          # intentos permitidos
 LOGIN_WINDOW_SECONDS = 300      # ventana de 5 minutos
 LOGIN_LOCKOUT_SECONDS = 600     # bloqueo de 10 minutos tras exceder
+_MAX_TRACKED_IPS = 10_000       # tope de IPs en memoria
+_last_cleanup = datetime.utcnow()
+_CLEANUP_INTERVAL_SECONDS = 600  # limpiar cada 10 minutos
+
+
+def _cleanup_stale_entries():
+    """Elimina IPs cuyos intentos ya expiraron. Se invoca periódicamente."""
+    global _last_cleanup
+    now = datetime.utcnow()
+    if (now - _last_cleanup).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
+        return
+    _last_cleanup = now
+
+    cutoff = now - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+    stale_ips = [
+        ip for ip, timestamps in _login_attempts.items()
+        if not timestamps or timestamps[-1] < cutoff
+    ]
+    for ip in stale_ips:
+        del _login_attempts[ip]
 
 
 def _check_rate_limit(client_ip: str):
     """Lanza HTTPException 429 si el IP excedió los intentos permitidos."""
+    # Limpieza periódica para evitar memory leak
+    _cleanup_stale_entries()
+
     now = datetime.utcnow()
     window_start = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
 
-    # Limpiar intentos viejos
+    # Limpiar intentos viejos de este IP
     _login_attempts[client_ip] = [
         ts for ts in _login_attempts[client_ip] if ts > window_start
     ]
@@ -64,6 +87,26 @@ def _check_rate_limit(client_ip: str):
 
 def _record_attempt(client_ip: str):
     """Registra un intento fallido."""
+    # Si llegamos al tope de IPs, forzar limpieza agresiva
+    if len(_login_attempts) >= _MAX_TRACKED_IPS:
+        now = datetime.utcnow()
+        cutoff = now - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+        stale_ips = [
+            ip for ip, timestamps in _login_attempts.items()
+            if not timestamps or timestamps[-1] < cutoff
+        ]
+        for ip in stale_ips:
+            del _login_attempts[ip]
+
+        # Si aún estamos llenos, descartar la mitad más vieja
+        if len(_login_attempts) >= _MAX_TRACKED_IPS:
+            sorted_ips = sorted(
+                _login_attempts.items(),
+                key=lambda x: x[1][-1] if x[1] else datetime.min
+            )
+            for ip, _ in sorted_ips[:len(sorted_ips) // 2]:
+                del _login_attempts[ip]
+
     _login_attempts[client_ip].append(datetime.utcnow())
 
 
@@ -140,14 +183,11 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
     return {"access_token": new_access, "token_type": "bearer"}
 
 
-# 🔹 Obtener perfil del usuario logueado
+# ── FASE 3 — Fix 3.1: /me ahora usa get_current_user centralizado ──
 @router.get("/me")
-def get_profile(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    from app.core.security import decode_token
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token inválido o expirado")
-
-    username = payload.get("sub")
-    user = db.query(User).filter(User.username == username).first()
-    return {"username": user.username, "full_name": user.full_name, "role": user.role}
+def get_profile(current_user: User = Depends(get_current_user)):
+    return {
+        "username": current_user.username,
+        "full_name": current_user.full_name,
+        "role": current_user.role,
+    }
