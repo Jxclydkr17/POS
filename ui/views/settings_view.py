@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QLineEdit, QComboBox, QMessageBox, QFormLayout, QGroupBox,
     QTabWidget, QProgressDialog, QScrollArea, QCheckBox,
-    QFileDialog, QSpinBox, QDoubleSpinBox, QTextEdit,
+    QFileDialog, QSpinBox, QDoubleSpinBox, QTextEdit, QDialog,
 )
 from PySide6.QtCore import Qt, QObject, QThread, Signal, QTimer
 from PySide6.QtGui import QPixmap
@@ -265,6 +265,11 @@ class SettingsView(QWidget):
         self.issuer_data = {}
         self._dirty = False
 
+        # Cache de usuarios (tab Usuarios)
+        self._users_cache = []
+        self._all_permissions = []
+        self._default_permissions = {}
+
         # Referencias a hilos activos
         self._thread = None
         self._worker = None
@@ -328,6 +333,9 @@ class SettingsView(QWidget):
         self.tab_widget.addTab(self._build_tab_impresora(), "🖨️ Impresora")
         self.tab_widget.addTab(self._build_tab_ai(), "🤖 Asistente IA")
         self.tab_widget.addTab(self._build_tab_avanzado(), "⚙️ Avanzado")
+        self.tab_widget.addTab(self._build_tab_usuarios(), "👥 Usuarios")
+
+        self.tab_widget.currentChanged.connect(self._on_tab_changed)
 
         root.addWidget(self.tab_widget, 1)
 
@@ -354,6 +362,15 @@ class SettingsView(QWidget):
 
     # ----------------------------------------------------------
     # Tab: Empresa
+    # ----------------------------------------------------------
+    def _on_tab_changed(self, index: int):
+        """Carga datos bajo demanda al cambiar de pestaña."""
+        tab_text = self.tab_widget.tabText(index)
+        if "Usuarios" in tab_text and not self._users_cache:
+            self._load_users()
+
+    # ----------------------------------------------------------
+    # Tab: Empresa (datos)
     # ----------------------------------------------------------
     def _build_tab_empresa(self) -> QWidget:
         tab = QWidget()
@@ -1770,6 +1787,352 @@ class SettingsView(QWidget):
             else:
                 cleaned[k] = v
         return cleaned
+
+    # ----------------------------------------------------------
+    # Tab: Usuarios (Fase 3)
+    # ----------------------------------------------------------
+    def _build_tab_usuarios(self) -> QWidget:
+        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        # Barra superior
+        top_bar = QHBoxLayout()
+        lbl = QLabel("Gestión de usuarios y cajeros")
+        lbl.setStyleSheet("font-size: 15px; font-weight: bold;")
+        top_bar.addWidget(lbl)
+        top_bar.addStretch()
+
+        self.btn_add_user = QPushButton("➕ Agregar usuario")
+        self.btn_add_user.setMinimumHeight(34)
+        self.btn_add_user.setStyleSheet("""
+            QPushButton {
+                background-color: #22c55e; color: white;
+                font-weight: bold; padding: 6px 18px;
+                border-radius: 6px; border: none;
+            }
+            QPushButton:hover { background-color: #16a34a; }
+        """)
+        self.btn_add_user.clicked.connect(self._on_add_user)
+        top_bar.addWidget(self.btn_add_user)
+
+        self.btn_refresh_users = QPushButton("🔄 Actualizar")
+        self.btn_refresh_users.setMinimumHeight(34)
+        self.btn_refresh_users.setStyleSheet("""
+            QPushButton {
+                background-color: #374151; color: white;
+                padding: 6px 14px; border-radius: 6px; border: none;
+            }
+            QPushButton:hover { background-color: #4b5563; }
+        """)
+        self.btn_refresh_users.clicked.connect(self._load_users)
+        top_bar.addWidget(self.btn_refresh_users)
+
+        layout.addLayout(top_bar)
+
+        # Tabla de usuarios
+        self.users_table = QTableWidget()
+        self.users_table.setColumnCount(6)
+        self.users_table.setHorizontalHeaderLabels([
+            "ID", "Usuario", "Nombre", "Rol", "Estado", "Acciones"
+        ])
+        self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.users_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.users_table.setAlternatingRowColors(True)
+        self.users_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #1f2937;
+                color: #e5e7eb;
+                gridline-color: #374151;
+                border: 1px solid #374151;
+                border-radius: 8px;
+            }
+            QTableWidget::item {
+                padding: 6px;
+            }
+            QTableWidget::item:selected {
+                background-color: #3a86ff;
+            }
+            QHeaderView::section {
+                background-color: #111827;
+                color: #a5b4fc;
+                font-weight: bold;
+                padding: 8px;
+                border: none;
+                border-bottom: 2px solid #3a86ff;
+            }
+            QTableWidget::item:alternate {
+                background-color: #1a2332;
+            }
+        """)
+
+        layout.addWidget(self.users_table, 1)
+
+        return tab
+
+    # ----------------------------------------------------------
+    # Usuarios: cargar datos
+    # ----------------------------------------------------------
+    def _load_users(self):
+        """Carga la lista de usuarios y los permisos disponibles."""
+        try:
+            from ui.services.users_service import fetch_users, fetch_available_permissions
+
+            self._users_cache = fetch_users()
+            self._populate_users_table(self._users_cache)
+
+            # Cargar permisos disponibles (solo una vez o refrescar)
+            try:
+                perms_data = fetch_available_permissions()
+                self._all_permissions = perms_data.get("all_permissions", [])
+                self._default_permissions = perms_data.get("default_permissions", {})
+            except Exception:
+                pass  # Mantener cache previo
+
+        except Exception as e:
+            logger.error(f"Error cargando usuarios: {e}")
+            from ui.components.toast_notifier import show_toast
+            show_toast(f"Error al cargar usuarios: {e}", success=False, parent=self.main_window)
+
+    def _populate_users_table(self, users: list[dict]):
+        """Llena la tabla con los datos de usuarios."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        self.users_table.setRowCount(0)
+        self.users_table.setRowCount(len(users))
+
+        for row, user in enumerate(users):
+            # ID
+            id_item = QTableWidgetItem(str(user.get("id", "")))
+            id_item.setTextAlignment(Qt.AlignCenter)
+            self.users_table.setItem(row, 0, id_item)
+
+            # Usuario
+            self.users_table.setItem(row, 1, QTableWidgetItem(user.get("username", "")))
+
+            # Nombre
+            self.users_table.setItem(row, 2, QTableWidgetItem(user.get("full_name", "") or ""))
+
+            # Rol
+            role = user.get("role", "")
+            role_item = QTableWidgetItem(role.capitalize())
+            role_item.setTextAlignment(Qt.AlignCenter)
+            self.users_table.setItem(row, 3, role_item)
+
+            # Estado
+            is_active = user.get("is_active", True)
+            status_item = QTableWidgetItem("✅ Activo" if is_active else "⛔ Inactivo")
+            status_item.setTextAlignment(Qt.AlignCenter)
+            self.users_table.setItem(row, 4, status_item)
+
+            # Botones de acciones
+            actions_widget = QWidget()
+            actions_layout = QHBoxLayout(actions_widget)
+            actions_layout.setContentsMargins(4, 2, 4, 2)
+            actions_layout.setSpacing(4)
+
+            btn_edit = QPushButton("✏️")
+            btn_edit.setFixedSize(32, 28)
+            btn_edit.setToolTip("Editar usuario")
+            btn_edit.setStyleSheet("""
+                QPushButton {
+                    background-color: #3a86ff; color: white;
+                    border-radius: 4px; border: none; font-size: 14px;
+                }
+                QPushButton:hover { background-color: #2b6fe0; }
+            """)
+            user_id = user.get("id")
+            btn_edit.clicked.connect(lambda checked, uid=user_id: self._on_edit_user(uid))
+            actions_layout.addWidget(btn_edit)
+
+            btn_delete = QPushButton("🗑️")
+            btn_delete.setFixedSize(32, 28)
+            btn_delete.setToolTip("Eliminar usuario")
+            btn_delete.setStyleSheet("""
+                QPushButton {
+                    background-color: #ef4444; color: white;
+                    border-radius: 4px; border: none; font-size: 14px;
+                }
+                QPushButton:hover { background-color: #dc2626; }
+            """)
+            btn_delete.clicked.connect(lambda checked, uid=user_id: self._on_delete_user(uid))
+            actions_layout.addWidget(btn_delete)
+
+            self.users_table.setCellWidget(row, 5, actions_widget)
+
+    # ----------------------------------------------------------
+    # Usuarios: agregar
+    # ----------------------------------------------------------
+    def _on_add_user(self):
+        # Asegurar que tenemos los permisos cargados
+        if not self._all_permissions:
+            try:
+                from ui.services.users_service import fetch_available_permissions
+                perms_data = fetch_available_permissions()
+                self._all_permissions = perms_data.get("all_permissions", [])
+                self._default_permissions = perms_data.get("default_permissions", {})
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudieron cargar los permisos:\n{e}")
+                return
+
+        from ui.dialogs.user_dialog import UserDialog
+        dlg = UserDialog(
+            user_data=None,
+            all_permissions=self._all_permissions,
+            default_permissions=self._default_permissions,
+            parent=self,
+        )
+
+        if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            try:
+                from ui.services.users_service import create_user, update_permissions
+
+                # Separar permisos del payload de creación
+                perms = dlg.result_data.pop("permissions", [])
+                create_data = {
+                    "username": dlg.result_data["username"],
+                    "password": dlg.result_data["password"],
+                    "full_name": dlg.result_data.get("full_name"),
+                    "role": dlg.result_data["role"],
+                }
+
+                result = create_user(create_data)
+
+                # Si hay permisos personalizados y no es admin, guardarlos
+                if perms and dlg.result_data["role"] != "admin":
+                    # Buscar el ID del usuario recién creado
+                    from ui.services.users_service import fetch_users
+                    users = fetch_users()
+                    new_user = next(
+                        (u for u in users if u["username"] == create_data["username"]),
+                        None,
+                    )
+                    if new_user:
+                        update_permissions(new_user["id"], perms)
+
+                from ui.components.toast_notifier import show_toast
+                show_toast(f"Usuario '{create_data['username']}' creado ✔", success=True, parent=self.main_window)
+                self._load_users()
+
+            except Exception as e:
+                error_msg = str(e)
+                try:
+                    import json as _json
+                    error_msg = _json.loads(e.response.text).get("detail", error_msg)
+                except Exception:
+                    pass
+                QMessageBox.critical(self, "Error al crear usuario", str(error_msg))
+
+    # ----------------------------------------------------------
+    # Usuarios: editar
+    # ----------------------------------------------------------
+    def _on_edit_user(self, user_id: int):
+        # Buscar datos del usuario en cache
+        user_data = next((u for u in self._users_cache if u["id"] == user_id), None)
+        if not user_data:
+            QMessageBox.warning(self, "Error", "No se encontró el usuario.")
+            return
+
+        if not self._all_permissions:
+            try:
+                from ui.services.users_service import fetch_available_permissions
+                perms_data = fetch_available_permissions()
+                self._all_permissions = perms_data.get("all_permissions", [])
+                self._default_permissions = perms_data.get("default_permissions", {})
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudieron cargar los permisos:\n{e}")
+                return
+
+        from ui.dialogs.user_dialog import UserDialog
+        dlg = UserDialog(
+            user_data=user_data,
+            all_permissions=self._all_permissions,
+            default_permissions=self._default_permissions,
+            parent=self,
+        )
+
+        if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            try:
+                from ui.services.users_service import update_user, update_permissions
+
+                perms = dlg.result_data.pop("permissions", [])
+
+                # Solo enviar campos que cambiaron
+                update_payload = {}
+                if dlg.result_data.get("username") != user_data.get("username"):
+                    update_payload["username"] = dlg.result_data["username"]
+                if dlg.result_data.get("full_name") != user_data.get("full_name"):
+                    update_payload["full_name"] = dlg.result_data["full_name"]
+                if dlg.result_data.get("role") != user_data.get("role"):
+                    update_payload["role"] = dlg.result_data["role"]
+                if "is_active" in dlg.result_data:
+                    if dlg.result_data["is_active"] != user_data.get("is_active"):
+                        update_payload["is_active"] = dlg.result_data["is_active"]
+                if dlg.result_data.get("password"):
+                    update_payload["password"] = dlg.result_data["password"]
+
+                if update_payload:
+                    update_user(user_id, update_payload)
+
+                # Actualizar permisos (si no es admin)
+                role = dlg.result_data.get("role", user_data.get("role", ""))
+                if role != "admin":
+                    update_permissions(user_id, perms)
+
+                from ui.components.toast_notifier import show_toast
+                show_toast("Usuario actualizado ✔", success=True, parent=self.main_window)
+                self._load_users()
+
+            except Exception as e:
+                error_msg = str(e)
+                try:
+                    import json as _json
+                    error_msg = _json.loads(e.response.text).get("detail", error_msg)
+                except Exception:
+                    pass
+                QMessageBox.critical(self, "Error al actualizar", str(error_msg))
+
+    # ----------------------------------------------------------
+    # Usuarios: eliminar
+    # ----------------------------------------------------------
+    def _on_delete_user(self, user_id: int):
+        user_data = next((u for u in self._users_cache if u["id"] == user_id), None)
+        username = user_data.get("username", "?") if user_data else "?"
+
+        reply = QMessageBox.question(
+            self,
+            "Confirmar eliminación",
+            f"¿Está seguro que desea eliminar al usuario '{username}'?\n\n"
+            "Esta acción no se puede deshacer.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+
+        if reply != QMessageBox.Yes:
+            return
+
+        try:
+            from ui.services.users_service import delete_user
+            delete_user(user_id)
+
+            from ui.components.toast_notifier import show_toast
+            show_toast(f"Usuario '{username}' eliminado ✔", success=True, parent=self.main_window)
+            self._load_users()
+
+        except Exception as e:
+            error_msg = str(e)
+            try:
+                import json as _json
+                error_msg = _json.loads(e.response.text).get("detail", error_msg)
+            except Exception:
+                pass
+            QMessageBox.critical(self, "Error al eliminar", str(error_msg))
 
     def _cleanup_thread(self):
         if self._thread and self._thread.isRunning():

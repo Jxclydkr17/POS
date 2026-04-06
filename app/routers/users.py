@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.db.models.user import User
+from app.db.models.user import User, ALL_PERMISSIONS, DEFAULT_PERMISSIONS
 from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token
 # ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
@@ -19,6 +19,43 @@ class UserRegister(BaseModel):
     password: str = Field(..., min_length=8, max_length=255)
     full_name: Optional[str] = Field(None, max_length=150)
     role: str = Field("vendedor", pattern=r"^(admin|vendedor|cajero)$")
+
+
+class UserUpdate(BaseModel):
+    username: Optional[str] = Field(None, min_length=3, max_length=100)
+    password: Optional[str] = Field(None, min_length=8, max_length=255)
+    full_name: Optional[str] = Field(None, max_length=150)
+    role: Optional[str] = Field(None, pattern=r"^(admin|vendedor|cajero)$")
+    is_active: Optional[bool] = None
+
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    full_name: Optional[str]
+    role: str
+    is_active: bool
+    permissions: list[str] = []
+    created_at: Optional[datetime]
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_user(cls, user: User) -> "UserOut":
+        return cls(
+            id=user.id,
+            username=user.username,
+            full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
+            permissions=user.get_permissions(),
+            created_at=user.created_at,
+        )
+
+
+class PermissionsUpdate(BaseModel):
+    permissions: list[str]
 
 
 class RefreshTokenRequest(BaseModel):
@@ -190,4 +227,181 @@ def get_profile(current_user: User = Depends(get_current_user)):
         "username": current_user.username,
         "full_name": current_user.full_name,
         "role": current_user.role,
+        "permissions": current_user.get_permissions(),
     }
+
+
+# ════════════════════════════════════════════════════════════
+#  CRUD de usuarios — solo admin
+# ════════════════════════════════════════════════════════════
+
+@router.get("/")
+def list_users(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Lista todos los usuarios del sistema."""
+    users = db.query(User).order_by(User.id).all()
+    return [UserOut.from_user(u) for u in users]
+
+
+@router.get("/{user_id}", response_model=UserOut)
+def get_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Obtiene un usuario por ID."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    return UserOut.from_user(user)
+
+
+@router.put("/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: int,
+    data: UserUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Actualiza un usuario existente."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # Validar username único si se está cambiando
+    if data.username and data.username != user.username:
+        exists = db.query(User).filter(User.username == data.username).first()
+        if exists:
+            raise HTTPException(status_code=400, detail="Ese nombre de usuario ya existe")
+        user.username = data.username
+
+    if data.full_name is not None:
+        user.full_name = data.full_name
+
+    if data.role is not None:
+        # Protección: no permitir quitarse el rol admin a sí mismo si es el último admin
+        if user.id == current_user.id and data.role != "admin":
+            admin_count = db.query(User).filter(
+                User.role == "admin", User.is_active == True
+            ).count()
+            if admin_count <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No se puede quitar el rol admin al único administrador activo",
+                )
+        user.role = data.role
+
+    if data.is_active is not None:
+        # Protección: no desactivarse a sí mismo
+        if user.id == current_user.id and not data.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede desactivar su propia cuenta",
+            )
+        user.is_active = data.is_active
+
+    if data.password:
+        user.password = hash_password(data.password)
+
+    db.commit()
+    db.refresh(user)
+    return UserOut.from_user(user)
+
+
+@router.delete("/{user_id}")
+def delete_user(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Elimina un usuario del sistema."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    # No permitir eliminarse a sí mismo
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=400, detail="No se puede eliminar su propia cuenta"
+        )
+
+    # No permitir eliminar al último admin activo
+    if user.role == "admin":
+        admin_count = db.query(User).filter(
+            User.role == "admin", User.is_active == True
+        ).count()
+        if admin_count <= 1:
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede eliminar al único administrador activo",
+            )
+
+    db.delete(user)
+    db.commit()
+    return {"message": f"Usuario '{user.username}' eliminado"}
+
+
+# ════════════════════════════════════════════════════════════
+#  Permisos granulares
+# ════════════════════════════════════════════════════════════
+
+@router.get("/permissions/available")
+def get_available_permissions(
+    current_user: User = Depends(require_role("admin")),
+):
+    """Retorna todos los permisos disponibles y los defaults por rol."""
+    return {
+        "all_permissions": ALL_PERMISSIONS,
+        "default_permissions": DEFAULT_PERMISSIONS,
+    }
+
+
+@router.put("/{user_id}/permissions", response_model=UserOut)
+def update_user_permissions(
+    user_id: int,
+    data: PermissionsUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Actualiza los permisos de un usuario específico."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    if user.role == "admin":
+        raise HTTPException(
+            status_code=400,
+            detail="Los administradores siempre tienen todos los permisos",
+        )
+
+    # Validar que todos los permisos sean válidos
+    invalid = [p for p in data.permissions if p not in ALL_PERMISSIONS]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Permisos inválidos: {', '.join(invalid)}",
+        )
+
+    user.set_permissions(data.permissions)
+    db.commit()
+    db.refresh(user)
+    return UserOut.from_user(user)
+
+
+@router.post("/{user_id}/permissions/reset", response_model=UserOut)
+def reset_user_permissions(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """Restaura los permisos de un usuario a los defaults de su rol."""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    user.permissions = None  # Al ser None, get_permissions() usa los defaults
+    db.commit()
+    db.refresh(user)
+    return UserOut.from_user(user)

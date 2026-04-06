@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton,
     QHBoxLayout, QMessageBox, QToolButton, QSizePolicy, QScrollArea,
-    QFrame, QStackedLayout
+    QFrame, QStackedLayout, QDialog
 )
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QPoint
@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
 
         self.username = username
         self.role = session.role
+        self.permissions = []  # Permisos granulares del usuario
 
         # Estado del sidebar
         self.sidebar_pinned = True  # True = expandido y fijo, False = colapsado
@@ -324,10 +325,28 @@ class MainWindow(QMainWindow):
         self.title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #a5b4fc; margin: 10px 4px;")
         sidebar_layout.addWidget(self.title_label)
 
-        # Usuario
-        self.user_label = QLabel(f"{self.username} ({self.role})")
-        self.user_label.setAlignment(Qt.AlignLeft)
-        self.user_label.setStyleSheet("font-size: 13px; color: #9ca3af; margin-bottom: 10px; margin-left: 4px;")
+        # Usuario — botón para cambiar de cajero/usuario
+        self.user_label = QPushButton(f"👤 {self.username} ({self.role})")
+        self.user_label.setToolTip("Clic para cambiar de usuario")
+        self.user_label.setCursor(Qt.PointingHandCursor)
+        self.user_label.setStyleSheet("""
+            QPushButton {
+                font-size: 13px;
+                color: #9ca3af;
+                background-color: transparent;
+                border: 1px solid #374151;
+                border-radius: 6px;
+                padding: 6px 8px;
+                text-align: left;
+                margin: 0 4px 10px 4px;
+            }
+            QPushButton:hover {
+                background-color: #1f2937;
+                color: #e5e7eb;
+                border-color: #3a86ff;
+            }
+        """)
+        self.user_label.clicked.connect(self._on_switch_user)
         sidebar_layout.addWidget(self.user_label)
 
         sidebar_layout.addSpacing(10)
@@ -445,27 +464,27 @@ class MainWindow(QMainWindow):
         utils_layout = QVBoxLayout(utils_container)
         utils_layout.setContentsMargins(0, 0, 0, 0)
 
-        sub_suppliers = self.make_sub_button("🏭 Proveedores")
-        sub_categories = self.make_sub_button("🗂️ Categorías")
-        sub_purchases = self.make_sub_button("🧾 Compras / Facturas")
-        sub_proformas = self.make_sub_button("📋 Proformas")
-        sub_no_rotation = self.make_sub_button("🕳️ Sin Rotación")
+        self.sub_suppliers = self.make_sub_button("🏭 Proveedores")
+        self.sub_categories = self.make_sub_button("🗂️ Categorías")
+        self.sub_purchases = self.make_sub_button("🧾 Compras / Facturas")
+        self.sub_proformas = self.make_sub_button("📋 Proformas")
+        self.sub_no_rotation = self.make_sub_button("🕳️ Sin Rotación")
 
-        sub_suppliers.clicked.connect(lambda: self.show_section("proveedores"))
-        sub_categories.clicked.connect(lambda: self.show_section("categorias"))
-        sub_purchases.clicked.connect(lambda: self.show_section("compras/facturas"))
-        sub_proformas.clicked.connect(lambda: self.show_section("proformas"))
-        sub_no_rotation.clicked.connect(lambda: self.show_section("sin_rotacion"))
+        self.sub_suppliers.clicked.connect(lambda: self.show_section("proveedores"))
+        self.sub_categories.clicked.connect(lambda: self.show_section("categorias"))
+        self.sub_purchases.clicked.connect(lambda: self.show_section("compras/facturas"))
+        self.sub_proformas.clicked.connect(lambda: self.show_section("proformas"))
+        self.sub_no_rotation.clicked.connect(lambda: self.show_section("sin_rotacion"))
 
-        utils_layout.addWidget(sub_suppliers)
-        utils_layout.addWidget(sub_categories)
-        utils_layout.addWidget(sub_purchases)
-        utils_layout.addWidget(sub_proformas)
-        utils_layout.addWidget(sub_no_rotation)
+        utils_layout.addWidget(self.sub_suppliers)
+        utils_layout.addWidget(self.sub_categories)
+        utils_layout.addWidget(self.sub_purchases)
+        utils_layout.addWidget(self.sub_proformas)
+        utils_layout.addWidget(self.sub_no_rotation)
 
-        sub_einvoice = self.make_sub_button("📋 Facturación Electrónica")
-        sub_einvoice.clicked.connect(lambda: self.show_section("facturacion_electronica"))
-        utils_layout.addWidget(sub_einvoice)
+        self.sub_einvoice = self.make_sub_button("📋 Facturación Electrónica")
+        self.sub_einvoice.clicked.connect(lambda: self.show_section("facturacion_electronica"))
+        utils_layout.addWidget(self.sub_einvoice)
 
         utils_container.hide()
 
@@ -490,26 +509,26 @@ class MainWindow(QMainWindow):
         fin_layout = QVBoxLayout(fin_container)
         fin_layout.setContentsMargins(0, 0, 0, 0)
 
-        sub_analytics = self.make_sub_button("📊 Analíticas")
-        sub_purchases_analytics = self.make_sub_button("📦 Analítica compras")
-        sub_report = self.make_sub_button("📊 Registro de ventas")
-        sub_daily = self.make_sub_button("📅 Reporte del día")
-        sub_exp = self.make_sub_button("💸 Gastos operativos")
-        sub_financial = self.make_sub_button("📊 Financiero")
+        self.sub_analytics = self.make_sub_button("📊 Analíticas")
+        self.sub_purchases_analytics = self.make_sub_button("📦 Analítica compras")
+        self.sub_report = self.make_sub_button("📊 Registro de ventas")
+        self.sub_daily = self.make_sub_button("📅 Reporte del día")
+        self.sub_exp = self.make_sub_button("💸 Gastos operativos")
+        self.sub_financial = self.make_sub_button("📊 Financiero")
 
-        sub_analytics.clicked.connect(lambda: self.show_section("analytics"))
-        sub_purchases_analytics.clicked.connect(lambda: self.show_section("purchases_analytics"))
-        sub_report.clicked.connect(lambda: self.show_section("registro_ventas"))
-        sub_daily.clicked.connect(lambda: self.show_section("reporte_diario"))
-        sub_exp.clicked.connect(lambda: self.show_section("gastos"))
-        sub_financial.clicked.connect(lambda: self.show_section("financiero"))
+        self.sub_analytics.clicked.connect(lambda: self.show_section("analytics"))
+        self.sub_purchases_analytics.clicked.connect(lambda: self.show_section("purchases_analytics"))
+        self.sub_report.clicked.connect(lambda: self.show_section("registro_ventas"))
+        self.sub_daily.clicked.connect(lambda: self.show_section("reporte_diario"))
+        self.sub_exp.clicked.connect(lambda: self.show_section("gastos"))
+        self.sub_financial.clicked.connect(lambda: self.show_section("financiero"))
 
-        fin_layout.addWidget(sub_analytics)
-        fin_layout.addWidget(sub_purchases_analytics)
-        fin_layout.addWidget(sub_report)
-        fin_layout.addWidget(sub_daily)
-        fin_layout.addWidget(sub_exp)
-        fin_layout.addWidget(sub_financial)
+        fin_layout.addWidget(self.sub_analytics)
+        fin_layout.addWidget(self.sub_purchases_analytics)
+        fin_layout.addWidget(self.sub_report)
+        fin_layout.addWidget(self.sub_daily)
+        fin_layout.addWidget(self.sub_exp)
+        fin_layout.addWidget(self.sub_financial)
 
         fin_container.hide()
 
@@ -650,17 +669,69 @@ class MainWindow(QMainWindow):
                 btn.setText(full_text)
 
     # ==========================================================
-    # PERMISOS POR ROL
+    # PERMISOS GRANULARES (Fase 5)
     # ==========================================================
-    def apply_role_permissions(self):
-        """Aplica restricciones de acceso según el rol del usuario"""
-        if self.role == "vendedor":
-            self.btn_settings.setEnabled(False)
+    def _fetch_user_permissions(self) -> list[str]:
+        """Obtiene los permisos del usuario actual desde la API."""
+        try:
+            import requests
+            from ui.api import BASE_URL
+            headers = {"Authorization": f"Bearer {session.token}"}
+            r = requests.get(f"{BASE_URL}/users/me", headers=headers, timeout=5)
+            if r.status_code == 200:
+                return r.json().get("permissions", [])
+        except Exception as e:
+            logging.warning(f"No se pudieron cargar permisos: {e}")
+        return []
 
-        elif self.role == "cajero":
-            self.btn_products.setEnabled(False)
-            self.btn_settings.setEnabled(False)
-            self.btn_customers.setEnabled(False)
+    def apply_role_permissions(self):
+        """Aplica restricciones de acceso según los permisos granulares del usuario."""
+        # Admin siempre tiene acceso total
+        if self.role == "admin":
+            self.permissions = []  # No necesita lista, tiene todo
+            return
+
+        perms = self._fetch_user_permissions()
+        self.permissions = perms
+
+        # Mapeo: permiso → botones/widgets que controla
+        permission_map = {
+            "ver_dashboard":          [self.btn_dashboard],
+            "ver_ventas":             [self.btn_sales],
+            "ver_productos":          [self.btn_products],
+            "ver_clientes":           [self.btn_customers],
+            "ver_proveedores":        [self.sub_suppliers],
+            "ver_categorias":         [self.sub_categories],
+            "ver_compras":            [self.sub_purchases, self.sub_purchases_analytics],
+            "ver_proformas":          [self.sub_proformas],
+            "ver_reportes":           [self.sub_analytics, self.sub_report,
+                                       self.sub_daily, self.sub_no_rotation],
+            "ver_gastos":             [self.sub_exp],
+            "ver_financiero":         [self.sub_financial],
+            "facturacion_electronica": [self.sub_einvoice],
+            "acceder_configuracion":  [self.btn_settings],
+        }
+
+        for perm, widgets in permission_map.items():
+            allowed = perm in perms
+            for w in widgets:
+                w.setEnabled(allowed)
+                w.setVisible(allowed)
+
+        # Si no tiene ningún permiso de finanzas, ocultar el grupo entero
+        finance_perms = {"ver_reportes", "ver_gastos", "ver_financiero", "ver_compras"}
+        if not finance_perms.intersection(perms):
+            self.grp_fin.setVisible(False)
+        else:
+            self.grp_fin.setVisible(True)
+
+        # Si no tiene ningún permiso de utilidades, ocultar el grupo entero
+        utils_perms = {"ver_proveedores", "ver_categorias", "ver_compras",
+                       "ver_proformas", "facturacion_electronica"}
+        if not utils_perms.intersection(perms):
+            self.grp_utils.setVisible(False)
+        else:
+            self.grp_utils.setVisible(True)
 
     # ==========================================================
     # CAMBIO DE VISTA - MEJORADO
@@ -1562,6 +1633,66 @@ class MainWindow(QMainWindow):
     # ==========================================================
     # LOGOUT
     # ==========================================================
+    # ==========================================================
+    # CAMBIO DE USUARIO (Fase 4)
+    # ==========================================================
+    def _on_switch_user(self):
+        """Abre el diálogo de login para cambiar de usuario/cajero."""
+        from ui.reauth_dialog import LoginDialog
+        from ui.components.toast_notifier import show_toast
+        from app.core.security import decode_token
+
+        dlg = LoginDialog()
+        dlg.setWindowTitle("Cambiar de usuario")
+
+        if dlg.exec() == QDialog.Accepted and dlg.token:
+            token = dlg.token
+            payload = decode_token(token)
+            if not payload:
+                show_toast("❌ Token inválido", success=False, parent=self)
+                return
+
+            new_username = payload.get("sub", "")
+            new_role = payload.get("role", "vendedor")
+
+            # Actualizar sesión global
+            session.start_session(new_username, new_role, token)
+
+            # Actualizar estado interno
+            self.username = new_username
+            self.role = new_role
+
+            # Actualizar botón del sidebar
+            self.user_label.setText(f"👤 {new_username} ({new_role})")
+
+            # Re-habilitar y mostrar todos los botones antes de re-aplicar permisos
+            all_permission_widgets = [
+                self.btn_dashboard, self.btn_sales, self.btn_products,
+                self.btn_customers, self.btn_settings,
+                self.sub_suppliers, self.sub_categories, self.sub_purchases,
+                self.sub_proformas, self.sub_no_rotation, self.sub_einvoice,
+                self.sub_analytics, self.sub_purchases_analytics,
+                self.sub_report, self.sub_daily, self.sub_exp, self.sub_financial,
+                self.grp_utils, self.grp_fin,
+            ]
+            for w in all_permission_widgets:
+                w.setEnabled(True)
+                w.setVisible(True)
+
+            self.apply_role_permissions()
+
+            # Limpiar la vista de ventas cacheada para forzar recarga
+            self.sales_view = None
+
+            # Volver al dashboard
+            self.show_section("ventas")
+
+            show_toast(
+                f"✅ Sesión cambiada a: {new_username} ({new_role})",
+                success=True,
+                parent=self,
+            )
+
     def logout(self):
         """Cierra la sesión actual y vuelve al login"""
         from ui.login_view import LoginWindow

@@ -43,3 +43,15 @@ def require_role(role: str):
             )
         return current_user
     return role_checker
+
+
+def require_permission(perm: str):
+    """Devuelve una dependencia que verifica un permiso granular."""
+    def perm_checker(current_user: User = Depends(get_current_user)):
+        if not current_user.has_permission(perm):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"No tiene el permiso '{perm}'."
+            )
+        return current_user
+    return perm_checker
