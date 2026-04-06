@@ -1,6 +1,6 @@
 # app/db/models/sale.py
 
-from sqlalchemy import Column, Integer, Float, DateTime, ForeignKey, String, Numeric
+from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.utils.dt import now_cr
@@ -21,7 +21,8 @@ class Sale(Base):
     cash_session_id = Column(Integer, ForeignKey("cash_sessions.id"), nullable=False)
     cash_session = relationship("CashSession")
 
-    total = Column(Numeric(12, 2), nullable=False)
+    # ── FASE 1 — Fix 1.2: Numeric(18,5) para igualar precisión de SaleDetail ──
+    total = Column(Numeric(18, 5), nullable=False)
     payment_method = Column(String(20), nullable=False)
     condicion_venta_code = Column(String(2), nullable=True)
     document_type = Column(String(2), nullable=False, default='04')

@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func
 
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
@@ -38,6 +39,15 @@ from app.utils.dt import today_cr
 
 # 📏 Helper de unidades de medida
 from app.utils.unit_helpers import is_unit_based
+from app.core.config import is_sqlite
+
+
+# ── FASE 1 — Fix 1.3: with_for_update() no funciona en SQLite ──
+def _lock_for_update(query):
+    """Aplica bloqueo pesimista solo si el motor lo soporta (MySQL)."""
+    if is_sqlite():
+        return query
+    return query.with_for_update()
 
 
 # ─── Helpers ────────────────────────────────────────────────────
@@ -127,9 +137,15 @@ def _process_sale_lines(
             unit_price_dec = Decimal(str(item.unit_price))
             discount_pct = Decimal(str(item.discount_percent or 0))
             qty_dec = Decimal(str(item.quantity))
-            gross = unit_price_dec * qty_dec
-            disc_amt = gross * (discount_pct / Decimal("100"))
-            total_linea = gross - disc_amt
+
+            # ── FASE 3 — Fix 3.1: Calcular IVA en productos comunes ──
+            # Usa la misma función que productos normales para consistencia
+            # fiscal. El frontend envía tax_rate (0 si exento, 13 si IVA general).
+            tax_rate_pct = normalize_tax_rate(getattr(item, "tax_rate", 0))
+            subtotal_base, tax_amount, total_linea = calc_line_tax(
+                unit_price=unit_price_dec, quantity=qty_dec,
+                discount_percent=discount_pct, tax_rate_pct=tax_rate_pct,
+            )
             total += total_linea
 
             db.add(SaleDetail(
@@ -139,8 +155,8 @@ def _process_sale_lines(
                 unit_price=unit_price_dec,
                 discount_percent=discount_pct,
                 subtotal=total_linea,
-                tax_rate=0,
-                tax_amount=0,
+                tax_rate=tax_rate_pct,
+                tax_amount=tax_amount,
                 is_common=True,
                 common_description=(item.common_description or "Producto común").strip(),
             ))
@@ -148,9 +164,10 @@ def _process_sale_lines(
         # ─── FIN PRODUCTO COMÚN ───
 
         product = (
-            db.query(Product)
-            .filter(Product.id == item.product_id)
-            .with_for_update()
+            _lock_for_update(
+                db.query(Product)
+                .filter(Product.id == item.product_id)
+            )
             .first()
         )
         if not product:
@@ -173,13 +190,18 @@ def _process_sale_lines(
             raise HTTPException(status_code=400, detail=f"Stock insuficiente para '{product.name}'.")
 
         if validate_price:
-            db_price = float(product.price or 0)
-            sent_price = float(item.unit_price or 0)
-            if db_price > 0 and abs(sent_price - db_price) > 0.50:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Precio de '{product.name}' difiere del registrado. Recargue productos.",
-                )
+            # ── FASE 1 — Fix 1.2: Comparación en Decimal, tolerancia relativa ──
+            db_price = Decimal(str(product.price or 0))
+            sent_price = Decimal(str(item.unit_price or 0))
+            if db_price > 0:
+                diff = abs(sent_price - db_price)
+                # Tolerancia: 1% del precio o ₡1, lo que sea mayor
+                tolerance = max(db_price * Decimal("0.01"), Decimal("1"))
+                if diff > tolerance:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Precio de '{product.name}' difiere del registrado. Recargue productos.",
+                    )
 
         log_inventory_movement(
             db, product, type=MovementType.venta,
@@ -216,9 +238,10 @@ def _restore_stock_from_details(db: Session, sale_id: int, reference_prefix: str
         if d.is_common or d.product_id is None:
             continue
         product = (
-            db.query(Product)
-            .filter(Product.id == d.product_id)
-            .with_for_update()
+            _lock_for_update(
+                db.query(Product)
+                .filter(Product.id == d.product_id)
+            )
             .first()
         )
         if product:
@@ -376,7 +399,8 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
     customer_name = customer_db.name if customer_db else "Cliente General"
     pdf_path = _generate_pdf_and_email(db, new_sale, customer_db, customer_name, payment_method, document_type, total)
 
-    return {
+    # ── FASE 5 — Fix 5.5: Informar al frontend si el PDF falló ──
+    result = {
         "message": "Venta registrada correctamente.",
         "sale": {
             "id": new_sale.id, "customer": customer_name,
@@ -386,6 +410,12 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         },
         "pdf_path": pdf_path,
     }
+    if not pdf_path:
+        result["pdf_warning"] = (
+            "La venta se registró correctamente pero no se pudo generar el PDF. "
+            "Puede regenerarlo desde el historial de ventas."
+        )
+    return result
 
 
 def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):
@@ -448,17 +478,32 @@ def list_sales_paginated(
     page = max(1, page)
     page_size = max(1, min(500, page_size))
 
-    query = db.query(Sale).filter(Sale.status != "ANULADA")
-    if search:
-        query = query.join(Customer, isouter=True).filter(Customer.name.ilike(f"%{search}%"))
+    # ── FASE 4 — Fix 4.2: COUNT directo sin subquery wrapper ──
+    # query.count() genera SELECT COUNT(*) FROM (SELECT ... ) que es más lento.
+    # Construimos el conteo y la query de datos por separado.
+    base_filter = [Sale.status != "ANULADA"]
+    join_needed = False
 
-    total_count = query.count()
+    if search:
+        base_filter.append(Customer.name.ilike(f"%{search}%"))
+        join_needed = True
+
+    # Count: query ligera, solo cuenta IDs
+    count_q = db.query(func.count(Sale.id)).filter(*base_filter)
+    if join_needed:
+        count_q = count_q.join(Customer, isouter=True)
+    total_count = count_q.scalar()
+
     total_pages = max(1, math.ceil(total_count / page_size))
     offset = (page - 1) * page_size
 
-    # ── FASE 4 — Fix 4.1: joinedload para evitar N+1 en sale.customer ──
+    # Data: query con joinedload para evitar N+1
+    data_q = db.query(Sale).filter(*base_filter)
+    if join_needed:
+        data_q = data_q.join(Customer, isouter=True)
+
     sales = (
-        query
+        data_q
         .options(joinedload(Sale.customer))
         .order_by(Sale.created_at.desc())
         .offset(offset).limit(page_size)
@@ -544,7 +589,7 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate) -> dict:
         if d.is_common or d.product_id is None:
             db.delete(d)
             continue
-        product = db.query(Product).filter(Product.id == d.product_id).with_for_update().first()
+        product = _lock_for_update(db.query(Product).filter(Product.id == d.product_id)).first()
         if product:
             log_inventory_movement(
                 db, product, type=MovementType.ajuste,

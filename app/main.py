@@ -115,6 +115,16 @@ async def lifespan(app: FastAPI):
         start_scheduled_backups()
     except Exception as e:
         logger.warning(f"Backup automático no disponible: {e}")
+        
+    # Verificar API keys encriptadas
+    try:
+        from app.core.crypto import check_encrypted_keys_on_startup
+        from app.db.database import SessionLocal
+        _db = SessionLocal()
+        check_encrypted_keys_on_startup(_db)
+        _db.close()
+    except Exception as e:
+        logger.warning(f"No se pudo verificar API keys: {e}")
 
     # Cola offline
     try:
@@ -260,13 +270,34 @@ app.include_router(system_router)
 # ══════════════════════════════════════════════════════════════
 @app.get("/health")
 def health_check():
-    return {
-        "status": "healthy",
+    # ── FASE 5 — Fix 5.1: Verificar conexión a BD ──
+    # Un health check que no verifica la BD es un falso positivo.
+    # Balanceadores y monitoreo necesitan saber si la app puede operar.
+    from app.db.database import SessionLocal
+    from sqlalchemy import text
+
+    db_ok = False
+    db_error = None
+    try:
+        db = SessionLocal()
+        db.execute(text("SELECT 1"))
+        db_ok = True
+        db.close()
+    except Exception as e:
+        db_error = str(e)
+
+    status = "healthy" if db_ok else "degraded"
+    result = {
+        "status": status,
         "app": settings.app_name,
         "version": app.version,
         "env": settings.app_env,
         "timestamp": utcnow().isoformat(),
+        "database": db_ok,
     }
+    if db_error:
+        result["db_error"] = db_error
+    return result
 
 
 @app.get("/")

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, ForeignKey, Numeric
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import relationship
 from datetime import datetime
 from app.utils.dt import utcnow

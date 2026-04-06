@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from app.utils.dt import utcnow
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Date, Text, Numeric
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, Numeric
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.db.models.economic_activity import customer_economic_activity, EconomicActivity
@@ -54,23 +54,34 @@ class Customer(Base):
     sales = relationship("Sale", back_populates="customer")
 
     # ventas a crédito
+    # ── FASE 3 — Fix 3.4: Sin cascade delete para datos financieros ──
+    # delete_customer() es soft-delete (is_active=False), pero si alguien
+    # hiciera db.delete(customer) por error, NO debe borrar el historial
+    # financiero (créditos, pagos). Esos datos son necesarios para
+    # auditoría, reportes fiscales y conciliación.
     credit_sales = relationship(
         "CreditSale",
         back_populates="customer",
-        cascade="all, delete-orphan"
+        cascade="save-update, merge",
+        passive_deletes=True,
     )
 
     # movimientos de crédito
     credit_movements = relationship(
         "Credit",
         back_populates="customer",
-        cascade="all, delete-orphan"
+        cascade="save-update, merge",
+        passive_deletes=True,
     )
 
+    # ── FASE 4 — Fix 4.1: lazy="select" en vez de "joined" ──
+    # "joined" forzaba un LEFT JOIN en cada carga de cliente, incluso en
+    # listados donde no se necesitan las actividades económicas.
+    # Los endpoints que las necesiten pueden usar .options(joinedload(...)).
     economic_activities = relationship(
         "EconomicActivity",
         secondary=customer_economic_activity,
-        lazy="joined",
+        lazy="select",
     )
 
         # 🆕 REPs electrónicos del cliente

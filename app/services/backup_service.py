@@ -30,14 +30,17 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-from app.core.config import settings, is_sqlite, APP_DIR
+from app.core.config import settings, is_sqlite, APP_DIR, DATA_DIR
 
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────
 # Configuración
 # ──────────────────────────────────────────────────────────────
-BACKUP_DIR = Path(__file__).resolve().parents[1] / "backups"
+# ── FASE 5 — Fix 5.2: Backups en DATA_DIR, no dentro de app/ ──
+# DATA_DIR (APP_DIR/data/) persiste entre actualizaciones.
+# Antes: app/backups/ — se perdían al reinstalar/actualizar.
+BACKUP_DIR = DATA_DIR / "backups"
 MAX_BACKUPS = 30          # Mantener últimos 30 backups
 BACKUP_INTERVAL = 86400   # 24 horas en segundos
 

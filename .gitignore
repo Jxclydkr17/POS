@@ -32,8 +32,9 @@ env/
 
 # --- Archivos generados en runtime ---
 data/pdfs/
+data/backups/
 app/pdfs/
-app/backups/*.sql
+app/backups/
 generated_pdfs/
 exports/
 
@@ -53,6 +54,7 @@ build/
 
 # --- Mantener estructura de carpetas vacías ---
 !data/pdfs/.gitkeep
+!data/backups/.gitkeep
 !app/pdfs/.gitkeep
 !app/backups/.gitkeep
 !generated_pdfs/.gitkeep

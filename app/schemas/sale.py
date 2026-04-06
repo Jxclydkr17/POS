@@ -42,6 +42,16 @@ class SaleItemBase(BaseModel):
         description="Descripción libre del producto común"
     )
 
+    # ── FASE 3 — Fix 3.1: IVA para productos comunes ──
+    # Para productos normales se toma del catálogo (Product.tax_rate).
+    # Para productos comunes, el frontend DEBE enviar la tasa de IVA.
+    tax_rate: Optional[float] = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description="Tasa de IVA (%). Obligatorio para productos comunes con impuesto."
+    )
+
     @model_validator(mode="after")
     def validate_common_vs_product(self):
         """Si NO es común, product_id es obligatorio. Si ES común, common_description es obligatoria."""

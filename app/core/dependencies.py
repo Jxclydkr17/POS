@@ -29,7 +29,16 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
 
     user = db.query(User).filter(User.username == username).first()
     if user is None:
-        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        raise HTTPException(status_code=401, detail="Token inválido")
+
+    # ── FASE 2 — Fix 2.3: Rechazar usuarios desactivados ──
+    # Si un admin desactiva a un empleado, sus tokens existentes
+    # dejan de funcionar inmediatamente en el siguiente request.
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cuenta desactivada. Contacte al administrador."
+        )
 
     return user
 

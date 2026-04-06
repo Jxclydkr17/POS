@@ -65,9 +65,12 @@ def decrypt_value(encrypted_text: str) -> Optional[str]:
         decrypted = f.decrypt(encrypted_text.encode("utf-8"))
         return decrypted.decode("utf-8")
     except InvalidToken:
+        # ── FASE 2 — Fix 2.4: Mensaje claro sobre la causa más probable ──
         logger.error(
             "No se pudo desencriptar el valor. "
-            "¿Cambió el SECRET_KEY desde que se guardó?"
+            "Causa probable: el SECRET_KEY cambió desde que se guardó este dato. "
+            "Las API keys encriptadas con la clave anterior son irrecuperables. "
+            "Deberá volver a configurarlas manualmente."
         )
         return None
     except Exception as e:
@@ -89,3 +92,53 @@ def mask_api_key(api_key: str) -> str:
     prefix = api_key[:3]
     suffix = api_key[-4:]
     return f"{prefix}...{suffix}"
+
+
+# ── FASE 2 — Fix 2.4: Verificación de salud de encriptación ──────────
+def verify_encryption_health() -> dict:
+    """
+    Verifica que la encriptación funcione correctamente con el SECRET_KEY actual.
+    Retorna un dict con el estado:
+      {"ok": True}  o  {"ok": False, "error": "..."}
+
+    Uso recomendado: llamar en startup para detectar cambios de clave temprano.
+    """
+    test_value = "encryption_health_check"
+    try:
+        encrypted = encrypt_value(test_value)
+        decrypted = decrypt_value(encrypted)
+        if decrypted != test_value:
+            return {"ok": False, "error": "Round-trip de encriptación falló (valor no coincide)"}
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def check_encrypted_keys_on_startup(db) -> int:
+    """
+    Verifica que las API keys guardadas en ai_configs puedan desencriptarse.
+    Retorna la cantidad de claves irrecuperables.
+
+    Uso: llamar en lifespan/startup para alertar al administrador.
+    """
+    try:
+        from app.db.models.ai_config import AIConfig
+        configs = db.query(AIConfig).filter(AIConfig.api_key_encrypted.isnot(None)).all()
+        broken = 0
+        for cfg in configs:
+            if cfg.api_key_encrypted and not decrypt_value(cfg.api_key_encrypted):
+                broken += 1
+                logger.error(
+                    f"API key del proveedor '{cfg.provider}' no se puede desencriptar. "
+                    f"Reconfigure la API key desde Ajustes > IA."
+                )
+        if broken:
+            logger.error(
+                f"{broken} API key(s) de IA son irrecuperables. "
+                f"Esto ocurre cuando el SECRET_KEY cambió. "
+                f"Reconfigure las claves manualmente."
+            )
+        return broken
+    except Exception as e:
+        logger.warning(f"No se pudo verificar API keys encriptadas: {e}")
+        return 0

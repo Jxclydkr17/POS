@@ -92,9 +92,20 @@ def add_credit_payment(db: Session, customer_id: int, amount: float, payment_met
     """
     amount_dec = Decimal(str(amount))
 
+    if amount_dec <= 0:
+        raise ValueError("El monto del abono debe ser mayor a cero.")
+
     customer = db.query(Customer).filter(Customer.id == customer_id).first()
     if not customer:
         raise ValueError(f"Cliente con ID {customer_id} no existe.")
+
+    # ── FASE 1 — Fix 1.1: Validar que el abono no exceda el saldo ──
+    current_balance = Decimal(str(customer.credit_balance or 0))
+    if amount_dec > current_balance:
+        raise ValueError(
+            f"El abono (₡{float(amount_dec):,.2f}) excede el saldo pendiente "
+            f"(₡{float(current_balance):,.2f}). Máximo permitido: ₡{float(current_balance):,.2f}"
+        )
 
     # Crear movimiento de crédito
     payment = Credit(
@@ -124,8 +135,8 @@ def add_credit_payment(db: Session, customer_id: int, amount: float, payment_met
             )
 
     # Actualizar saldo del cliente
-    current_balance = Decimal(str(customer.credit_balance or 0))
-    customer.credit_balance = current_balance - amount_dec
+    # ── FASE 1 — Fix 1.1: max(0) como red de seguridad ──
+    customer.credit_balance = max(Decimal("0"), current_balance - amount_dec)
 
     # NO commit aquí: lo hace el router al final
     return payment
@@ -226,8 +237,11 @@ def get_credit_info(
     movements = movements_query.offset(mov_skip).limit(mov_limit).all()
 
     # 2b. Aging: movimientos tipo "sale" (FIFO) — necesario para distribución
-    sale_movements = (
-        db.query(Credit)
+    # ── FASE 4 — Fix 4.3: Solo cargar (amount, created_at) en vez de objetos ──
+    # Para clientes con años de historial, cargar Credit completos es pesado.
+    # Tuplas ligeras reducen memoria y tiempo de hydration del ORM.
+    sale_movement_rows = (
+        db.query(Credit.amount, Credit.created_at)
         .filter(Credit.customer_id == customer_id, Credit.type == "sale")
         .order_by(Credit.created_at.asc())
         .all()
@@ -236,15 +250,15 @@ def get_credit_info(
     remaining_payments = total_payments
     aging = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
 
-    for sm in sale_movements:
-        amount = float(sm.amount or 0)
+    for sm_amount, sm_created_at in sale_movement_rows:
+        amount = float(sm_amount or 0)
         if remaining_payments >= amount:
             remaining_payments -= amount
             continue
         unpaid = amount - remaining_payments
         remaining_payments = 0
 
-        days_old = (today - sm.created_at.date()).days if sm.created_at else 0
+        days_old = (today - sm_created_at.date()).days if sm_created_at else 0
         if days_old <= 30:
             aging["0_30"] += unpaid
         elif days_old <= 60:

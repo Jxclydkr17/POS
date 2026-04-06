@@ -185,9 +185,28 @@ def login(
     _check_rate_limit(client_ip)
 
     user = db.query(User).filter(User.username == form_data.username).first()
-    if not user or not verify_password(form_data.password, user.password):
+
+    # ── FASE 2 — Fix 2.2: Timing-safe login ──
+    # Si el usuario no existe, igual ejecutamos verify_password contra un
+    # hash dummy para que el tiempo de respuesta sea idéntico al de un
+    # usuario válido con contraseña incorrecta. Esto previene enumeración
+    # de usuarios por timing.
+    _DUMMY_HASH = "$2b$12$LJ3m4ys3Lg3do11FkN7JpOX5Z5z6ByEpXoMxMKq/MOZV.V8lRS5Dq"
+    if not user:
+        verify_password(form_data.password, _DUMMY_HASH)
         _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    if not verify_password(form_data.password, user.password):
+        _record_attempt(client_ip)
+        raise HTTPException(status_code=401, detail="Credenciales inválidas")
+
+    # ── FASE 2 — Fix 2.3: Rechazar usuarios desactivados en login ──
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cuenta desactivada. Contacte al administrador.",
+        )
 
     # Login exitoso: limpiar intentos de este IP
     _login_attempts.pop(client_ip, None)
@@ -215,6 +234,13 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == username).first()
     if not user:
         raise HTTPException(status_code=401, detail="Usuario no encontrado")
+
+    # ── FASE 2 — Fix 2.3: Rechazar refresh si usuario fue desactivado ──
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Cuenta desactivada. Contacte al administrador.",
+        )
 
     new_access = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": new_access, "token_type": "bearer"}

@@ -1,11 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException
 import requests
-from functools import lru_cache
+import time
+import threading
 from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/locations", tags=["Locations"])
 
 BASE = "https://ubicaciones.paginasweb.cr"
+
+
+# ── FASE 4 — Fix 4.4: Caché con TTL en vez de lru_cache eterno ──
+# lru_cache nunca expiraba: si el API externo fallaba, el error quedaba
+# cacheado para siempre. Ahora los datos expiran cada 24h (razonable
+# para datos geográficos que casi nunca cambian).
+_cache: dict[str, tuple[float, dict]] = {}
+_cache_lock = threading.Lock()
+_CACHE_TTL = 86400  # 24 horas en segundos
+
 
 def _get_json(url: str):
     try:
@@ -15,9 +26,22 @@ def _get_json(url: str):
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Error consultando ubicaciones: {e}")
 
-@lru_cache(maxsize=64)
+
 def _cached(url: str):
-    return _get_json(url)
+    now = time.monotonic()
+    with _cache_lock:
+        if url in _cache:
+            cached_at, data = _cache[url]
+            if (now - cached_at) < _CACHE_TTL:
+                return data
+
+    # Fuera del lock: hacer el request HTTP
+    data = _get_json(url)
+
+    with _cache_lock:
+        _cache[url] = (now, data)
+    return data
+
 
 @router.get("/provinces")
 def provinces(user: dict = Depends(get_current_user)):
