@@ -197,11 +197,15 @@ class SaleListOut(BaseModel):
 
 # ============================================================
 # ✅ FASE 3.4: Respuesta paginada genérica
+# ── FASE 4 — Fix 4.2: has_next en vez de COUNT(*) obligatorio ──
+# total_count y total_pages ahora son opcionales. El frontend puede
+# paginar con has_next sin necesidad de un COUNT en cada request.
 # ============================================================
 class PaginatedSalesResponse(BaseModel):
     """Wrapper de respuesta paginada para GET /sales/."""
     data: List[SaleListOut]
-    total_count: int
     page: int
     page_size: int
-    total_pages: int
+    has_next: bool = False
+    total_count: Optional[int] = None
+    total_pages: Optional[int] = None

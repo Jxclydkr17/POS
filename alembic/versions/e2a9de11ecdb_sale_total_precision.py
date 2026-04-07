@@ -8,8 +8,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers
-revision = "h2i3_sale_total_precision"
-down_revision = "g1h2_user_permissions"
+revision = "e2a9de11ecdb"
+down_revision = "872473d1b86f"
 branch_labels = None
 depends_on = None
 

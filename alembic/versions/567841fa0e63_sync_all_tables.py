@@ -3,7 +3,7 @@
 Crea todas las tablas que faltan sin tocar las existentes.
 Es seguro correr contra una BD vacía o una que ya tiene datos.
 
-Revision ID: f2a0_sync_all_tables
+Revision ID: 567841fa0e63 (antes: f2a0_sync_all_tables)
 Revises: 914b7c5478ba
 Create Date: 2025-06-01 00:00:00.000000
 
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision: str = "f2a0_sync_all_tables"
+revision: str = "567841fa0e63"
 down_revision: Union[str, Sequence[str], None] = "6f77e34cfe40"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

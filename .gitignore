@@ -38,6 +38,10 @@ app/backups/
 generated_pdfs/
 exports/
 
+# --- Runtime state (rate limiter, crypto fingerprint) ---
+login_attempts.json
+.secret_key_fingerprint
+
 # --- Logs ---
 *.log
 logs/

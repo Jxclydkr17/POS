@@ -6,7 +6,7 @@ Tabla separada de Settings para:
   - Auditoría independiente
   - No inflar el modelo Settings
 """
-from sqlalchemy import Column, Integer, String, Boolean, Float, Text, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, Numeric, Text, DateTime
 from app.db.database import Base
 from app.utils.dt import utcnow
 
@@ -30,7 +30,8 @@ class AIConfig(Base):
 
     # Parámetros del LLM
     max_tokens = Column(Integer, nullable=False, default=1024)
-    temperature = Column(Float, nullable=False, default=0.3)
+    # ── FASE 6 — Fix 6.2: Float → Numeric para consistencia ──
+    temperature = Column(Numeric(3, 2), nullable=False, default=0.3)
 
     # Prompt adicional del usuario (se concatena al system prompt)
     custom_prompt = Column(Text, nullable=True)

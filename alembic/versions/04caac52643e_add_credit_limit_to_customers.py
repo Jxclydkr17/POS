@@ -4,6 +4,10 @@
 Se mantiene en la cadena por compatibilidad con BDs existentes,
 pero verifica si la columna ya existe antes de actuar.
 
+── FASE 3 — Fix 3.2: downgrade convertido en no-op ──
+El downgrade original hacía drop_column, duplicando el de 2c50ebc6bf0b.
+Si se hacía rollback, fallaba con "column does not exist".
+
 Revision ID: 04caac52643e
 Revises: 2c50ebc6bf0b
 Create Date: 2026-01-12 16:55:16.697596
@@ -33,5 +37,8 @@ def upgrade():
             sa.Column("credit_limit", sa.Float(), nullable=False, server_default="0")
         )
 
+
 def downgrade():
-    op.drop_column("customers", "credit_limit")
+    # ── FASE 3 — Fix 3.2 ──
+    # No-op: la columna la creó 2c50ebc6bf0b, su downgrade la elimina.
+    pass

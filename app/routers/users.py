@@ -7,9 +7,15 @@ from app.core.security import hash_password, verify_password, create_access_toke
 # ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
 from fastapi.security import OAuth2PasswordRequestForm
-from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+
+import json
+import logging
+import threading
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 # ── Schemas de validación (Fase 8 — Bug 8.2) ─────────────
@@ -67,84 +73,126 @@ router = APIRouter(
 )
 
 # ────────────────────────────────────────────────────────────
-#  Rate limiter en memoria para login (Fase 2 — Bug 2.2)
-# ── FASE 4 — Fix 4.3: Limpieza periódica + tope de IPs ──
+#  Rate limiter persistido en archivo JSON (Fase 2 — Fix 2.1)
+#
+#  Mejoras sobre la versión anterior (dict en memoria):
+#  - Persiste entre reinicios del servidor
+#  - Compartido entre workers de uvicorn (vía filesystem)
+#  - Thread-safe con lock
 # ────────────────────────────────────────────────────────────
-_login_attempts: dict[str, list[datetime]] = defaultdict(list)
 LOGIN_MAX_ATTEMPTS = 5          # intentos permitidos
 LOGIN_WINDOW_SECONDS = 300      # ventana de 5 minutos
 LOGIN_LOCKOUT_SECONDS = 600     # bloqueo de 10 minutos tras exceder
-_MAX_TRACKED_IPS = 10_000       # tope de IPs en memoria
-_last_cleanup = datetime.utcnow()
-_CLEANUP_INTERVAL_SECONDS = 600  # limpiar cada 10 minutos
+_MAX_TRACKED_IPS = 10_000       # tope de IPs en archivo
+_lock = threading.Lock()
 
 
-def _cleanup_stale_entries():
-    """Elimina IPs cuyos intentos ya expiraron. Se invoca periódicamente."""
-    global _last_cleanup
-    now = datetime.utcnow()
-    if (now - _last_cleanup).total_seconds() < _CLEANUP_INTERVAL_SECONDS:
-        return
-    _last_cleanup = now
+def _get_rate_limit_path() -> Path:
+    """Ruta al archivo JSON de rate limiting en DATA_DIR."""
+    from app.core.config import DATA_DIR
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    return DATA_DIR / "login_attempts.json"
 
+
+def _load_attempts() -> dict[str, list[str]]:
+    """Carga intentos desde disco. Retorna dict vacío si no existe o falla."""
+    path = _get_rate_limit_path()
+    try:
+        if path.exists() and path.stat().st_size > 0:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        logger.debug(f"Rate limiter: no se pudo leer {path}: {e}")
+    return {}
+
+
+def _save_attempts(data: dict[str, list[str]]) -> None:
+    """Guarda intentos en disco. Falla silenciosamente (fallback a memoria)."""
+    path = _get_rate_limit_path()
+    try:
+        path.write_text(json.dumps(data), encoding="utf-8")
+    except Exception as e:
+        logger.warning(f"Rate limiter: no se pudo guardar en {path}: {e}")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_ts(ts_str: str) -> datetime:
+    return datetime.fromisoformat(ts_str)
+
+
+def _cleanup_and_load() -> dict[str, list[str]]:
+    """Carga, limpia entradas expiradas y devuelve datos limpios."""
+    data = _load_attempts()
+    now = _now_utc()
     cutoff = now - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
-    stale_ips = [
-        ip for ip, timestamps in _login_attempts.items()
-        if not timestamps or timestamps[-1] < cutoff
-    ]
-    for ip in stale_ips:
-        del _login_attempts[ip]
+    cleaned = {}
+    for ip, timestamps in data.items():
+        valid = [ts for ts in timestamps if _parse_ts(ts) > cutoff]
+        if valid:
+            cleaned[ip] = valid
+    return cleaned
 
 
 def _check_rate_limit(client_ip: str):
     """Lanza HTTPException 429 si el IP excedió los intentos permitidos."""
-    # Limpieza periódica para evitar memory leak
-    _cleanup_stale_entries()
+    with _lock:
+        data = _cleanup_and_load()
+        now = _now_utc()
+        window_start = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
 
-    now = datetime.utcnow()
-    window_start = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
+        # Filtrar intentos dentro de la ventana para este IP
+        ip_attempts = [
+            ts for ts in data.get(client_ip, [])
+            if _parse_ts(ts) > window_start
+        ]
+        data[client_ip] = ip_attempts
 
-    # Limpiar intentos viejos de este IP
-    _login_attempts[client_ip] = [
-        ts for ts in _login_attempts[client_ip] if ts > window_start
-    ]
+        if len(ip_attempts) >= LOGIN_MAX_ATTEMPTS:
+            oldest = _parse_ts(ip_attempts[0])
+            lockout_until = oldest + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+            if now < lockout_until:
+                retry_secs = int((lockout_until - now).total_seconds())
+                _save_attempts(data)
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=f"Demasiados intentos de login. Intente de nuevo en {retry_secs} segundos.",
+                    headers={"Retry-After": str(retry_secs)},
+                )
+            # Lockout expirado: limpiar
+            data[client_ip] = []
 
-    if len(_login_attempts[client_ip]) >= LOGIN_MAX_ATTEMPTS:
-        oldest_in_window = _login_attempts[client_ip][0]
-        lockout_until = oldest_in_window + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
-        if now < lockout_until:
-            retry_secs = int((lockout_until - now).total_seconds())
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Demasiados intentos de login. Intente de nuevo en {retry_secs} segundos.",
-                headers={"Retry-After": str(retry_secs)},
-            )
-        _login_attempts[client_ip].clear()
+        _save_attempts(data)
 
 
 def _record_attempt(client_ip: str):
     """Registra un intento fallido."""
-    # Si llegamos al tope de IPs, forzar limpieza agresiva
-    if len(_login_attempts) >= _MAX_TRACKED_IPS:
-        now = datetime.utcnow()
-        cutoff = now - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
-        stale_ips = [
-            ip for ip, timestamps in _login_attempts.items()
-            if not timestamps or timestamps[-1] < cutoff
-        ]
-        for ip in stale_ips:
-            del _login_attempts[ip]
+    with _lock:
+        data = _cleanup_and_load()
 
-        # Si aún estamos llenos, descartar la mitad más vieja
-        if len(_login_attempts) >= _MAX_TRACKED_IPS:
+        # Si llegamos al tope de IPs, descartar la mitad más vieja
+        if len(data) >= _MAX_TRACKED_IPS:
             sorted_ips = sorted(
-                _login_attempts.items(),
-                key=lambda x: x[1][-1] if x[1] else datetime.min
+                data.items(),
+                key=lambda x: x[1][-1] if x[1] else ""
             )
-            for ip, _ in sorted_ips[:len(sorted_ips) // 2]:
-                del _login_attempts[ip]
+            data = dict(sorted_ips[len(sorted_ips) // 2:])
 
-    _login_attempts[client_ip].append(datetime.utcnow())
+        attempts = data.get(client_ip, [])
+        attempts.append(_now_utc().isoformat())
+        data[client_ip] = attempts
+        _save_attempts(data)
+
+
+def _clear_attempts(client_ip: str):
+    """Limpia intentos de un IP (login exitoso)."""
+    with _lock:
+        data = _load_attempts()
+        data.pop(client_ip, None)
+        _save_attempts(data)
 
 
 # ────────────────────────────────────────────────────────────
@@ -209,7 +257,7 @@ def login(
         )
 
     # Login exitoso: limpiar intentos de este IP
-    _login_attempts.pop(client_ip, None)
+    _clear_attempts(client_ip)
 
     token = create_access_token({"sub": user.username, "role": user.role})
     refresh = create_refresh_token({"sub": user.username, "role": user.role})

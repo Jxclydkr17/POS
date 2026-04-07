@@ -3,14 +3,12 @@
 FASE 4.1 — Lógica de negocio de ventas extraída del router.
 El router solo valida entrada, llama a estas funciones y devuelve respuesta.
 """
-import math
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func
 
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
@@ -478,9 +476,10 @@ def list_sales_paginated(
     page = max(1, page)
     page_size = max(1, min(500, page_size))
 
-    # ── FASE 4 — Fix 4.2: COUNT directo sin subquery wrapper ──
-    # query.count() genera SELECT COUNT(*) FROM (SELECT ... ) que es más lento.
-    # Construimos el conteo y la query de datos por separado.
+    # ── FASE 4 — Fix 4.2: Eliminar COUNT(*) en cada petición ──
+    # En vez de SELECT COUNT(*) + SELECT datos (2 queries), hacemos
+    # una sola query pidiendo page_size + 1 filas. Si llegan más de
+    # page_size, sabemos que hay página siguiente (has_next=True).
     base_filter = [Sale.status != "ANULADA"]
     join_needed = False
 
@@ -488,16 +487,8 @@ def list_sales_paginated(
         base_filter.append(Customer.name.ilike(f"%{search}%"))
         join_needed = True
 
-    # Count: query ligera, solo cuenta IDs
-    count_q = db.query(func.count(Sale.id)).filter(*base_filter)
-    if join_needed:
-        count_q = count_q.join(Customer, isouter=True)
-    total_count = count_q.scalar()
-
-    total_pages = max(1, math.ceil(total_count / page_size))
     offset = (page - 1) * page_size
 
-    # Data: query con joinedload para evitar N+1
     data_q = db.query(Sale).filter(*base_filter)
     if join_needed:
         data_q = data_q.join(Customer, isouter=True)
@@ -506,14 +497,19 @@ def list_sales_paginated(
         data_q
         .options(joinedload(Sale.customer))
         .order_by(Sale.created_at.desc())
-        .offset(offset).limit(page_size)
+        .offset(offset).limit(page_size + 1)
         .all()
     )
 
+    has_next = len(sales) > page_size
+    if has_next:
+        sales = sales[:page_size]
+
     return PaginatedSalesResponse(
         data=[SaleListOut.model_validate(s) for s in sales],
-        total_count=total_count, page=page,
-        page_size=page_size, total_pages=total_pages,
+        page=page,
+        page_size=page_size,
+        has_next=has_next,
     )
 
 

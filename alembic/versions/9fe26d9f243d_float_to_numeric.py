@@ -11,7 +11,7 @@ Tablas afectadas:
   - credits.amount
   - sale_details.tax_rate, exon_tarifa, factor_calculo_iva
 
-Revision ID: b3c4_float_to_numeric
+Revision ID: 9fe26d9f243d (antes: b3c4_float_to_numeric)
 Revises: a1b2_unique_credit_sale
 Create Date: 2026-03-28 22:00:00.000000
 
@@ -23,8 +23,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision: str = "b3c4_float_to_numeric"
-down_revision: Union[str, Sequence[str], None] = "a1b2_unique_credit_sale"
+revision: str = "9fe26d9f243d"
+down_revision: Union[str, Sequence[str], None] = "d83fa69bc13a"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

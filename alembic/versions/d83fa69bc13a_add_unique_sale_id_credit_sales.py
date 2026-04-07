@@ -2,7 +2,7 @@
 
 Evita que una misma venta genere crédito duplicado (Fase 2 — Bug 2.4).
 
-Revision ID: a1b2_unique_credit_sale
+Revision ID: d83fa69bc13a (antes: a1b2_unique_credit_sale)
 Revises: f2a0_sync_all_tables
 Create Date: 2026-03-28 21:00:00.000000
 
@@ -14,8 +14,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision: str = "a1b2_unique_credit_sale"
-down_revision: Union[str, Sequence[str], None] = "f2a0_sync_all_tables"
+revision: str = "d83fa69bc13a"
+down_revision: Union[str, Sequence[str], None] = "567841fa0e63"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

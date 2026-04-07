@@ -11,7 +11,7 @@ Tablas afectadas:
   - proformas: total
   - proforma_details: tax_rate
 
-Revision ID: d4e5_fix_remaining_floats
+Revision ID: b4c0d051c46c (antes: d4e5_fix_remaining_floats)
 Revises: c5d6_supplier_products
 Create Date: 2026-04-03 12:00:00.000000
 
@@ -23,8 +23,8 @@ import sqlalchemy as sa
 from sqlalchemy import inspect
 
 
-revision: str = "d4e5_fix_remaining_floats"
-down_revision: Union[str, Sequence[str], None] = "c5d6_supplier_products"
+revision: str = "b4c0d051c46c"
+down_revision: Union[str, Sequence[str], None] = "4f8930c14162"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
