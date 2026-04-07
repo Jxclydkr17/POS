@@ -9,6 +9,7 @@ import io
 import csv
 import math
 from datetime import date
+from app.utils.dt import today_cr
 from itertools import groupby
 from operator import itemgetter
 from typing import Optional
@@ -143,7 +144,7 @@ def _supplier_to_dict(
     """Convierte un Supplier ORM + métricas en el dict que espera SupplierOut."""
     days_since = None
     if last_purchase_date:
-        days_since = (date.today() - last_purchase_date).days
+        days_since = (today_cr() - last_purchase_date).days
 
     return {
         "id": supplier.id,

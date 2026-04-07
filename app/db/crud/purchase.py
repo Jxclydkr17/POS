@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from app.utils.dt import today_cr
 from typing import List, Optional
 
 from fastapi import HTTPException, status
@@ -163,7 +164,7 @@ def _sync_payment_status(purchase: Purchase):
     if bal <= 0:
         purchase.status = PurchaseStatus.pagado
         if not purchase.paid_at:
-            purchase.paid_at = date.today()
+            purchase.paid_at = today_cr()
     elif purchase.paid_amount > 0 or purchase.credit_notes_total > 0:
         # Hay abonos o NC pero no se ha saldado completamente
         if purchase.status == PurchaseStatus.pagado:
@@ -186,7 +187,7 @@ def get_purchases(
     skip: int = 0,
     limit: int = 100,
 ):
-    today = date.today()
+    today = today_cr()
 
     # Auto-sync vencidas (excluir pagadas, recibidas, parciales)
     db.query(Purchase).filter(
@@ -336,7 +337,7 @@ def update_purchase(
     if purchase.status not in (
         PurchaseStatus.pagado, PurchaseStatus.recibido, PurchaseStatus.parcial
     ) and purchase.due_date:
-        today = date.today()
+        today = today_cr()
         purchase.status = (
             PurchaseStatus.vencido
             if purchase.due_date < today
@@ -401,7 +402,7 @@ def receive_purchase(db: Session, purchase_id: int) -> Purchase:
         product.stock = stock_before + qty
         product.cost = float(detail.unit_cost)
 
-    purchase.received_at = date.today()
+    purchase.received_at = today_cr()
 
     # Estado: si ya tiene abonos parciales → parcial, sino → recibido
     if purchase.paid_amount > 0 and purchase.balance > 0:
@@ -444,7 +445,7 @@ def add_payment(
         purchase_id=purchase.id,
         amount=data.amount,
         payment_method=data.payment_method,
-        date=data.date or date.today(),
+        date=data.date or today_cr(),
         notes=data.notes,
     )
     db.add(payment)
@@ -456,7 +457,7 @@ def add_payment(
         "description": f"Abono factura #{purchase.invoice_number}",
         "amount": float(data.amount),
         "payment_method": data.payment_method,
-        "date": (data.date or date.today()).strftime("%Y-%m-%d"),
+        "date": (data.date or today_cr()).strftime("%Y-%m-%d"),
     }
     add_expense_service(expense_payload, db)
 
@@ -480,7 +481,7 @@ def add_payment(
                 db.add(movement)
                 product.stock = stock_before + qty
                 product.cost = float(detail.unit_cost)
-        purchase.received_at = date.today()
+        purchase.received_at = today_cr()
 
     # Sincronizar estado de pago
     _sync_payment_status(purchase)
@@ -522,7 +523,7 @@ def add_credit_note(
         purchase_id=purchase.id,
         amount=data.amount,
         reason=data.reason,
-        date=data.date or date.today(),
+        date=data.date or today_cr(),
         product_id=data.product_id,
         quantity_returned=data.quantity_returned or 0,
         stock_reverted=False,
@@ -599,7 +600,7 @@ def mark_as_paid(
     if remaining <= 0:
         # Ya saldada por abonos/NC
         purchase.status = PurchaseStatus.pagado
-        purchase.paid_at = date.today()
+        purchase.paid_at = today_cr()
         db.commit()
         db.refresh(purchase)
         return purchase
@@ -608,7 +609,7 @@ def mark_as_paid(
     payment_data = PurchasePaymentCreate(
         amount=remaining,
         payment_method=payment_method or "Efectivo",
-        date=date.today(),
+        date=today_cr(),
         notes="Pago total del saldo restante",
     )
 

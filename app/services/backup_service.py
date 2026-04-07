@@ -7,6 +7,9 @@ Soporta ambos motores:
 
 Incluye rotación automática (mantiene los últimos N backups).
 
+FASE 2 — Fix 2.1: Credenciales MySQL vía --defaults-extra-file.
+  La contraseña ya no aparece en `ps aux`.
+
 USO DIRECTO:
     from app.services.backup_service import create_backup, restore_backup, list_backups
 
@@ -147,7 +150,9 @@ def _create_sqlite_backup(timestamp: str, suffix: str) -> str:
 
 
 def _create_mysql_backup(timestamp: str, suffix: str) -> str:
-    """Backup de MySQL: usa mysqldump."""
+    """Backup de MySQL: usa mysqldump con credenciales seguras."""
+    from app.utils.mysql_safe import build_mysqldump_cmd
+
     mysqldump = _find_mysqldump()
     if not mysqldump:
         raise RuntimeError(
@@ -158,19 +163,22 @@ def _create_mysql_backup(timestamp: str, suffix: str) -> str:
     filename = f"backup_{settings.db_name}_{timestamp}{suffix}.sql"
     filepath = BACKUP_DIR / filename
 
-    cmd = [
-        mysqldump,
-        f"--host={settings.db_host}",
-        f"--port={settings.db_port}",
-        f"--user={settings.db_user}",
-        f"--password={settings.db_password}",
-        "--single-transaction",   # Consistencia sin bloquear tablas
-        "--routines",             # Incluir procedimientos almacenados
-        "--triggers",             # Incluir triggers
-        "--add-drop-table",       # DROP TABLE antes de CREATE
-        "--set-charset",
-        settings.db_name,
-    ]
+    # ── FASE 2 — Fix 2.1: Credenciales vía --defaults-extra-file ──
+    cmd, cleanup = build_mysqldump_cmd(
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_user,
+        password=settings.db_password,
+        db_name=settings.db_name,
+        extra_args=[
+            "--single-transaction",   # Consistencia sin bloquear tablas
+            "--routines",             # Incluir procedimientos almacenados
+            "--triggers",             # Incluir triggers
+            "--add-drop-table",       # DROP TABLE antes de CREATE
+            "--set-charset",
+        ],
+        mysqldump_path=mysqldump,
+    )
 
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -202,6 +210,8 @@ def _create_mysql_backup(timestamp: str, suffix: str) -> str:
         raise RuntimeError("mysqldump tardó más de 5 minutos. Backup cancelado.")
     except OSError as e:
         raise RuntimeError(f"Error de I/O creando backup: {e}")
+    finally:
+        cleanup()
 
 
 # ──────────────────────────────────────────────────────────────
@@ -252,7 +262,9 @@ def _restore_sqlite_backup(filepath: Path) -> None:
 
 
 def _restore_mysql_backup(filepath: Path) -> None:
-    """Restaura MySQL: usa mysql CLI."""
+    """Restaura MySQL: usa mysql CLI con credenciales seguras."""
+    from app.utils.mysql_safe import build_mysql_cmd
+
     mysql = _find_mysql()
     if not mysql:
         raise RuntimeError(
@@ -260,14 +272,15 @@ def _restore_mysql_backup(filepath: Path) -> None:
             "instalado y mysql esté en el PATH del sistema."
         )
 
-    cmd = [
-        mysql,
-        f"--host={settings.db_host}",
-        f"--port={settings.db_port}",
-        f"--user={settings.db_user}",
-        f"--password={settings.db_password}",
-        settings.db_name,
-    ]
+    # ── FASE 2 — Fix 2.1: Credenciales vía --defaults-extra-file ──
+    cmd, cleanup = build_mysql_cmd(
+        host=settings.db_host,
+        port=settings.db_port,
+        user=settings.db_user,
+        password=settings.db_password,
+        db_name=settings.db_name,
+        mysql_path=mysql,
+    )
 
     try:
         with open(filepath, "r", encoding="utf-8") as f:
@@ -286,6 +299,8 @@ def _restore_mysql_backup(filepath: Path) -> None:
 
     except subprocess.TimeoutExpired:
         raise RuntimeError("Restore tardó más de 10 minutos. Operación cancelada.")
+    finally:
+        cleanup()
 
 
 # ──────────────────────────────────────────────────────────────

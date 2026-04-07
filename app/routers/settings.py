@@ -5,14 +5,22 @@ app/routers/settings.py — Fase 6 completa.
 6.4  Endpoint audit-log
 6.5  Endpoint system-info
 6.6  Export/import config JSON
+
+FASE 2 — Seguridad:
+  2.1  Credenciales MySQL vía --defaults-extra-file (no visibles en ps aux)
+  2.2  Validación de contenido SQL en restore
+  2.3  Archivo temporal con tempfile seguro
+  2.5  Extensión de logo validada contra whitelist
 """
 
 import os
+import re
 import json
 import shutil
 import logging
 import platform
 import subprocess
+import tempfile
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -52,6 +60,51 @@ os.makedirs(LOGO_DIR, exist_ok=True)
 BACKUP_DIR = os.path.join(os.path.dirname(__file__), "..", "backups")
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
+# ── FASE 2 — Fix 2.5: Extensiones permitidas para logo ──
+_ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+
+
+# ══════════════════════════════════════════════════════════════
+# FASE 2 — Fix 2.2: Validación de contenido SQL en restore
+# ══════════════════════════════════════════════════════════════
+_DANGEROUS_SQL_PATTERNS = re.compile(
+    r"""
+    \b(DROP\s+DATABASE)\b         |
+    \b(CREATE\s+USER)\b           |
+    \b(GRANT\s+)\b                |
+    \b(REVOKE\s+)\b               |
+    \b(LOAD_FILE\s*\()\b          |
+    \b(INTO\s+OUTFILE)\b          |
+    \b(INTO\s+DUMPFILE)\b         |
+    \b(SYSTEM\s+)\b               |
+    \b(CHANGE\s+MASTER)\b         |
+    \b(RESET\s+SLAVE)\b           |
+    \b(SET\s+GLOBAL)\b
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def _validate_sql_content(content: bytes) -> None:
+    """
+    Valida que el contenido SQL no contenga sentencias peligrosas.
+    Solo permite DDL/DML normales de un dump (CREATE TABLE, INSERT, etc.)
+    Lanza HTTPException si encuentra algo sospechoso.
+    """
+    # Decodificar para escaneo (solo los primeros 5MB para no bloquear)
+    sample = content[:5 * 1024 * 1024].decode("utf-8", errors="replace")
+    match = _DANGEROUS_SQL_PATTERNS.search(sample)
+    if match:
+        found = match.group(0).strip()
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"El archivo SQL contiene sentencias no permitidas: '{found}'. "
+                f"Solo se aceptan backups generados por mysqldump con instrucciones "
+                f"CREATE TABLE, INSERT, ALTER, DROP TABLE, etc."
+            ),
+        )
+
 
 # ============================================================
 # GET /settings
@@ -75,6 +128,7 @@ def update_settings_endpoint(data: SettingsUpdate, db: Session = Depends(get_db)
 
 # ============================================================
 # POST /settings/upload-logo
+# ── FASE 2 — Fix 2.5: Extensión validada contra whitelist ──
 # ============================================================
 @router.post("/upload-logo", dependencies=[Depends(require_role("admin"))])
 def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db),
@@ -87,7 +141,14 @@ def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db),
     if len(contents) > 2 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="El archivo excede 2MB.")
 
-    ext = os.path.splitext(file.filename or "logo.png")[1] or ".png"
+    # ── FASE 2: Validar extensión contra whitelist en vez de confiar en el filename ──
+    ext = os.path.splitext(file.filename or "logo.png")[1].lower()
+    if ext not in _ALLOWED_LOGO_EXTENSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Extensión no permitida: '{ext}'. Use: {', '.join(_ALLOWED_LOGO_EXTENSIONS)}",
+        )
+
     filename = f"logo{ext}"
     filepath = os.path.join(LOGO_DIR, filename)
 
@@ -160,27 +221,26 @@ def get_env_status():
 
 # ============================================================
 # 6.1: POST /settings/backup — Crear backup de DB
+# ── FASE 2 — Fix 2.1: Credenciales vía --defaults-extra-file ──
 # ============================================================
 @router.post("/backup", dependencies=[Depends(require_role("admin"))])
 def create_backup(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
     """Ejecuta mysqldump y retorna el archivo .sql para descarga."""
     from app.core.config import settings as env
+    from app.utils.mysql_safe import build_mysqldump_cmd
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"backup_{env.db_name}_{timestamp}.sql"
     filepath = os.path.join(BACKUP_DIR, filename)
 
-    cmd = [
-        "mysqldump",
-        f"--host={env.db_host}",
-        f"--port={env.db_port}",
-        f"--user={env.db_user}",
-        f"--password={env.db_password}",
-        "--single-transaction",
-        "--routines",
-        "--triggers",
-        env.db_name,
-    ]
+    cmd, cleanup = build_mysqldump_cmd(
+        host=env.db_host,
+        port=env.db_port,
+        user=env.db_user,
+        password=env.db_password,
+        db_name=env.db_name,
+        extra_args=["--single-transaction", "--routines", "--triggers"],
+    )
 
     try:
         with open(filepath, "w", encoding="utf-8") as f:
@@ -206,16 +266,20 @@ def create_backup(db: Session = Depends(get_db), current_user=Depends(get_curren
         raise HTTPException(status_code=500, detail="Timeout: el backup tardó más de 2 minutos.")
     except FileNotFoundError:
         raise HTTPException(status_code=500, detail="mysqldump no encontrado. Verifica que MySQL esté instalado.")
+    finally:
+        cleanup()
 
 
 # ============================================================
 # 6.1: POST /settings/restore — Restaurar backup
+# ── FASE 2 — Fixes 2.1, 2.2, 2.3 ──
 # ============================================================
 @router.post("/restore", dependencies=[Depends(require_role("admin"))])
 def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db),
                    current_user=Depends(get_current_user)):
     """Recibe un archivo .sql y lo ejecuta vía mysql CLI."""
     from app.core.config import settings as env
+    from app.utils.mysql_safe import build_mysql_cmd
 
     if not file.filename.endswith(".sql"):
         raise HTTPException(status_code=400, detail="El archivo debe ser .sql")
@@ -224,38 +288,43 @@ def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db),
     if len(contents) > 100 * 1024 * 1024:  # Max 100MB
         raise HTTPException(status_code=400, detail="El archivo excede 100MB.")
 
-    # Guardar temporalmente
-    tmp_path = os.path.join(BACKUP_DIR, f"restore_tmp_{datetime.now().strftime('%H%M%S')}.sql")
-    with open(tmp_path, "wb") as f:
-        f.write(contents)
+    # ── FASE 2 — Fix 2.2: Validar contenido SQL ──
+    _validate_sql_content(contents)
 
-    cmd = [
-        "mysql",
-        f"--host={env.db_host}",
-        f"--port={env.db_port}",
-        f"--user={env.db_user}",
-        f"--password={env.db_password}",
-        env.db_name,
-    ]
-
+    # ── FASE 2 — Fix 2.3: Archivo temporal seguro ──
+    fd, tmp_path = tempfile.mkstemp(prefix="vp_restore_", suffix=".sql")
     try:
-        with open(tmp_path, "r", encoding="utf-8") as f:
-            result = subprocess.run(cmd, stdin=f, stderr=subprocess.PIPE, timeout=300)
+        os.write(fd, contents)
+        os.close(fd)
 
-        if result.returncode != 0:
-            error = result.stderr.decode("utf-8", errors="replace")
-            raise HTTPException(status_code=500, detail=f"Restauración falló: {error}")
+        cmd, cleanup = build_mysql_cmd(
+            host=env.db_host,
+            port=env.db_port,
+            user=env.db_user,
+            password=env.db_password,
+            db_name=env.db_name,
+        )
 
-        log_audit(db, "restore", {"filename": file.filename},
-                  user_id=getattr(current_user, "id", None),
-                  username=getattr(current_user, "username", None))
+        try:
+            with open(tmp_path, "r", encoding="utf-8") as f:
+                result = subprocess.run(cmd, stdin=f, stderr=subprocess.PIPE, timeout=300)
 
-        return APIResponse(message="Base de datos restaurada correctamente", data={"filename": file.filename})
+            if result.returncode != 0:
+                error = result.stderr.decode("utf-8", errors="replace")
+                raise HTTPException(status_code=500, detail=f"Restauración falló: {error}")
 
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="Timeout: la restauración tardó más de 5 minutos.")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="mysql client no encontrado.")
+            log_audit(db, "restore", {"filename": file.filename},
+                      user_id=getattr(current_user, "id", None),
+                      username=getattr(current_user, "username", None))
+
+            return APIResponse(message="Base de datos restaurada correctamente", data={"filename": file.filename})
+
+        except subprocess.TimeoutExpired:
+            raise HTTPException(status_code=500, detail="Timeout: la restauración tardó más de 5 minutos.")
+        except FileNotFoundError:
+            raise HTTPException(status_code=500, detail="mysql client no encontrado.")
+        finally:
+            cleanup()
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

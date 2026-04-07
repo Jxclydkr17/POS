@@ -233,8 +233,11 @@ def get_credit_info(
         except ValueError:
             pass
 
-    movements_total = movements_query.count()
-    movements = movements_query.offset(mov_skip).limit(mov_limit).all()
+    # ── FASE 4 — Fix 4.2: Eliminar COUNT separado con truco limit+1 ──
+    movements = movements_query.offset(mov_skip).limit(mov_limit + 1).all()
+    movements_has_more = len(movements) > mov_limit
+    if movements_has_more:
+        movements = movements[:mov_limit]
 
     # 2b. Aging: movimientos tipo "sale" (FIFO) — necesario para distribución
     # ── FASE 4 — Fix 4.3: Solo cargar (amount, created_at) en vez de objetos ──
@@ -283,8 +286,11 @@ def get_credit_info(
         .order_by(CreditSale.created_at.desc())
     )
 
-    credit_sales_total = sales_query.count()
-    credit_sales = sales_query.offset(sales_skip).limit(sales_limit).all()
+    # ── FASE 4 — Fix 4.2: Eliminar COUNT separado con truco limit+1 ──
+    credit_sales = sales_query.offset(sales_skip).limit(sales_limit + 1).all()
+    credit_sales_has_more = len(credit_sales) > sales_limit
+    if credit_sales_has_more:
+        credit_sales = credit_sales[:sales_limit]
 
     # Mapa: solo extraer credit_sale_ids referenciados en movimientos visibles
     referenced_cs_ids = set()
@@ -352,7 +358,8 @@ def get_credit_info(
         # 👇 movimientos paginados CON sale_id
         "movements": {
             "items": movement_items,
-            "total": movements_total
+            "total": mov_skip + len(movements) + (1 if movements_has_more else 0),
+            "has_more": movements_has_more,
         },
 
         # 👇 ventas a crédito paginadas
@@ -366,6 +373,7 @@ def get_credit_info(
                 }
                 for cs in credit_sales
             ],
-            "total": credit_sales_total
+            "total": sales_skip + len(credit_sales) + (1 if credit_sales_has_more else 0),
+            "has_more": credit_sales_has_more,
         }
     }

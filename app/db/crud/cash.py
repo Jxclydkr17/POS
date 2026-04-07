@@ -1,5 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from app.db.models.cash_session import CashSession
 from app.db.models.cash_movement import CashMovement
@@ -10,6 +11,14 @@ from app.db.models.customer import Customer
 from app.constants.payment_methods import ALL_PAYMENT_METHODS
 from app.utils.dt import utcnow, today_cr
 from app.services.settings_service import get_business_name
+
+
+# ── Helper: convierte cualquier valor numérico a Decimal de forma segura ──
+def _to_dec(value) -> Decimal:
+    """Convierte float/int/str/Decimal a Decimal sin pérdida IEEE 754."""
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value or 0))
 
 
 # ==========================================================
@@ -47,9 +56,10 @@ def open_session(db: Session, opening_amount: float) -> CashSession:
             return session
         raise ValueError("La caja de hoy ya fue cerrada.")
 
+    # ── FASE 1: Decimal para almacenamiento ──
     session = CashSession(
         date=today,
-        opening_amount=float(opening_amount),
+        opening_amount=_to_dec(opening_amount),
         status="open",
         created_at=utcnow()
     )
@@ -64,11 +74,14 @@ def open_session(db: Session, opening_amount: float) -> CashSession:
 # 🟨 Agregar movimiento de caja
 # ==========================================================
 def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
+    # ── FASE 1: Decimal para almacenamiento ──
+    amount_dec = _to_dec(data.amount)
+
     movement = CashMovement(
         cash_session_id=cash_session_id,   
         type=data.type.lower(),             
         concept=data.concept,
-        amount=float(data.amount),
+        amount=amount_dec,
         source=data.source or "MANUAL",     
         description=data.concept,
         created_at=utcnow()
@@ -81,7 +94,7 @@ def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
         expense_payload = {
             "category": data.expense_category or "Gastos de caja",
             "description": data.concept,
-            "amount": float(data.amount),
+            "amount": float(amount_dec),  # expense_service aún usa float
             "payment_method": "Efectivo",
             "date": today_cr().strftime("%Y-%m-%d"),
         }
@@ -119,14 +132,18 @@ def get_cash_report(db: Session, report_date: date) -> dict:
         .all()
     )
 
-    total_sales = sum(float(s.total) for s in sales)
+    # ── FASE 1: Aritmética en Decimal ──
+    total_sales = sum((_to_dec(s.total) for s in sales), Decimal("0"))
 
     # Desglose por método de pago
     payment_breakdown = {}
     for method in ALL_PAYMENT_METHODS:
-        method_total = sum(float(s.total) for s in sales if s.payment_method == method)
+        method_total = sum(
+            (_to_dec(s.total) for s in sales if s.payment_method == method),
+            Decimal("0"),
+        )
         if method_total > 0:  # Solo incluir métodos con ventas
-            payment_breakdown[method] = round(method_total, 2)
+            payment_breakdown[method] = float(method_total)
 
     # Obtener movimientos de caja
     movements = (
@@ -136,39 +153,32 @@ def get_cash_report(db: Session, report_date: date) -> dict:
         .all()
     )
 
-    # Calcular entradas y salidas
-    # Las entradas YA incluyen las ventas en efectivo registradas como movimientos
+    # Calcular entradas y salidas en Decimal
     total_in = sum(
-        float(m.amount) 
-        for m in movements 
-        if m.type == "in"
+        (_to_dec(m.amount) for m in movements if m.type == "in"),
+        Decimal("0"),
     )
     
     total_out = sum(
-        float(m.amount) 
-        for m in movements 
-        if m.type == "out"
+        (_to_dec(m.amount) for m in movements if m.type == "out"),
+        Decimal("0"),
     )
 
     # 🔥 CÁLCULO CORRECTO DEL ESPERADO
     # Esperado = Apertura + Entradas - Salidas
     # NO sumamos total_sales porque las ventas en efectivo ya están en "Entradas"
     # Las ventas con otros métodos (Tarjeta, Crédito, SINPE) no entran a la caja física
-    expected_closing = (
-        float(session.opening_amount) + 
-        float(total_in) - 
-        float(total_out)
-    )
+    expected_closing = _to_dec(session.opening_amount) + total_in - total_out
 
     # Si la caja está cerrada, usar los valores registrados
     # Si está abierta, calcular en tiempo real
     if session.status == "closed":
-        closing_amount = float(session.closing_amount or 0)
-        difference = float(session.difference or 0)
+        closing_amount = _to_dec(session.closing_amount)
+        difference = _to_dec(session.difference)
         status = "closed"
     else:
-        closing_amount = 0
-        difference = 0
+        closing_amount = Decimal("0")
+        difference = Decimal("0")
         status = "open"
 
     # ─────────────────────────────────────────────────────────
@@ -186,7 +196,7 @@ def get_cash_report(db: Session, report_date: date) -> dict:
             "id": s.id,
             "customer": cname,
             "payment_method": s.payment_method or "Efectivo",
-            "total": float(s.total),
+            "total": float(_to_dec(s.total)),
             "status": s.status,
             "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
         })
@@ -194,7 +204,7 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     movements_list = [
         {
             "type": "Entrada" if m.type == "in" else "Salida",
-            "amount": float(m.amount),
+            "amount": float(_to_dec(m.amount)),
             "description": m.description or "",
             "source": m.source,
             "time": m.created_at.strftime("%H:%M:%S") if m.created_at else "N/A",
@@ -206,17 +216,18 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     # reemplaza el legacy load_settings() de app/config/settings.py
     empresa_nombre = get_business_name(db)
 
+    # ── FASE 1: float() solo aquí, al construir el JSON de respuesta ──
     return {
         "date": str(report_date),
         "status": status,
-        "opening_amount": float(session.opening_amount),
-        "entries": round(total_in, 2),
-        "exits": round(total_out, 2),
-        "total_sales": round(total_sales, 2),
-        "expected": round(expected_closing, 2),
-        "expected_closing": round(expected_closing, 2),  # Mantener compatibilidad
-        "closing_amount": round(closing_amount, 2),
-        "difference": round(difference, 2),
+        "opening_amount": float(_to_dec(session.opening_amount)),
+        "entries": float(total_in),
+        "exits": float(total_out),
+        "total_sales": float(total_sales),
+        "expected": float(expected_closing),
+        "expected_closing": float(expected_closing),  # Mantener compatibilidad
+        "closing_amount": float(closing_amount),
+        "difference": float(difference),
         "payment_breakdown": payment_breakdown,
         "sales": sales_list,               # FIX #9: nuevo
         "movements": movements_list,       # FIX #9: nuevo

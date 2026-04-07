@@ -71,7 +71,8 @@ def list_products(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    data = get_products(
+    # ── FASE 4 — Fix 4.1: Una sola llamada retorna data + total ──
+    data, total = get_products(
         db,
         search,
         skip,
@@ -79,14 +80,6 @@ def list_products(
         supplier_id=supplier_id,
         category_id=category_id,
         is_active=is_active
-    )
-
-    total = count_products(
-        db,
-        search=search,
-        supplier_id=supplier_id,
-        category_id=category_id,
-        is_active=is_active,
     )
 
     return APIResponse(message="Productos cargados", data=data, total=total)

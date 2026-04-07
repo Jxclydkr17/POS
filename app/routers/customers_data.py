@@ -1,10 +1,10 @@
-from datetime import date
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db.models.customer import Customer
 from app.db.models.sale import Sale
 from app.db.models.credit import Credit
+from app.utils.dt import today_cr
 
 
 def get_customers_credit_base_data(db: Session):
@@ -17,7 +17,8 @@ def get_customers_credit_base_data(db: Session):
       (tabla credits, type='payment')
     """
 
-    today = date.today()
+    # ── FASE 3 — Fix 3.2: today_cr() en vez de date.today() ──
+    today = today_cr()
 
     # ── Sub-query: último abono real por cliente ──
     last_payment_sq = (

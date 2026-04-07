@@ -265,8 +265,43 @@ def create_product(db: Session, data: ProductCreate):
 
 
 # -----------------------------
-# LIST
+# LIST + COUNT (query única)
+# ── FASE 4 — Fix 4.1: Construir filtros UNA sola vez ──
+# Antes: get_products() y count_products() construían los mismos
+# filtros independientemente (doble trabajo en Python y 2 queries
+# con WHERE idéntico). Ahora una sola función retorna (data, total).
 # -----------------------------
+def _build_product_query(
+    db: Session,
+    search: str = None,
+    supplier_id: int = None,
+    category_id: int = None,
+    is_active: bool | None = True,
+):
+    """Construye la query base con filtros aplicados (reutilizable)."""
+    query = db.query(Product)
+
+    if is_active is not None:
+        query = query.filter(Product.is_active == is_active)
+
+    if supplier_id:
+        query = query.filter(Product.supplier_id == supplier_id)
+
+    if category_id:
+        query = query.filter(Product.category_id == category_id)
+
+    if search:
+        query = query.filter(
+            or_(
+                Product.name.ilike(f"%{search}%"),
+                Product.code.ilike(f"%{search}%"),
+                Product.barcode.ilike(f"%{search}%")
+            )
+        )
+
+    return query
+
+
 def get_products(
     db: Session,
     search: str = None,
@@ -275,35 +310,17 @@ def get_products(
     supplier_id: int = None,
     category_id: int = None,
     is_active: bool | None = True,
-):
-    query = db.query(Product)
+) -> tuple[list[dict], int]:
+    """Retorna (lista_productos, total) construyendo los filtros una sola vez."""
+    query = _build_product_query(db, search, supplier_id, category_id, is_active)
 
-    if is_active is not None:
-        query = query.filter(Product.is_active == is_active)
-
-    if supplier_id:
-        query = query.filter(Product.supplier_id == supplier_id)
-
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
-
-    if search:
-        query = query.filter(
-            or_(
-                Product.name.ilike(f"%{search}%"),
-                Product.code.ilike(f"%{search}%"),
-                Product.barcode.ilike(f"%{search}%")
-            )
-        )
-
+    total = query.count()
     products = query.order_by(Product.id.desc()).offset(skip).limit(limit).all()
-    return [_product_to_dict(p) for p in products]
+
+    return [_product_to_dict(p) for p in products], total
 
 
-# -----------------------------
-# COUNT (para paginación)
-# ✅ Paso 10 — mismos filtros que get_products, devuelve solo el total
-# -----------------------------
+# Mantener count_products por compatibilidad (usa la misma query base)
 def count_products(
     db: Session,
     search: str = None,
@@ -311,27 +328,7 @@ def count_products(
     category_id: int = None,
     is_active: bool | None = True,
 ) -> int:
-    query = db.query(Product)
-
-    if is_active is not None:
-        query = query.filter(Product.is_active == is_active)
-
-    if supplier_id:
-        query = query.filter(Product.supplier_id == supplier_id)
-
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
-
-    if search:
-        query = query.filter(
-            or_(
-                Product.name.ilike(f"%{search}%"),
-                Product.code.ilike(f"%{search}%"),
-                Product.barcode.ilike(f"%{search}%")
-            )
-        )
-
-    return query.count()
+    return _build_product_query(db, search, supplier_id, category_id, is_active).count()
 
 
 # -----------------------------

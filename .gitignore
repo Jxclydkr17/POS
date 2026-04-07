@@ -33,7 +33,7 @@ env/
 # --- Archivos generados en runtime ---
 data/pdfs/
 data/backups/
-app/pdfs/
+app/pdfs/*.pdf
 app/backups/
 generated_pdfs/
 exports/
@@ -55,6 +55,17 @@ desktop.ini
 *.spec
 dist/
 build/
+
+# --- Certificados y credenciales ---
+certs/
+*.p12
+*.pfx
+*.pem
+*.key
+
+# --- Uploads de usuario ---
+app/uploads/logos/*
+!app/uploads/logos/.gitkeep
 
 # --- Mantener estructura de carpetas vacías ---
 !data/pdfs/.gitkeep

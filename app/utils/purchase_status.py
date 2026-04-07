@@ -1,4 +1,5 @@
-from datetime import date
+from app.utils.dt import today_cr
+
 
 def evaluate_purchase_status(purchase):
     """
@@ -7,7 +8,8 @@ def evaluate_purchase_status(purchase):
     if purchase.status == "pagado":
         return "pagado"
 
-    today = date.today()
+    # ── FASE 3 — Fix 3.2: today_cr() en vez de date.today() ──
+    today = today_cr()
     due = purchase.due_date
 
     if not due:

@@ -1,8 +1,16 @@
+from decimal import Decimal
 from sqlalchemy import func, case
 from datetime import datetime
 
 from app.db.models.cash_movement import CashMovement
 from app.utils.dt import utcnow
+
+
+def _to_dec(value) -> Decimal:
+    """Convierte cualquier valor numérico a Decimal de forma segura."""
+    if isinstance(value, Decimal):
+        return value
+    return Decimal(str(value or 0))
 
 
 def close_cash_session(db, cash_session, closing_amount: float):
@@ -26,11 +34,16 @@ def close_cash_session(db, cash_session, closing_amount: float):
         or 0
     )
 
-    expected = float(cash_session.opening_amount) + float(totals)
-    difference = float(closing_amount) - expected
+    # ── FASE 1: Aritmética en Decimal ──
+    opening_dec = _to_dec(cash_session.opening_amount)
+    totals_dec = _to_dec(totals)
+    closing_dec = _to_dec(closing_amount)
+
+    expected = opening_dec + totals_dec
+    difference = closing_dec - expected
 
     cash_session.expected_closing = expected
-    cash_session.closing_amount = float(closing_amount)
+    cash_session.closing_amount = closing_dec
     cash_session.difference = difference
     cash_session.status = "closed"
     cash_session.closed_at = utcnow()
@@ -38,10 +51,11 @@ def close_cash_session(db, cash_session, closing_amount: float):
     db.commit()
     db.refresh(cash_session)
 
+    # ── float() solo al construir la respuesta JSON ──
     return {
-        "opening_amount": float(cash_session.opening_amount),
-        "expected_closing": expected,
-        "closing_amount": float(closing_amount),
-        "difference": difference,
+        "opening_amount": float(opening_dec),
+        "expected_closing": float(expected),
+        "closing_amount": float(closing_dec),
+        "difference": float(difference),
         "status": cash_session.status,
     }

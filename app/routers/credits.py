@@ -1,4 +1,6 @@
 # app/routers/credits.py
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -65,10 +67,13 @@ def pay_credit(
     user: dict = Depends(get_current_user)
 ):
     try:
+        # ── FASE 1: Decimal(str()) en vez de float() para no perder precisión ──
+        amount_dec = Decimal(str(payload.amount))
+
         payment = add_credit_payment(
             db, 
             customer_id, 
-            float(payload.amount),
+            amount_dec,
             payload.payment_method
         )
         db.commit()

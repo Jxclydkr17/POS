@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import date, datetime, timedelta
+from app.utils.dt import today_cr
 import io, csv
 
 from app.db.database import get_db
@@ -175,7 +176,7 @@ def customer_profile(
     if not customer:
         raise HTTPException(status_code=404, detail="Cliente no encontrado")
 
-    today = date.today()
+    today = today_cr()
 
     # Ventas totales (cash + crédito)
     sales_data = (
@@ -279,7 +280,7 @@ def aging_report(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    today = date.today()
+    today = today_cr()
 
     customers_with_debt = (
         db.query(Customer)

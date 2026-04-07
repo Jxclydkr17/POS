@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 from datetime import date, timedelta
+from app.utils.dt import today_cr
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
@@ -58,7 +59,7 @@ def purchases_dashboard(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    today = date.today()
+    today = today_cr()
     week_end = today + timedelta(days=7)
     three_days = today + timedelta(days=3)
     month_start = today.replace(day=1)
@@ -256,7 +257,7 @@ def notify_expiring_purchases(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    today = date.today()
+    today = today_cr()
     limit_date = today + timedelta(days=days_ahead)
 
     suppliers_map = {s.id: s.name for s in db.query(Supplier).all()}
