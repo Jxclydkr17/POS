@@ -1,6 +1,6 @@
 """create_ai_config_table
 
-Revision ID: e6f7_ai_config
+Revision ID: 870a23186c5d (antes: e6f7_ai_config)
 Revises: d4e5_fix_remaining_floats
 Create Date: 2026-04-04 20:00:00.000000
 
@@ -15,8 +15,8 @@ from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
-revision: str = "e6f7_ai_config"
-down_revision: Union[str, Sequence[str], None] = "d4e5_fix_remaining_floats"
+revision: str = "870a23186c5d"
+down_revision: Union[str, Sequence[str], None] = "b4c0d051c46c"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

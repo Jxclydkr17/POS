@@ -1,6 +1,6 @@
 """create_supplier_products_table
 
-Revision ID: c5d6_supplier_products
+Revision ID: 4f8930c14162 (antes: c5d6_supplier_products)
 Revises: b3c4_float_to_numeric
 Create Date: 2026-03-30 16:00:00.000000
 
@@ -15,8 +15,8 @@ from sqlalchemy import inspect
 
 
 # revision identifiers, used by Alembic.
-revision: str = "c5d6_supplier_products"
-down_revision: Union[str, Sequence[str], None] = "b3c4_float_to_numeric"
+revision: str = "4f8930c14162"
+down_revision: Union[str, Sequence[str], None] = "9fe26d9f243d"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

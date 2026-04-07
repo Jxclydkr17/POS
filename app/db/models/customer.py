@@ -84,11 +84,15 @@ class Customer(Base):
         lazy="select",
     )
 
-        # 🆕 REPs electrónicos del cliente
+    # ── FASE 3 — Fix 3.4: REPs sin cascade delete ──
+    # Igual que credit_sales y credit_movements: si se borra un cliente
+    # por error, los REPs (documentos electrónicos ante Hacienda) no deben
+    # eliminarse. Son registros fiscales con valor legal.
     electronic_reps = relationship(
         "ElectronicRep",
         back_populates="customer",
-        cascade="all, delete-orphan",
+        cascade="save-update, merge",
+        passive_deletes=True,
     )
 
     # ═══════════════════════════════════════════════════════════

@@ -8,8 +8,8 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-revision: str = "g1h2_user_permissions"
-down_revision: Union[str, Sequence[str], None] = "e6f7_ai_config"
+revision: str = "872473d1b86f"
+down_revision: Union[str, Sequence[str], None] = "870a23186c5d"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
