@@ -7,6 +7,7 @@ import traceback
 
 from ui.services.dashboard_metrics_service import fetch_ai_insights_today
 from ui.components.toast_notifier import show_toast
+from ui.session_manager import session
 import logging
 
 
@@ -160,7 +161,8 @@ class AIInsightsPanel(QWidget):
         self.priority_limit = 5
         self._all_alerts = []
 
-        self.reload()
+        # No llamar reload() aquí: DashboardView.refresh_all() lo invoca
+        # una vez que la sesión ya está activa.
 
     # ─────────────────────────────────────────
     # PASO 1 — Clasificar alerta en sección
@@ -351,6 +353,12 @@ class AIInsightsPanel(QWidget):
         logging.debug("\n" + "─"*50)
         logging.debug("🧠 AIInsightsPanel.reload() iniciado...")
         logging.debug("─"*50)
+
+        # Guardia: no hacer requests si no hay sesión activa
+        if not session.is_logged_in():
+            logging.warning("⚠️ reload() omitido: no hay sesión activa.")
+            self.summary_label.setText("Inicia sesión para ver los insights.")
+            return
 
         self.btn_refresh.setEnabled(False)
         self._clear_alerts()

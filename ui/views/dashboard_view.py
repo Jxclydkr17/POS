@@ -199,8 +199,9 @@ QScrollBar::handle:vertical:hover {
         self.timer.timeout.connect(self.refresh_all)
         self.timer.start()
 
-        # Primera carga
-        self.refresh_all()
+        # Primera carga diferida: espera al siguiente ciclo del event loop
+        # para garantizar que la sesión ya está activa antes de hacer requests.
+        QTimer.singleShot(0, self.refresh_all)
 
     # --------------------------------
     # Señal de navegación
@@ -229,6 +230,11 @@ QScrollBar::handle:vertical:hover {
     # Refresh completo
     # --------------------------------
     def refresh_all(self):
+        # Guardia: no hacer requests si no hay sesión activa
+        if not session.is_logged_in():
+            logging.warning("⚠️ refresh_all() omitido: no hay sesión activa.")
+            return
+
         logging.debug("\n" + "="*60)
         logging.debug("🔄 Iniciando refresh_all()...")
         logging.debug("="*60)
