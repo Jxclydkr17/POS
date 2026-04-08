@@ -59,11 +59,11 @@ def get_sales(
 # GET /sales/today
 # ═══════════════════════════════════════════════════
 @router.get("/today", dependencies=[Depends(get_current_user)])
-def get_today_sales(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def get_today_sales(skip: int = 0, limit: int = 100, last_id: int = None, db: Session = Depends(get_db)):
     today = today_cr()
     start = datetime.combine(today, datetime.min.time())
     end = datetime.combine(today, datetime.max.time()) + timedelta(hours=6)  # buffer legacy UTC
-    data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500))
+    data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500), last_id=last_id)
     return success_response(message="Ventas del día", data=data)
 
 
@@ -71,7 +71,7 @@ def get_today_sales(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
 # GET /sales/date/{report_date}
 # ═══════════════════════════════════════════════════
 @router.get("/date/{report_date}", dependencies=[Depends(get_current_user)])
-def get_sales_by_date(report_date: str, skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+def get_sales_by_date(report_date: str, skip: int = 0, limit: int = 100, last_id: int = None, db: Session = Depends(get_db)):
     try:
         target_date = date.fromisoformat(report_date)
     except ValueError:
@@ -79,7 +79,7 @@ def get_sales_by_date(report_date: str, skip: int = 0, limit: int = 100, db: Ses
 
     start = datetime.combine(target_date, datetime.min.time())
     end = datetime.combine(target_date, datetime.max.time()) + timedelta(hours=6)  # buffer legacy UTC
-    data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500))
+    data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500), last_id=last_id)
     return success_response(message=f"Ventas del {report_date}", data=data)
 
 

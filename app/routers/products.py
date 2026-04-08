@@ -15,7 +15,6 @@ from app.db.models.inventory_movement import InventoryMovement     # ✅ FASE 7
 from app.db.crud.product_crud import (
     create_product,
     get_products,
-    count_products,
     get_product,
     update_product,
     delete_product,

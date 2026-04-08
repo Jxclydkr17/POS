@@ -516,15 +516,27 @@ def list_sales_paginated(
 def get_sales_by_range(
     db: Session, start: datetime, end: datetime,
     skip: int = 0, limit: int = 500,
+    last_id: int | None = None,
 ) -> list[dict]:
-    sales = (
+    """
+    FASE 4 — Fix 4.3: Keyset pagination.
+    Si se pasa last_id, filtra Sale.id < last_id (O(1) seek)
+    en vez de OFFSET que degrada con offsets grandes.
+    Si no se pasa, mantiene offset/limit por retrocompatibilidad.
+    """
+    query = (
         db.query(Sale)
         .options(joinedload(Sale.customer))
         .filter(Sale.created_at >= start, Sale.created_at <= end, Sale.status != "ANULADA")
-        .order_by(Sale.created_at.desc())
-        .offset(skip).limit(limit)
-        .all()
     )
+
+    if last_id is not None:
+        query = query.filter(Sale.id < last_id)
+    else:
+        query = query.offset(skip)
+
+    sales = query.order_by(Sale.id.desc()).limit(limit).all()
+
     result = []
     for s in sales:
         cname = s.customer.name if s.customer else "Cliente General"

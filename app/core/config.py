@@ -112,6 +112,8 @@ class Settings(BaseSettings):
     secret_key: str = ""
 
     openai_api_key: str | None = None
+    anthropic_api_key: str | None = None
+    google_api_key: str | None = None
     email_user: str | None = None
     email_pass: str | None = None
 

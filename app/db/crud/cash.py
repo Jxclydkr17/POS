@@ -51,6 +51,10 @@ def open_session(db: Session, opening_amount: float) -> CashSession:
     today = today_cr()
     session = get_today_session(db)
 
+    # ── FASE 3 — Fix 3.1: No permitir monto de apertura negativo ──
+    if _to_dec(opening_amount) < 0:
+        raise ValueError("El monto de apertura no puede ser negativo.")
+
     if session:
         if session.status == "open":
             return session

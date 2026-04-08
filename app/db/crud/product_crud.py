@@ -311,13 +311,24 @@ def get_products(
     category_id: int = None,
     is_active: bool | None = True,
 ) -> tuple[list[dict], int]:
-    """Retorna (lista_productos, total) construyendo los filtros una sola vez."""
-    query = _build_product_query(db, search, supplier_id, category_id, is_active)
+    """Retorna (lista_productos, total) en UNA sola query (window count)."""
+    base = _build_product_query(db, search, supplier_id, category_id, is_active)
 
-    total = query.count()
-    products = query.order_by(Product.id.desc()).offset(skip).limit(limit).all()
+    # ── FASE 4 — Fix 4.1: window function evita el COUNT separado ──
+    rows = (
+        base
+        .add_columns(func.count(Product.id).over().label("_total"))
+        .order_by(Product.id.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
-    return [_product_to_dict(p) for p in products], total
+    if not rows:
+        return [], 0
+
+    total = rows[0]._total
+    return [_product_to_dict(p) for p, _ in rows], total
 
 
 # Mantener count_products por compatibilidad (usa la misma query base)

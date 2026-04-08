@@ -46,6 +46,8 @@ from app.services.settings_service import (
     log_audit,
     get_audit_log,
 )
+from app.core.config import is_sqlite
+from app.services import backup_service
 
 logger = logging.getLogger(__name__)
 
@@ -221,110 +223,76 @@ def get_env_status():
 
 # ============================================================
 # 6.1: POST /settings/backup — Crear backup de DB
-# ── FASE 2 — Fix 2.1: Credenciales vía --defaults-extra-file ──
+# ── FASE 3 — Fix 3.4: Soporta MySQL y SQLite vía backup_service ──
 # ============================================================
 @router.post("/backup", dependencies=[Depends(require_role("admin"))])
 def create_backup(db: Session = Depends(get_db), current_user=Depends(get_current_user)):
-    """Ejecuta mysqldump y retorna el archivo .sql para descarga."""
-    from app.core.config import settings as env
-    from app.utils.mysql_safe import build_mysqldump_cmd
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"backup_{env.db_name}_{timestamp}.sql"
-    filepath = os.path.join(BACKUP_DIR, filename)
-
-    cmd, cleanup = build_mysqldump_cmd(
-        host=env.db_host,
-        port=env.db_port,
-        user=env.db_user,
-        password=env.db_password,
-        db_name=env.db_name,
-        extra_args=["--single-transaction", "--routines", "--triggers"],
-    )
-
+    """Crea un backup de la BD (MySQL o SQLite) y lo retorna para descarga."""
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            result = subprocess.run(cmd, stdout=f, stderr=subprocess.PIPE, timeout=120)
+        filepath = backup_service.create_backup(tag="manual")
+    except RuntimeError as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-        if result.returncode != 0:
-            error = result.stderr.decode("utf-8", errors="replace")
-            raise HTTPException(status_code=500, detail=f"mysqldump falló: {error}")
+    filename = os.path.basename(filepath)
+    file_size = os.path.getsize(filepath)
 
-        file_size = os.path.getsize(filepath)
+    log_audit(db, "backup", {"filename": filename, "size_bytes": file_size},
+              user_id=getattr(current_user, "id", None),
+              username=getattr(current_user, "username", None))
 
-        log_audit(db, "backup", {"filename": filename, "size_bytes": file_size},
-                  user_id=getattr(current_user, "id", None),
-                  username=getattr(current_user, "username", None))
-
-        return FileResponse(
-            path=filepath,
-            filename=filename,
-            media_type="application/sql",
-        )
-
-    except subprocess.TimeoutExpired:
-        raise HTTPException(status_code=500, detail="Timeout: el backup tardó más de 2 minutos.")
-    except FileNotFoundError:
-        raise HTTPException(status_code=500, detail="mysqldump no encontrado. Verifica que MySQL esté instalado.")
-    finally:
-        cleanup()
+    media = "application/x-sqlite3" if filepath.endswith(".db") else "application/sql"
+    return FileResponse(path=filepath, filename=filename, media_type=media)
 
 
 # ============================================================
 # 6.1: POST /settings/restore — Restaurar backup
-# ── FASE 2 — Fixes 2.1, 2.2, 2.3 ──
+# ── FASE 3 — Fix 3.4: Soporta MySQL (.sql) y SQLite (.db) ──
+# ── FASE 2 — Fixes 2.1, 2.2, 2.3 se mantienen para MySQL ──
 # ============================================================
 @router.post("/restore", dependencies=[Depends(require_role("admin"))])
 def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db),
                    current_user=Depends(get_current_user)):
-    """Recibe un archivo .sql y lo ejecuta vía mysql CLI."""
-    from app.core.config import settings as env
-    from app.utils.mysql_safe import build_mysql_cmd
+    """Restaura la BD desde un archivo .sql (MySQL) o .db (SQLite)."""
 
-    if not file.filename.endswith(".sql"):
-        raise HTTPException(status_code=400, detail="El archivo debe ser .sql")
+    fname = file.filename or ""
+    is_sql = fname.endswith(".sql")
+    is_db = fname.endswith(".db")
+
+    if is_sqlite():
+        if not is_db:
+            raise HTTPException(status_code=400,
+                                detail="Para SQLite el archivo debe ser .db")
+    else:
+        if not is_sql:
+            raise HTTPException(status_code=400,
+                                detail="Para MySQL el archivo debe ser .sql")
 
     contents = file.file.read()
-    if len(contents) > 100 * 1024 * 1024:  # Max 100MB
+    if len(contents) > 100 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="El archivo excede 100MB.")
 
-    # ── FASE 2 — Fix 2.2: Validar contenido SQL ──
-    _validate_sql_content(contents)
+    # Validación SQL solo para MySQL
+    if is_sql:
+        _validate_sql_content(contents)
 
-    # ── FASE 2 — Fix 2.3: Archivo temporal seguro ──
-    fd, tmp_path = tempfile.mkstemp(prefix="vp_restore_", suffix=".sql")
+    # Guardar en temporal seguro
+    suffix = ".db" if is_db else ".sql"
+    fd, tmp_path = tempfile.mkstemp(prefix="vp_restore_", suffix=suffix)
     try:
         os.write(fd, contents)
         os.close(fd)
 
-        cmd, cleanup = build_mysql_cmd(
-            host=env.db_host,
-            port=env.db_port,
-            user=env.db_user,
-            password=env.db_password,
-            db_name=env.db_name,
-        )
-
         try:
-            with open(tmp_path, "r", encoding="utf-8") as f:
-                result = subprocess.run(cmd, stdin=f, stderr=subprocess.PIPE, timeout=300)
+            backup_service.restore_backup(tmp_path)
+        except (RuntimeError, FileNotFoundError) as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
-            if result.returncode != 0:
-                error = result.stderr.decode("utf-8", errors="replace")
-                raise HTTPException(status_code=500, detail=f"Restauración falló: {error}")
+        log_audit(db, "restore", {"filename": fname},
+                  user_id=getattr(current_user, "id", None),
+                  username=getattr(current_user, "username", None))
 
-            log_audit(db, "restore", {"filename": file.filename},
-                      user_id=getattr(current_user, "id", None),
-                      username=getattr(current_user, "username", None))
-
-            return APIResponse(message="Base de datos restaurada correctamente", data={"filename": file.filename})
-
-        except subprocess.TimeoutExpired:
-            raise HTTPException(status_code=500, detail="Timeout: la restauración tardó más de 5 minutos.")
-        except FileNotFoundError:
-            raise HTTPException(status_code=500, detail="mysql client no encontrado.")
-        finally:
-            cleanup()
+        return APIResponse(message="Base de datos restaurada correctamente",
+                           data={"filename": fname})
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)

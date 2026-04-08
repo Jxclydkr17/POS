@@ -50,9 +50,27 @@ def _get_provider_instance(provider_name: str) -> BaseLLMProvider:
 
 def _resolve_api_key_from_env(provider_name: str) -> Optional[str]:
     """
-    Busca la API key del proveedor en variables de entorno y archivos .env.
-    Se usa como FALLBACK si no hay config en BD.
+    Busca la API key del proveedor.
+    Prioridad:
+      1) Settings de pydantic (consolida .env + env vars)
+      2) Variables de entorno directas (fallback legacy)
     """
+    # ── FASE 5 — Fix 5.1: Leer desde settings (soporta los 3 providers) ──
+    try:
+        from app.core.config import settings as _settings
+        settings_attr_map = {
+            "anthropic": "anthropic_api_key",
+            "openai": "openai_api_key",
+            "google": "google_api_key",
+        }
+        attr = settings_attr_map.get(provider_name)
+        if attr:
+            val = getattr(_settings, attr, None)
+            if val and val.strip():
+                return val.strip()
+    except Exception:
+        pass
+
     env_var_map = {
         "anthropic": "ANTHROPIC_API_KEY",
         "openai": "OPENAI_API_KEY",
@@ -63,23 +81,10 @@ def _resolve_api_key_from_env(provider_name: str) -> Optional[str]:
     if not env_var:
         return None
 
-    # 1) Variable de entorno directa
+    # Variable de entorno directa (fallback)
     key = os.environ.get(env_var, "").strip()
     if key:
         return key
-
-    # 2) Archivo .env en raíz del proyecto
-    for env_path in [".env", "../.env", "../../.env"]:
-        try:
-            with open(env_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith(f"{env_var}="):
-                        val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                        if val:
-                            return val
-        except (FileNotFoundError, PermissionError):
-            continue
 
     return None
 
