@@ -5,8 +5,10 @@ Servicio centralizado de configuración de negocio.
 Fase 6: 6.2 currency helper, 6.4 audit logging.
 """
 
+import os
 import json
 import logging
+import requests
 from decimal import Decimal
 from sqlalchemy.orm import Session
 
@@ -14,10 +16,22 @@ from app.db.models.settings import Settings
 from app.db.models.settings_audit import SettingsAuditLog
 from app.schemas.settings import SettingsOut, SettingsUpdate
 
+
 logger = logging.getLogger(__name__)
 
 _FALLBACK_BUSINESS_NAME = "Mi Negocio"
 _FALLBACK_TAX = "13"
+
+BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000/api/v1")
+
+
+def _headers() -> dict:
+    """Headers por defecto para llamadas internas a la API."""
+    token = os.getenv("API_TOKEN", "")
+    h = {"Accept": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
 
 
 def get_settings(db: Session) -> Settings:
@@ -48,7 +62,6 @@ def update_settings(db: Session, data: SettingsUpdate, user_id: int = None, user
     changes = {}
     for key, new_value in update_data.items():
         old_value = getattr(settings, key, None)
-        # Convertir Decimal para comparación
         if isinstance(new_value, Decimal):
             new_cmp = float(new_value)
             old_cmp = float(old_value) if old_value is not None else None
@@ -64,7 +77,6 @@ def update_settings(db: Session, data: SettingsUpdate, user_id: int = None, user
     db.commit()
     db.refresh(settings)
 
-    # 6.4: Escribir audit log si hubo cambios
     if changes:
         log_audit(db, "update_settings", changes, user_id=user_id, username=username)
 
@@ -83,8 +95,7 @@ def get_business_name(db: Session) -> str:
 
 
 def get_business_info(db: Session) -> dict:
-    """Retorna info del negocio desde IssuerProfile (con fallback a Settings).
-    Fase 6 — elimina hardcoding de nombre/email/teléfono."""
+    """Retorna info del negocio desde IssuerProfile (con fallback a Settings)."""
     from app.db.models.issuer_profile import IssuerProfile
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
     settings = get_settings(db)
@@ -132,7 +143,6 @@ def log_audit(db: Session, action: str, changes: dict = None,
         db.commit()
     except Exception as e:
         logger.error(f"Error registrando auditoría: {e}")
-        # No falla la operación principal si la auditoría falla
         db.rollback()
 
 
@@ -155,3 +165,53 @@ def get_audit_log(db: Session, limit: int = 50) -> list:
         }
         for r in rows
     ]
+
+
+# ─────────────────────────────────────────────────────────
+# CONFIG-UI: Hacienda y Email (configuración desde la UI)
+# ─────────────────────────────────────────────────────────
+
+API_URL_HACIENDA_CONFIG = f"{BASE_URL}/settings/hacienda-config"
+API_URL_HACIENDA_CERT = f"{BASE_URL}/settings/hacienda-cert"
+API_URL_EMAIL_CONFIG = f"{BASE_URL}/settings/email-config"
+
+
+def fetch_hacienda_config() -> dict:
+    r = requests.get(API_URL_HACIENDA_CONFIG, headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def save_hacienda_config(payload: dict) -> dict:
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    r = requests.put(API_URL_HACIENDA_CONFIG, headers=headers, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def upload_hacienda_cert(filepath: str, cert_password: str) -> dict:
+    filename = os.path.basename(filepath)
+    with open(filepath, "rb") as f:
+        files = {"file": (filename, f, "application/x-pkcs12")}
+        data = {"cert_password": cert_password}
+        r = requests.post(
+            API_URL_HACIENDA_CERT, headers=_headers(),
+            files=files, data=data, timeout=30,
+        )
+    r.raise_for_status()
+    return r.json()
+
+
+def fetch_email_config() -> dict:
+    r = requests.get(API_URL_EMAIL_CONFIG, headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def save_email_config(payload: dict) -> dict:
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    r = requests.put(API_URL_EMAIL_CONFIG, headers=headers, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})

@@ -255,9 +255,9 @@ def _send_proforma_email(
 ):
     """Envía el PDF de proforma por correo. Mismo patrón que email_utils.py."""
     import yagmail
-    from app.core.config import settings
+    from app.core.credentials import email_user, email_pass
 
-    if not settings.email_user or not settings.email_pass:
+    if not email_user() or not email_pass():
         raise HTTPException(
             status_code=500,
             detail="El correo del sistema no está configurado.",
@@ -296,7 +296,7 @@ def _send_proforma_email(
     </div>
     """
 
-    yag = yagmail.SMTP(settings.email_user, settings.email_pass)
+    yag = yagmail.SMTP(email_user(), email_pass())
     yag.send(
         to=recipient,
         subject=subject,

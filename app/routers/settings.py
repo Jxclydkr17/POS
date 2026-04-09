@@ -625,3 +625,171 @@ def get_ai_providers_endpoint(db: Session = Depends(get_db)):
     providers_raw = get_available_providers(db)
     providers = [AIProviderInfo(**p) for p in providers_raw]
     return APIResponse(message="Proveedores disponibles", data=providers)
+
+# ============================================================
+# FASE CONFIG-UI: Hacienda y Email desde la UI
+# ============================================================
+
+from app.schemas.secure_config import (
+    HaciendaConfigOut, HaciendaConfigUpdate,
+    EmailConfigOut, EmailConfigUpdate,
+)
+from app.services.secure_config_service import get_secure, set_secure
+
+
+CERT_DIR = os.path.join(os.path.dirname(__file__), "..", "certs")
+os.makedirs(CERT_DIR, exist_ok=True)
+
+
+# ── GET /settings/hacienda-config ──
+@router.get("/hacienda-config", response_model=APIResponse[HaciendaConfigOut],
+            dependencies=[Depends(require_role("admin"))])
+def get_hacienda_config(db: Session = Depends(get_db)):
+    """Retorna config de Hacienda (valores enmascarados)."""
+    h_env = get_secure(db, "hacienda_env") or "sandbox"
+    h_api = get_secure(db, "hacienda_api") or ""
+    h_user = get_secure(db, "hacienda_user") or ""
+    h_pass = get_secure(db, "hacienda_password") or ""
+    h_cert_path = get_secure(db, "hacienda_cert_path") or ""
+    h_cert_pass = get_secure(db, "hacienda_cert_pass") or ""
+
+    cert_exists = bool(h_cert_path) and os.path.isfile(h_cert_path)
+    cert_filename = os.path.basename(h_cert_path) if h_cert_path else ""
+
+    out = HaciendaConfigOut(
+        hacienda_env=h_env,
+        hacienda_api=h_api,
+        hacienda_user_hint=_mask(h_user) if h_user else "",
+        has_hacienda_user=bool(h_user),
+        has_hacienda_password=bool(h_pass),
+        hacienda_cert_filename=cert_filename,
+        has_cert=bool(h_cert_path and h_cert_pass),
+        cert_file_exists=cert_exists,
+    )
+    return APIResponse(message="Configuración de Hacienda", data=out)
+
+
+# ── PUT /settings/hacienda-config ──
+@router.put("/hacienda-config", response_model=APIResponse[HaciendaConfigOut],
+            dependencies=[Depends(require_role("admin"))])
+def update_hacienda_config(
+    data: HaciendaConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Actualiza credenciales de Hacienda (se guardan encriptadas)."""
+    updates = data.model_dump(exclude_unset=True)
+
+    if "hacienda_env" in updates:
+        val = (updates["hacienda_env"] or "sandbox").lower().strip()
+        if val not in ("sandbox", "production"):
+            raise HTTPException(status_code=400, detail="hacienda_env debe ser 'sandbox' o 'production'")
+        set_secure(db, "hacienda_env", val)
+
+    if "hacienda_api" in updates:
+        set_secure(db, "hacienda_api", (updates["hacienda_api"] or "").strip())
+
+    if "hacienda_user" in updates:
+        set_secure(db, "hacienda_user", (updates["hacienda_user"] or "").strip())
+
+    if "hacienda_password" in updates:
+        set_secure(db, "hacienda_password", updates["hacienda_password"] or "")
+
+    log_audit(db, "update_hacienda_config",
+              {k: "***" if "pass" in k.lower() else v for k, v in updates.items()},
+              user_id=getattr(current_user, "id", None),
+              username=getattr(current_user, "username", None))
+
+    # Retornar estado actualizado
+    return get_hacienda_config(db=db)
+
+
+# ── POST /settings/hacienda-cert — Upload certificado .p12 ──
+@router.post("/hacienda-cert", dependencies=[Depends(require_role("admin"))])
+def upload_hacienda_cert(
+    file: UploadFile = File(...),
+    cert_password: str = "",
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Sube el certificado .p12 de firma digital."""
+    fname = file.filename or ""
+    if not fname.lower().endswith(".p12"):
+        raise HTTPException(status_code=400, detail="El archivo debe ser .p12")
+
+    contents = file.file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="El certificado excede 5MB.")
+
+    # Validar que el .p12 se puede abrir con el password
+    if cert_password:
+        try:
+            from cryptography.hazmat.primitives.serialization import pkcs12
+            pkcs12.load_key_and_certificates(
+                contents, cert_password.encode("utf-8")
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=400,
+                detail="No se pudo abrir el .p12 con la contraseña proporcionada."
+            )
+
+    # Guardar archivo
+    filepath = os.path.join(CERT_DIR, "firma.p12")
+    with open(filepath, "wb") as f:
+        f.write(contents)
+
+    # Guardar path y password encriptados
+    set_secure(db, "hacienda_cert_path", filepath)
+    if cert_password:
+        set_secure(db, "hacienda_cert_pass", cert_password)
+
+    log_audit(db, "upload_hacienda_cert", {"filename": fname},
+              user_id=getattr(current_user, "id", None),
+              username=getattr(current_user, "username", None))
+
+    return APIResponse(
+        message="Certificado subido correctamente",
+        data={"filename": fname, "path": filepath}
+    )
+
+
+# ── GET /settings/email-config ──
+@router.get("/email-config", response_model=APIResponse[EmailConfigOut],
+            dependencies=[Depends(require_role("admin"))])
+def get_email_config(db: Session = Depends(get_db)):
+    """Retorna config de email (valores enmascarados)."""
+    e_user = get_secure(db, "email_user") or ""
+    e_pass = get_secure(db, "email_pass") or ""
+
+    out = EmailConfigOut(
+        email_user_hint=_mask(e_user) if e_user else "",
+        has_email_user=bool(e_user),
+        has_email_pass=bool(e_pass),
+    )
+    return APIResponse(message="Configuración de email", data=out)
+
+
+# ── PUT /settings/email-config ──
+@router.put("/email-config", response_model=APIResponse[EmailConfigOut],
+            dependencies=[Depends(require_role("admin"))])
+def update_email_config(
+    data: EmailConfigUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """Actualiza credenciales de email (se guardan encriptadas)."""
+    updates = data.model_dump(exclude_unset=True)
+
+    if "email_user" in updates:
+        set_secure(db, "email_user", (updates["email_user"] or "").strip())
+
+    if "email_pass" in updates:
+        set_secure(db, "email_pass", updates["email_pass"] or "")
+
+    log_audit(db, "update_email_config",
+              {k: "***" if "pass" in k.lower() else v for k, v in updates.items()},
+              user_id=getattr(current_user, "id", None),
+              username=getattr(current_user, "username", None))
+
+    return get_email_config(db=db)

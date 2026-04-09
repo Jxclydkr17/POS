@@ -34,7 +34,8 @@ from .supplier_product import SupplierProduct
 
 # ── FASE 2 AI: Configuración de proveedor IA ──
 from .ai_config import AIConfig
-
+# ── Configuración sensible encriptada ──
+from .secure_config import SecureConfig
 
 __all__ = [
     "User",
@@ -72,4 +73,5 @@ __all__ = [
     "SupplierProduct",
     # ── Fase 2 AI: Config de proveedor IA ──
     "AIConfig",
+    "SecureConfig"
 ]

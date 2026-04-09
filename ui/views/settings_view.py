@@ -253,6 +253,84 @@ class _TestAIConfigWorker(QObject):
             self.failed.emit(str(e))
 
 
+# ── Workers para Hacienda y Email config ──
+
+class _LoadHaciendaConfigWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            from ui.services.settings_service import fetch_hacienda_config
+            result = fetch_hacienda_config()
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _SaveHaciendaConfigWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict, parent=None):
+        super().__init__(parent)
+        self._payload = payload
+
+    def run(self):
+        try:
+            from ui.services.settings_service import save_hacienda_config
+            result = save_hacienda_config(self._payload)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _UploadCertWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, filepath: str, password: str, parent=None):
+        super().__init__(parent)
+        self._filepath = filepath
+        self._password = password
+
+    def run(self):
+        try:
+            from ui.services.settings_service import upload_hacienda_cert
+            result = upload_hacienda_cert(self._filepath, self._password)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+class _LoadEmailConfigWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def run(self):
+        try:
+            from ui.services.settings_service import fetch_email_config
+            result = fetch_email_config()
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
+
+class _SaveEmailConfigWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+
+    def __init__(self, payload: dict, parent=None):
+        super().__init__(parent)
+        self._payload = payload
+
+    def run(self):
+        try:
+            from ui.services.settings_service import save_email_config
+            result = save_email_config(self._payload)
+            self.finished.emit(result)
+        except Exception as e:
+            self.failed.emit(str(e))
+
 # ================================================================
 # Vista principal
 # ================================================================
@@ -599,13 +677,70 @@ class SettingsView(QWidget):
         self.btn_save_issuer = btn_save_issuer
         layout.addWidget(btn_save_issuer)
 
-        # Fase 4.5: Estado de Hacienda
-        box_hacienda = QGroupBox("🔗 Estado de Conexión con Hacienda")
-        h_layout = QVBoxLayout()
-        self.label_hacienda_status = QLabel("Cargando...")
+        # ── Hacienda: credenciales editables desde la UI ──
+        box_hacienda = QGroupBox("🔗 Conexión con Hacienda")
+        hac_layout = QVBoxLayout()
+
+        form_hac = QFormLayout()
+        form_hac.setSpacing(10)
+
+        self.combo_hacienda_env = QComboBox()
+        self.combo_hacienda_env.addItems(["sandbox", "production"])
+        form_hac.addRow("Ambiente:", self.combo_hacienda_env)
+
+        self.input_hacienda_api = QLineEdit()
+        self.input_hacienda_api.setPlaceholderText("https://api.comprobanteselectronicos.go.cr")
+        form_hac.addRow("URL API:", self.input_hacienda_api)
+
+        self.input_hacienda_user = QLineEdit()
+        self.input_hacienda_user.setPlaceholderText("Usuario OAuth2 de Hacienda")
+        form_hac.addRow("Usuario:", self.input_hacienda_user)
+
+        self.input_hacienda_password = QLineEdit()
+        self.input_hacienda_password.setEchoMode(QLineEdit.Password)
+        self.input_hacienda_password.setPlaceholderText("Contraseña OAuth2")
+        form_hac.addRow("Contraseña:", self.input_hacienda_password)
+
+        hac_layout.addLayout(form_hac)
+
+        # Certificado .p12
+        cert_row = QHBoxLayout()
+        self.label_cert_status = QLabel("Sin certificado")
+        self.label_cert_status.setStyleSheet("font-size: 12px; color: #888;")
+        cert_row.addWidget(self.label_cert_status)
+
+        self.btn_upload_cert = QPushButton("📁 Subir .p12")
+        self.btn_upload_cert.setMinimumHeight(30)
+        self.btn_upload_cert.clicked.connect(self._on_upload_cert)
+        cert_row.addWidget(self.btn_upload_cert)
+        cert_row.addStretch()
+        hac_layout.addLayout(cert_row)
+
+        # Status general
+        self.label_hacienda_status = QLabel("")
         self.label_hacienda_status.setStyleSheet("font-size: 12px; color: #aaa;")
-        h_layout.addWidget(self.label_hacienda_status)
-        box_hacienda.setLayout(h_layout)
+        self.label_hacienda_status.setWordWrap(True)
+        hac_layout.addWidget(self.label_hacienda_status)
+
+        # Botón guardar Hacienda
+        btn_row_hac = QHBoxLayout()
+        self.btn_save_hacienda = QPushButton("💾 Guardar Hacienda")
+        self.btn_save_hacienda.setMinimumHeight(34)
+        self.btn_save_hacienda.setStyleSheet("""
+            QPushButton {
+                background-color: #6366f1; color: white;
+                font-weight: bold; font-size: 13px;
+                padding: 6px 20px; border-radius: 8px; border: none;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:disabled { background-color: #555; color: #999; }
+        """)
+        self.btn_save_hacienda.clicked.connect(self._on_save_hacienda)
+        btn_row_hac.addWidget(self.btn_save_hacienda)
+        btn_row_hac.addStretch()
+        hac_layout.addLayout(btn_row_hac)
+
+        box_hacienda.setLayout(hac_layout)
         layout.addWidget(box_hacienda)
 
         layout.addStretch()
@@ -663,19 +798,53 @@ class SettingsView(QWidget):
         note.setWordWrap(True)
         layout.addWidget(note)
 
-        # Fase 4.4: Estado de email
+        # ── Email: credenciales editables desde la UI ──
         box_email = QGroupBox("📧 Configuración de Email")
         email_layout = QVBoxLayout()
-        self.label_email_status = QLabel("Cargando...")
+
+        form_email = QFormLayout()
+        form_email.setSpacing(10)
+
+        self.input_email_user = QLineEdit()
+        self.input_email_user.setPlaceholderText("correo@gmail.com")
+        form_email.addRow("Correo:", self.input_email_user)
+
+        self.input_email_pass = QLineEdit()
+        self.input_email_pass.setEchoMode(QLineEdit.Password)
+        self.input_email_pass.setPlaceholderText("Contraseña o App Password")
+        form_email.addRow("Contraseña:", self.input_email_pass)
+
+        email_layout.addLayout(form_email)
+
+        self.label_email_status = QLabel("")
         self.label_email_status.setStyleSheet("font-size: 12px; color: #aaa;")
         email_layout.addWidget(self.label_email_status)
+
         note_email = QLabel(
-            "ℹ️ Las credenciales de email se configuran en el archivo .env del servidor.\n"
-            "Aquí solo se muestra si están configuradas."
+            "ℹ️ Para Gmail usá una 'App Password' (no tu contraseña normal).\n"
+            "Generala en myaccount.google.com > Seguridad > Contraseñas de apps."
         )
         note_email.setStyleSheet("color: #666; font-size: 11px;")
         note_email.setWordWrap(True)
         email_layout.addWidget(note_email)
+
+        btn_row_email = QHBoxLayout()
+        self.btn_save_email = QPushButton("💾 Guardar Email")
+        self.btn_save_email.setMinimumHeight(34)
+        self.btn_save_email.setStyleSheet("""
+            QPushButton {
+                background-color: #6366f1; color: white;
+                font-weight: bold; font-size: 13px;
+                padding: 6px 20px; border-radius: 8px; border: none;
+            }
+            QPushButton:hover { background-color: #4f46e5; }
+            QPushButton:disabled { background-color: #555; color: #999; }
+        """)
+        self.btn_save_email.clicked.connect(self._on_save_email)
+        btn_row_email.addWidget(self.btn_save_email)
+        btn_row_email.addStretch()
+        email_layout.addLayout(btn_row_email)
+
         box_email.setLayout(email_layout)
         layout.addWidget(box_email)
 
@@ -863,6 +1032,10 @@ class SettingsView(QWidget):
 
         # --- Env status (4.4/4.5) ---
         self._populate_env_status(env_status)
+        # --- Hacienda config (carga desde secure_config) ---
+        self._load_hacienda_config()
+        # --- Email config (carga desde secure_config) ---
+        self._load_email_config()
 
         # --- Tab Avanzado ---
         last = data.get("cabys_last_update")
@@ -1763,6 +1936,255 @@ class SettingsView(QWidget):
         self.btn_ai_test.setEnabled(True)
         self.btn_ai_test.setText("🔌 Probar conexión")
         show_toast(f"Error en test: {error}", success=False, parent=self.main_window)
+        
+    # ==========================================================
+    # CONFIG-UI: Hacienda config
+    # ==========================================================
+
+    def _load_hacienda_config(self):
+        """Carga la config de Hacienda desde el backend."""
+        self._cleanup_thread()
+        self._worker = _LoadHaciendaConfigWorker()
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_hacienda_config_loaded)
+        self._worker.failed.connect(self._on_hacienda_config_load_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_hacienda_config_loaded(self, data: dict):
+        """Rellena los campos de Hacienda con datos del backend."""
+        env = data.get("hacienda_env", "sandbox") or "sandbox"
+        idx = self.combo_hacienda_env.findText(env)
+        if idx >= 0:
+            self.combo_hacienda_env.setCurrentIndex(idx)
+
+        self.input_hacienda_api.setText(data.get("hacienda_api", "") or "")
+
+        # Usuario: mostrar hint si hay, sino vacío
+        if data.get("has_hacienda_user"):
+            hint = data.get("hacienda_user_hint", "")
+            self.input_hacienda_user.setPlaceholderText(f"Guardado: {hint} (dejá vacío para mantener)")
+        else:
+            self.input_hacienda_user.setPlaceholderText("Usuario OAuth2 de Hacienda")
+
+        # Password: indicar si existe
+        if data.get("has_hacienda_password"):
+            self.input_hacienda_password.setPlaceholderText("••••• (dejá vacío para mantener)")
+        else:
+            self.input_hacienda_password.setPlaceholderText("Contraseña OAuth2")
+
+        # Certificado
+        cert_name = data.get("hacienda_cert_filename", "")
+        has_cert = data.get("has_cert", False)
+        cert_exists = data.get("cert_file_exists", False)
+
+        if has_cert and cert_exists:
+            self.label_cert_status.setText(f"✅ {cert_name}")
+            self.label_cert_status.setStyleSheet("font-size: 12px; color: #10b981;")
+        elif has_cert and not cert_exists:
+            self.label_cert_status.setText(f"⚠️ {cert_name} (archivo no encontrado)")
+            self.label_cert_status.setStyleSheet("font-size: 12px; color: #f59e0b;")
+        else:
+            self.label_cert_status.setText("Sin certificado")
+            self.label_cert_status.setStyleSheet("font-size: 12px; color: #888;")
+
+        # Status general
+        parts = []
+        if data.get("hacienda_api"):
+            parts.append("✅ API configurada")
+        else:
+            parts.append("⚠️ API no configurada")
+        if data.get("has_hacienda_user") and data.get("has_hacienda_password"):
+            parts.append("✅ Credenciales configuradas")
+        else:
+            parts.append("⚠️ Credenciales pendientes")
+        if has_cert and cert_exists:
+            parts.append("✅ Certificado OK")
+        else:
+            parts.append("⚠️ Certificado pendiente")
+
+        all_ok = (data.get("hacienda_api") and data.get("has_hacienda_user")
+                  and data.get("has_hacienda_password") and has_cert and cert_exists)
+        color = "#10b981" if all_ok else "#f59e0b"
+        self.label_hacienda_status.setText("  |  ".join(parts))
+        self.label_hacienda_status.setStyleSheet(f"font-size: 12px; color: {color};")
+
+    def _on_hacienda_config_load_failed(self, error: str):
+        logger.debug(f"No se pudo cargar config Hacienda: {error}")
+        self.label_hacienda_status.setText("⚠️ No se pudo cargar la configuración de Hacienda")
+        self.label_hacienda_status.setStyleSheet("font-size: 12px; color: #f59e0b;")
+
+    def _on_save_hacienda(self):
+        """Guarda las credenciales de Hacienda."""
+        payload = {}
+
+        # Siempre enviar ambiente y API
+        payload["hacienda_env"] = self.combo_hacienda_env.currentText()
+        api_text = self.input_hacienda_api.text().strip()
+        if api_text:
+            payload["hacienda_api"] = api_text
+
+        # Solo enviar usuario/password si el campo tiene texto
+        user_text = self.input_hacienda_user.text().strip()
+        if user_text:
+            payload["hacienda_user"] = user_text
+
+        pass_text = self.input_hacienda_password.text().strip()
+        if pass_text:
+            payload["hacienda_password"] = pass_text
+
+        self.btn_save_hacienda.setEnabled(False)
+        self.btn_save_hacienda.setText("Guardando...")
+
+        self._cleanup_thread()
+        self._worker = _SaveHaciendaConfigWorker(payload)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_hacienda_save_success)
+        self._worker.failed.connect(self._on_hacienda_save_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_hacienda_save_success(self, result: dict):
+        self.btn_save_hacienda.setEnabled(True)
+        self.btn_save_hacienda.setText("💾 Guardar Hacienda")
+        self.input_hacienda_user.clear()
+        self.input_hacienda_password.clear()
+        show_toast("✅ Configuración de Hacienda guardada", success=True, parent=self.main_window)
+        self._load_hacienda_config()
+
+    def _on_hacienda_save_failed(self, error: str):
+        self.btn_save_hacienda.setEnabled(True)
+        self.btn_save_hacienda.setText("💾 Guardar Hacienda")
+        show_toast(f"Error guardando Hacienda: {error}", success=False, parent=self.main_window)
+
+    def _on_upload_cert(self):
+        """Abre diálogo para subir certificado .p12."""
+        filepath, _ = QFileDialog.getOpenFileName(
+            self, "Seleccionar certificado .p12",
+            "", "Certificados (*.p12)"
+        )
+        if not filepath:
+            return
+
+        # Pedir contraseña del certificado
+        from PySide6.QtWidgets import QInputDialog
+        password, ok = QInputDialog.getText(
+            self, "Contraseña del certificado",
+            "Ingresá la contraseña del archivo .p12:",
+            QLineEdit.Password,
+        )
+        if not ok:
+            return
+
+        self.btn_upload_cert.setEnabled(False)
+        self.btn_upload_cert.setText("Subiendo...")
+
+        self._cleanup_thread()
+        self._worker = _UploadCertWorker(filepath, password)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_cert_upload_success)
+        self._worker.failed.connect(self._on_cert_upload_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_cert_upload_success(self, result: dict):
+        self.btn_upload_cert.setEnabled(True)
+        self.btn_upload_cert.setText("📁 Subir .p12")
+        show_toast("✅ Certificado subido correctamente", success=True, parent=self.main_window)
+        self._load_hacienda_config()
+
+    def _on_cert_upload_failed(self, error: str):
+        self.btn_upload_cert.setEnabled(True)
+        self.btn_upload_cert.setText("📁 Subir .p12")
+        show_toast(f"Error subiendo certificado: {error}", success=False, parent=self.main_window)
+        
+    # ==========================================================
+    # CONFIG-UI: Email config
+    # ==========================================================
+
+    def _load_email_config(self):
+        self._cleanup_thread()
+        self._worker = _LoadEmailConfigWorker()
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_email_config_loaded)
+        self._worker.failed.connect(self._on_email_config_load_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_email_config_loaded(self, data: dict):
+        if data.get("has_email_user"):
+            hint = data.get("email_user_hint", "")
+            self.input_email_user.setPlaceholderText(f"Guardado: {hint} (dejá vacío para mantener)")
+            self.label_email_status.setText(f"✅ Email configurado — {hint}")
+            self.label_email_status.setStyleSheet("font-size: 12px; color: #10b981;")
+        else:
+            self.input_email_user.setPlaceholderText("correo@gmail.com")
+            self.label_email_status.setText("⚠️ Email no configurado")
+            self.label_email_status.setStyleSheet("font-size: 12px; color: #f59e0b;")
+
+        if data.get("has_email_pass"):
+            self.input_email_pass.setPlaceholderText("••••• (dejá vacío para mantener)")
+        else:
+            self.input_email_pass.setPlaceholderText("Contraseña o App Password")
+
+    def _on_email_config_load_failed(self, error: str):
+        logger.debug(f"No se pudo cargar config email: {error}")
+        self.label_email_status.setText("⚠️ No se pudo cargar la configuración de email")
+        self.label_email_status.setStyleSheet("font-size: 12px; color: #f59e0b;")
+
+    def _on_save_email(self):
+        payload = {}
+
+        user_text = self.input_email_user.text().strip()
+        if user_text:
+            payload["email_user"] = user_text
+
+        pass_text = self.input_email_pass.text().strip()
+        if pass_text:
+            payload["email_pass"] = pass_text
+
+        if not payload:
+            show_toast("No hay cambios que guardar", success=False, parent=self.main_window)
+            return
+
+        self.btn_save_email.setEnabled(False)
+        self.btn_save_email.setText("Guardando...")
+
+        self._cleanup_thread()
+        self._worker = _SaveEmailConfigWorker(payload)
+        self._thread = QThread(self)
+        self._worker.moveToThread(self._thread)
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_email_save_success)
+        self._worker.failed.connect(self._on_email_save_failed)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.failed.connect(self._thread.quit)
+        self._thread.start()
+
+    def _on_email_save_success(self, result: dict):
+        self.btn_save_email.setEnabled(True)
+        self.btn_save_email.setText("💾 Guardar Email")
+        self.input_email_user.clear()
+        self.input_email_pass.clear()
+        show_toast("✅ Configuración de email guardada", success=True, parent=self.main_window)
+        self._load_email_config()
+
+    def _on_email_save_failed(self, error: str):
+        self.btn_save_email.setEnabled(True)
+        self.btn_save_email.setText("💾 Guardar Email")
+        show_toast(f"Error guardando email: {error}", success=False, parent=self.main_window)
 
     # ==========================================================
     # Dirty tracking y utilidades

@@ -35,7 +35,7 @@ from app.einvoice.hacienda_client import (
     HaciendaAuthError,
     HaciendaSendError,
 )
-from app.core.config import settings
+from app.core.credentials import hacienda_cert_path, hacienda_cert_pass
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +154,8 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
     db.flush()
 
     # ── Paso 2: Firmar ──
-    cert_path = settings.hacienda_cert_path
-    cert_pass = settings.hacienda_cert_pass
+    cert_path = hacienda_cert_path()
+    cert_pass = hacienda_cert_pass()
     was_signed = False
 
     if cert_path and cert_pass:

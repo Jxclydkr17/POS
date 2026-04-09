@@ -40,8 +40,9 @@ router = APIRouter(prefix="/einvoices", tags=["Facturación electrónica"])
 
 
 def _try_sign_xml(xml: str) -> tuple[str, bool, str | None]:
-    cert_path = settings.hacienda_cert_path
-    cert_pass = settings.hacienda_cert_pass
+    from app.core.credentials import hacienda_cert_path, hacienda_cert_pass
+    cert_path = hacienda_cert_path()
+    cert_pass = hacienda_cert_pass()
     if not cert_path or not cert_pass:
         return xml, False, None
     try:
@@ -363,7 +364,8 @@ def xsd_status():
 
 @router.get("/signing-status", dependencies=[Depends(get_current_user)])
 def signing_status():
-    return is_signing_available(settings.hacienda_cert_path, settings.hacienda_cert_pass)
+    from app.core.credentials import hacienda_cert_path, hacienda_cert_pass
+    return is_signing_available(hacienda_cert_path(), hacienda_cert_pass())
 
 @router.get("/connection-status", dependencies=[Depends(get_current_user)])
 def connection_status():

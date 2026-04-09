@@ -1,6 +1,6 @@
 import yagmail
 import os
-from app.core.config import settings
+from app.core.credentials import email_user, email_pass
 from app.core.logger import logger
 
 _DEFAULT_BUSINESS = "Mi Negocio"
@@ -23,7 +23,7 @@ def send_sale_email(recipient: str, pdf_path: str, sale_id: int, business_name: 
         <small>Este es un mensaje automático, por favor no responder.</small>
         """
 
-        yag = yagmail.SMTP(settings.email_user, settings.email_pass)
+        yag = yagmail.SMTP(email_user(), email_pass())
         yag.send(
             to=recipient,
             subject=subject,
@@ -46,7 +46,7 @@ def send_purchase_expiry_alert(recipient: str, purchases_data: list, business_na
     if not purchases_data:
         return False
 
-    if not settings.email_user or not settings.email_pass:
+    if not email_user() or not email_pass():
         logger.warning("No se puede enviar alerta de compras: email no configurado.")
         return False
 
@@ -99,7 +99,7 @@ def send_purchase_expiry_alert(recipient: str, purchases_data: list, business_na
         </div>
         """
 
-        yag = yagmail.SMTP(settings.email_user, settings.email_pass)
+        yag = yagmail.SMTP(email_user(), email_pass())
         yag.send(
             to=recipient,
             subject=subject,

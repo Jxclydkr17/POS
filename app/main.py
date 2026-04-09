@@ -96,14 +96,15 @@ async def lifespan(app: FastAPI):
     expire_task = asyncio.create_task(_periodic_expire())
 
     # Hacienda background tasks
-    has_user = bool(settings.hacienda_user)
-    has_pass = bool(settings.hacienda_password)
+    from app.core.credentials import hacienda_user, hacienda_password, hacienda_env
+    has_user = bool(hacienda_user())
+    has_pass = bool(hacienda_password())
 
     if has_user and has_pass:
         try:
             from app.einvoice.hacienda_poller import start_background_tasks
             start_background_tasks()
-            logger.info(f"Hacienda: background tasks iniciados | env={settings.hacienda_env}")
+            logger.info(f"Hacienda: background tasks iniciados | env={hacienda_env()}")
         except Exception as e:
             logger.error(f"Hacienda: error iniciando background tasks: {e}")
     else:

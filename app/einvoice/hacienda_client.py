@@ -386,16 +386,17 @@ def get_hacienda_client() -> HaciendaClient:
         if _client_instance is not None:
             return _client_instance
 
-        from app.core.config import settings
+        from app.core.credentials import hacienda_env, hacienda_user, hacienda_password
 
-        env = settings.hacienda_env or "sandbox"
-        user = settings.hacienda_user
-        password = settings.hacienda_password
+        env = hacienda_env()
+        user = hacienda_user()
+        password = hacienda_password()
 
         if not user or not password:
             raise HaciendaConfigError(
-                "HACIENDA_USER y HACIENDA_PASSWORD no están configurados en .env. "
-                "Obtené las credenciales desde el ATV (Sistema de Administración Tributaria Virtual)."
+                "Las credenciales de Hacienda no están configuradas. "
+                "Configuralas desde Ajustes > Facturación > Conexión con Hacienda, "
+                "o en el archivo .env (HACIENDA_USER / HACIENDA_PASSWORD)."
             )
 
         _client_instance = HaciendaClient(env=env, user=user, password=password)
@@ -414,24 +415,29 @@ def get_connection_status() -> dict:
     Retorna el estado de la conexión a Hacienda sin enviar nada.
     Útil para diagnóstico en la UI.
     """
-    from app.core.config import settings
+    from app.core.credentials import (
+        hacienda_env, hacienda_user, hacienda_password,
+    )
+
+    _h_env = hacienda_env()
+    _h_user = hacienda_user()
+    _h_pass = hacienda_password()
 
     result = {
         "configured": False,
-        "env": settings.hacienda_env or "sandbox",
-        "user": settings.hacienda_user or "",
+        "env": _h_env,
+        "user": _h_user or "",
         "api_url": "",
         "idp_url": "",
         "token_valid": False,
         "error": None,
     }
 
-    if not settings.hacienda_user or not settings.hacienda_password:
-        result["error"] = "HACIENDA_USER o HACIENDA_PASSWORD no configurados en .env"
+    if not _h_user or not _h_pass:
+        result["error"] = "Credenciales de Hacienda no configuradas"
         return result
 
-    env = settings.hacienda_env or "sandbox"
-    urls = _URLS.get(env, _URLS["sandbox"])
+    urls = _URLS.get(_h_env, _URLS["sandbox"])
     result["api_url"] = urls["api"]
     result["idp_url"] = urls["idp"]
     result["configured"] = True

@@ -91,6 +91,14 @@ def system_diagnostics(db: Session = Depends(get_db)):
     import os
     from pathlib import Path
     from app.core.config import settings, is_sqlite, APP_DIR
+    from app.core.credentials import (
+        hacienda_user as _fn_hac_user, hacienda_password as _fn_hac_pass,
+        hacienda_env as _fn_hac_env, hacienda_cert_path as _fn_hac_cert,
+    )
+    _cred_hacienda_user = _fn_hac_user()
+    _cred_hacienda_pass = _fn_hac_pass()
+    _cred_hacienda_env = _fn_hac_env()
+    _cred_hacienda_cert = _fn_hac_cert()
 
     diag = {
         "app": {
@@ -110,9 +118,9 @@ def system_diagnostics(db: Session = Depends(get_db)):
             "connected": False,
         },
         "hacienda": {
-            "configured": bool(settings.hacienda_user and settings.hacienda_password),
-            "env": settings.hacienda_env,
-            "cert_configured": bool(settings.hacienda_cert_path),
+            "configured": bool(_cred_hacienda_user and _cred_hacienda_pass),
+            "env": _cred_hacienda_env,
+            "cert_configured": bool(_cred_hacienda_cert),
         },
         "storage": {
             "app_dir": str(APP_DIR),
