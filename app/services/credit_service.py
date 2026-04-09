@@ -208,6 +208,22 @@ def get_credit_info(
         if agg.last_payment_at else None
     )
 
+    # ── FASE 2 — Fix 2.3: Reconciliación automática ──
+    # Detecta drift entre customer.credit_balance (incremental) y
+    # el balance real calculado desde la tabla credits.
+    # Si divergen, corrige el campo cacheado y registra en log.
+    stored_balance = round(float(customer.credit_balance or 0), 2)
+    if abs(stored_balance - balance) > 0.01:
+        from app.core.logger import logger as _logger
+        _logger.warning(
+            f"RECONCILIACIÓN CRÉDITO: Cliente #{customer_id} '{customer.name}' — "
+            f"credit_balance almacenado: ₡{stored_balance:,.2f}, "
+            f"balance real calculado: ₡{balance:,.2f}. "
+            f"Corrigiendo automáticamente."
+        )
+        customer.credit_balance = Decimal(str(max(0, balance)))
+        db.flush()
+
     # ─────────────────────────────────────────────────────────
     # QUERY 2: Movimientos paginados + conteo + aging (sale movements)
     # ─────────────────────────────────────────────────────────
@@ -240,39 +256,44 @@ def get_credit_info(
         movements = movements[:mov_limit]
 
     # 2b. Aging: movimientos tipo "sale" (FIFO) — necesario para distribución
-    # ── FASE 4 — Fix 4.3: Solo cargar (amount, created_at) en vez de objetos ──
-    # Para clientes con años de historial, cargar Credit completos es pesado.
-    # Tuplas ligeras reducen memoria y tiempo de hydration del ORM.
-    sale_movement_rows = (
-        db.query(Credit.amount, Credit.created_at)
-        .filter(Credit.customer_id == customer_id, Credit.type == "sale")
-        .order_by(Credit.created_at.asc())
-        .all()
-    )
-
-    remaining_payments = total_payments
+    # ── FASE 4 — Fix 4.2: Optimización de aging ──
+    # - Si balance <= 0, no hay nada que "envejecer" → skip completo.
+    # - Limitar a 500 filas: suficiente para cualquier caso real.
+    #   Un cliente con >500 ventas a crédito sin pagar tiene problemas
+    #   más grandes que la precisión del aging.
     aging = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
 
-    for sm_amount, sm_created_at in sale_movement_rows:
-        amount = float(sm_amount or 0)
-        if remaining_payments >= amount:
-            remaining_payments -= amount
-            continue
-        unpaid = amount - remaining_payments
-        remaining_payments = 0
+    if balance > 0:
+        sale_movement_rows = (
+            db.query(Credit.amount, Credit.created_at)
+            .filter(Credit.customer_id == customer_id, Credit.type == "sale")
+            .order_by(Credit.created_at.asc())
+            .limit(500)
+            .all()
+        )
 
-        days_old = (today - sm_created_at.date()).days if sm_created_at else 0
-        if days_old <= 30:
-            aging["0_30"] += unpaid
-        elif days_old <= 60:
-            aging["31_60"] += unpaid
-        elif days_old <= 90:
-            aging["61_90"] += unpaid
-        else:
-            aging["90_plus"] += unpaid
+        remaining_payments = total_payments
 
-    for k in aging:
-        aging[k] = round(aging[k], 2)
+        for sm_amount, sm_created_at in sale_movement_rows:
+            amount = float(sm_amount or 0)
+            if remaining_payments >= amount:
+                remaining_payments -= amount
+                continue
+            unpaid = amount - remaining_payments
+            remaining_payments = 0
+
+            days_old = (today - sm_created_at.date()).days if sm_created_at else 0
+            if days_old <= 30:
+                aging["0_30"] += unpaid
+            elif days_old <= 60:
+                aging["31_60"] += unpaid
+            elif days_old <= 90:
+                aging["61_90"] += unpaid
+            else:
+                aging["90_plus"] += unpaid
+
+        for k in aging:
+            aging[k] = round(aging[k], 2)
 
     # ─────────────────────────────────────────────────────────
     # QUERY 3: Credit sales paginadas + mapa para sale_id

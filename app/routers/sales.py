@@ -13,6 +13,8 @@ from app.db.models.user import User
 from app.schemas.sale import SaleCreate, SaleUpdate, SaleCancelRequest
 from app.core.dependencies import get_current_user, require_role
 from app.core.logger import logger
+# ── FASE 3 — Fix 3.2: Rate limiting en endpoints sensibles ──
+from app.core.rate_limiter import rate_limit
 from app.utils.dt import today_cr
 from app.utils.responses import success_response
 
@@ -25,14 +27,17 @@ router = APIRouter(prefix="/sales", tags=["Ventas"])
 # ═══════════════════════════════════════════════════
 # POST /sales/  —  Crear venta
 # ═══════════════════════════════════════════════════
-@router.post("/")
+@router.post("/", dependencies=[rate_limit("sales_create", 60, 60)])
 def create_sale(
     sale_in: SaleCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return sale_crud.create_sale(db, sale_in, current_user)
+        # ── FASE 5 — Fix 5.1: Router es dueño del commit (Unit of Work) ──
+        result = sale_crud.create_sale(db, sale_in, current_user)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -93,8 +98,9 @@ def get_sale(sale_id: int, db: Session = Depends(get_db)):
 
 # ═══════════════════════════════════════════════════
 # PUT /sales/{sale_id}  —  Editar venta en PENDING
+# ── FASE 2 — Fix 2.5: Requiere admin + registra quién editó ──
 # ═══════════════════════════════════════════════════
-@router.put("/{sale_id}")
+@router.put("/{sale_id}", dependencies=[Depends(require_role("admin")), rate_limit("sales_edit", 20, 60)])
 def update_sale(
     sale_id: int,
     sale_in: SaleUpdate,
@@ -102,7 +108,9 @@ def update_sale(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return sale_crud.update_sale(db, sale_id, sale_in)
+        result = sale_crud.update_sale(db, sale_id, sale_in, current_user)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -122,7 +130,9 @@ def cancel_sale(
     db: Session = Depends(get_db),
 ):
     try:
-        return sale_crud.cancel_sale_with_nc(db, sale_id, razon=body.razon)
+        result = sale_crud.cancel_sale_with_nc(db, sale_id, razon=body.razon)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -138,7 +148,9 @@ def cancel_sale(
 @router.delete("/{sale_id}", dependencies=[Depends(require_role("admin"))])
 def delete_sale(sale_id: int, db: Session = Depends(get_db)):
     try:
-        return sale_crud.void_sale_simple(db, sale_id)
+        result = sale_crud.void_sale_simple(db, sale_id)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise

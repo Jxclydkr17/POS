@@ -13,7 +13,8 @@ class CashMovement(Base):
     cash_session_id = Column(
         Integer,
         ForeignKey("cash_sessions.id"),
-        nullable=False
+        nullable=False,
+        index=True,  # ── FASE 4 — Fix 4.1: índice para cierre de caja ──
     )
 
     # IN = entrada | OUT = salida

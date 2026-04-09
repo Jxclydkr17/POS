@@ -8,6 +8,8 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 # ── FASE 3 — Fix 3.1: Importar de dependencies (fuente única) ──
 from app.core.dependencies import get_current_user
+# ── FASE 3 — Fix 3.2: Rate limiting en endpoints sensibles ──
+from app.core.rate_limiter import rate_limit
 from app.services.credit_service import (
     add_credit_sale,
     add_credit_payment,
@@ -59,7 +61,7 @@ def add_credit(
 # -----------------------------------------------------------
 #   ABONO / PAGO A CRÉDITO
 # -----------------------------------------------------------
-@router.post("/{customer_id}/payments")
+@router.post("/{customer_id}/payments", dependencies=[rate_limit("credit_payments", 30, 60)])
 def pay_credit(
     customer_id: int,
     payload: CreditPaymentCreate,

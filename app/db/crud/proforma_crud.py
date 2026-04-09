@@ -10,7 +10,6 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.db.models.proforma import Proforma
@@ -18,6 +17,7 @@ from app.db.models.proforma_detail import ProformaDetail
 from app.db.models.product import Product
 from app.db.models.customer import Customer
 from app.db.models.user import User
+from app.db.models.document_sequence import DocumentSequence
 
 from app.db.crud.sale_crud import calc_line_tax, normalize_tax_rate
 from app.schemas.proforma import (
@@ -49,34 +49,33 @@ def _next_proforma_number(db: Session) -> str:
     """
     Genera el siguiente número de proforma (PRO-000001, PRO-000002, ...).
     Usa la tabla document_sequences con document_type='PR'.
-    Incremento atómico con SELECT ... FOR UPDATE.
+    ORM puro — compatible con SQLite y MySQL.
     """
-    # Asegurar que la fila exista
-    db.execute(
-        text("""
-            INSERT INTO document_sequences
-                (branch_code, terminal_code, document_type, next_number, updated_at)
-            VALUES ('001', '00001', 'PR', 1, NOW())
-            ON DUPLICATE KEY UPDATE updated_at=NOW()
-        """),
+    seq = (
+        db.query(DocumentSequence)
+        .filter(
+            DocumentSequence.branch_code == "001",
+            DocumentSequence.terminal_code == "00001",
+            DocumentSequence.document_type == "PR",
+        )
+        .first()
     )
 
-    row = db.execute(
-        text("""
-            SELECT id, next_number
-            FROM document_sequences
-            WHERE branch_code='001' AND terminal_code='00001' AND document_type='PR'
-            FOR UPDATE
-        """),
-    ).mappings().first()
+    if seq is None:
+        seq = DocumentSequence(
+            branch_code="001",
+            terminal_code="00001",
+            document_type="PR",
+            next_number=1,
+            updated_at=utcnow(),
+        )
+        db.add(seq)
+        db.flush()
 
-    seq_id = row["id"]
-    current = int(row["next_number"])
-
-    db.execute(
-        text("UPDATE document_sequences SET next_number=:n, updated_at=NOW() WHERE id=:id"),
-        {"n": current + 1, "id": seq_id},
-    )
+    current = seq.next_number
+    seq.next_number = current + 1
+    seq.updated_at = utcnow()
+    db.flush()
 
     return f"PRO-{str(current).zfill(6)}"
 
@@ -104,11 +103,11 @@ def _process_proforma_lines(db: Session, proforma_id: int, items) -> Decimal:
                 proforma_id=proforma_id,
                 product_id=None,
                 quantity=item.quantity,
-                unit_price=float(item.unit_price),
-                discount_percent=float(discount_pct),
-                subtotal=float(total_linea),
-                tax_rate=0,
-                tax_amount=0,
+                unit_price=unit_price_dec,
+                discount_percent=discount_pct,
+                subtotal=total_linea,
+                tax_rate=Decimal("0"),
+                tax_amount=Decimal("0"),
                 is_common=True,
                 common_description=(item.common_description or "Producto común").strip(),
             ))
@@ -147,11 +146,11 @@ def _process_proforma_lines(db: Session, proforma_id: int, items) -> Decimal:
             proforma_id=proforma_id,
             product_id=product.id,
             quantity=item.quantity,
-            unit_price=float(item.unit_price),
-            discount_percent=float(discount_pct),
-            subtotal=float(total_linea),
-            tax_rate=float(tax_rate_pct),
-            tax_amount=float(tax_amount),
+            unit_price=unit_price_dec,
+            discount_percent=discount_pct,
+            subtotal=total_linea,
+            tax_rate=tax_rate_pct,
+            tax_amount=tax_amount,
         ))
 
     return total
@@ -186,7 +185,7 @@ def create_proforma(db: Session, data: ProformaCreate, current_user: User) -> di
         user_id=current_user.id,
         number=number,
         status="VIGENTE",
-        total=0.0,
+        total=Decimal("0"),
         notes=(data.notes or "").strip() or None,
         validity_days=data.validity_days,
         valid_until=valid_until,
@@ -199,7 +198,7 @@ def create_proforma(db: Session, data: ProformaCreate, current_user: User) -> di
     if total <= 0:
         raise HTTPException(status_code=400, detail="Total de proforma inválido.")
 
-    new_proforma.total = float(total)
+    new_proforma.total = total
 
     db.commit()
     db.refresh(new_proforma)
@@ -299,25 +298,25 @@ def get_proforma_detail(db: Session, proforma_id: int) -> dict:
             product_name = d.common_description or "Producto común"
 
         # 📏 Obtener unit_type
-            _ut = "Unid"
-            if d.product_id:
-                _p = db.query(Product).filter(Product.id == d.product_id).first()
-                if _p:
-                    _ut = _p.unit_type or "Unid"
+        _ut = "Unid"
+        if d.product_id:
+            _p = db.query(Product).filter(Product.id == d.product_id).first()
+            if _p:
+                _ut = _p.unit_type or "Unid"
 
-            detail_list.append({
-                "product_id": d.product_id,
-                "product_name": product_name,
-                "quantity": d.quantity,
-                "unit_price": float(d.unit_price),
-                "subtotal": float(d.subtotal),
-                "discount_percent": float(d.discount_percent or 0),
-                "tax_rate": float(d.tax_rate or 0),
-                "tax_amount": float(d.tax_amount or 0),
-                "is_common": bool(d.is_common),
-                "common_description": d.common_description,
-                "unit_type": _ut,
-            })
+        detail_list.append({
+            "product_id": d.product_id,
+            "product_name": product_name,
+            "quantity": d.quantity,
+            "unit_price": float(d.unit_price),
+            "subtotal": float(d.subtotal),
+            "discount_percent": float(d.discount_percent or 0),
+            "tax_rate": float(d.tax_rate or 0),
+            "tax_amount": float(d.tax_amount or 0),
+            "is_common": bool(d.is_common),
+            "common_description": d.common_description,
+            "unit_type": _ut,
+        })
 
     customer_name = "Cliente General"
     if proforma.customer_id:
@@ -378,7 +377,7 @@ def update_proforma(db: Session, proforma_id: int, data: ProformaUpdate) -> dict
     if total <= 0:
         raise HTTPException(status_code=400, detail="Total de proforma inválido.")
 
-    proforma.total = float(total)
+    proforma.total = total
 
     if data.notes is not None:
         proforma.notes = data.notes.strip() or None

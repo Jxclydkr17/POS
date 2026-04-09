@@ -61,6 +61,11 @@ class User(Base):
     permissions = Column(Text, nullable=True)  # JSON list de permisos
     created_at = Column(DateTime, default=utcnow)
 
+    # ── FASE 3 — Fix 3.3: Revocación de tokens ──
+    # Cuando se establece, todos los tokens con iat < token_revoked_at
+    # son rechazados. Se actualiza al desactivar usuario o cambiar password.
+    token_revoked_at = Column(DateTime, nullable=True)
+
     def get_permissions(self) -> list[str]:
         """Retorna los permisos del usuario. Si no tiene, usa los del rol."""
         if self.role == "admin":

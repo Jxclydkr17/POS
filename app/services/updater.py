@@ -89,6 +89,7 @@ def check_update(url: str = DEFAULT_UPDATE_URL) -> dict:
         "changelog": None,
         "download_url": None,
         "required": False,
+        "sha256": None,
         "error": None,
     }
 
@@ -116,6 +117,8 @@ def check_update(url: str = DEFAULT_UPDATE_URL) -> dict:
             result["changelog"] = data.get("changelog", "")
             result["download_url"] = data.get("url", "")
             result["required"] = data.get("required", False)
+            # ── FASE 3 — Fix 3.1: Capturar hash para verificación post-descarga ──
+            result["sha256"] = data.get("sha256", "")
 
             logger.info(
                 f"Actualización disponible: {CURRENT_VERSION} → {latest}"
@@ -132,6 +135,28 @@ def check_update(url: str = DEFAULT_UPDATE_URL) -> dict:
         logger.warning(f"Error en check_update: {e}")
 
     return result
+
+
+def _verify_sha256(filepath: Path, expected_hash: str) -> bool:
+    """
+    Verifica el SHA-256 de un archivo contra el hash esperado.
+    FASE 3 — Fix 3.1: hashlib se importa pero nunca se usaba.
+    """
+    if not expected_hash:
+        return False
+    sha256 = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha256.update(chunk)
+    actual = sha256.hexdigest()
+    if actual.lower() != expected_hash.lower():
+        logger.warning(
+            f"SHA-256 mismatch: esperado={expected_hash}, "
+            f"actual={actual}, archivo={filepath}"
+        )
+        return False
+    logger.info(f"SHA-256 verificado correctamente para {filepath.name}")
+    return True
 
 
 def download_update(url: str = DEFAULT_UPDATE_URL) -> dict:
@@ -169,15 +194,29 @@ def download_update(url: str = DEFAULT_UPDATE_URL) -> dict:
         return result
 
     version = check["latest_version"]
+    expected_hash = check.get("sha256", "")
     filename = f"ViolettePOS_update_{version}.zip"
     filepath = UPDATE_DIR / filename
 
-    # Si ya está descargado, no volver a bajar
+    # Si ya está descargado, verificar integridad antes de aceptar
     if filepath.exists():
-        result["downloaded"] = True
-        result["path"] = str(filepath)
-        result["version"] = version
-        result["message"] = f"Actualización {version} ya descargada en {filepath}"
+        if expected_hash and not _verify_sha256(filepath, expected_hash):
+            logger.warning(f"Hash inválido en archivo existente {filepath}. Re-descargando.")
+            filepath.unlink(missing_ok=True)
+        else:
+            result["downloaded"] = True
+            result["path"] = str(filepath)
+            result["version"] = version
+            result["message"] = f"Actualización {version} ya descargada en {filepath}"
+            return result
+
+    # ── FASE 3 — Fix 3.1: Exigir SHA-256 del servidor ──
+    if not expected_hash:
+        result["message"] = (
+            "El servidor de actualizaciones no proporcionó un hash SHA-256. "
+            "Descarga rechazada por seguridad."
+        )
+        logger.error("Descarga rechazada: servidor no envió sha256 en el manifiesto.")
         return result
 
     # Descargar
@@ -193,6 +232,20 @@ def download_update(url: str = DEFAULT_UPDATE_URL) -> dict:
 
         size_mb = filepath.stat().st_size / (1024 * 1024)
         logger.info(f"Actualización descargada: {filepath} ({size_mb:.1f} MB)")
+
+        # ── FASE 3 — Fix 3.1: Verificar SHA-256 post-descarga ──
+        if not _verify_sha256(filepath, expected_hash):
+            filepath.unlink(missing_ok=True)
+            result["message"] = (
+                "SEGURIDAD: El hash SHA-256 del archivo descargado no coincide "
+                "con el del servidor. El archivo fue eliminado. "
+                "Posible manipulación en tránsito."
+            )
+            logger.error(
+                f"ALERTA SEGURIDAD: Hash mismatch en descarga de {download_url}. "
+                f"Esperado: {expected_hash}"
+            )
+            return result
 
         result["downloaded"] = True
         result["path"] = str(filepath)

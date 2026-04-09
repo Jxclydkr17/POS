@@ -25,8 +25,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_access_token(data: dict):
     """Genera un token JWT de acceso."""
     to_encode = data.copy()
-    expire = utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "type": "access"})
+    now = utcnow()
+    expire = now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    # ── FASE 3 — Fix 3.3: iat para revocación por timestamp ──
+    to_encode.update({"exp": expire, "iat": now, "type": "access"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
@@ -36,8 +38,10 @@ REFRESH_TOKEN_EXPIRE_MINUTES = 1440  # 24 horas
 def create_refresh_token(data: dict):
     """Genera un refresh token JWT (mayor duración, solo para renovar access)."""
     to_encode = data.copy()
-    expire = utcnow() + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    now = utcnow()
+    expire = now + timedelta(minutes=REFRESH_TOKEN_EXPIRE_MINUTES)
+    # ── FASE 3 — Fix 3.3: iat para revocación por timestamp ──
+    to_encode.update({"exp": expire, "iat": now, "type": "refresh"})
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def decode_token(token: str):

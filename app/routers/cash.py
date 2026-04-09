@@ -66,7 +66,7 @@ def open_cash(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        session = open_session(db, data.opening_amount)
+        session = open_session(db, data.opening_amount, terminal_id=data.terminal_id)
 
         return success_response(
             message="Caja abierta correctamente.",

@@ -290,6 +290,21 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
             detail="Cuenta desactivada. Contacte al administrador.",
         )
 
+    # ── FASE 3 — Fix 3.3: Verificar que el refresh token no fue revocado ──
+    if user.token_revoked_at:
+        token_iat = data.get("iat")
+        if token_iat:
+            from datetime import timezone as _tz
+            iat_dt = datetime.fromtimestamp(token_iat, tz=_tz.utc)
+            revoked_dt = user.token_revoked_at
+            if revoked_dt.tzinfo is None:
+                revoked_dt = revoked_dt.replace(tzinfo=_tz.utc)
+            if iat_dt < revoked_dt:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token revocado. Inicie sesión nuevamente.",
+                )
+
     new_access = create_access_token({"sub": user.username, "role": user.role})
     return {"access_token": new_access, "token_type": "bearer"}
 
@@ -375,9 +390,18 @@ def update_user(
                 detail="No se puede desactivar su propia cuenta",
             )
         user.is_active = data.is_active
+        # ── FASE 3 — Fix 3.3: Revocar tokens al desactivar ──
+        if not data.is_active:
+            from app.utils.dt import utcnow as _utcnow
+            user.token_revoked_at = _utcnow()
+            logger.info(f"Tokens revocados para usuario '{user.username}' (desactivado)")
 
     if data.password:
         user.password = hash_password(data.password)
+        # ── FASE 3 — Fix 3.3: Revocar tokens al cambiar password ──
+        from app.utils.dt import utcnow as _utcnow
+        user.token_revoked_at = _utcnow()
+        logger.info(f"Tokens revocados para usuario '{user.username}' (cambio de password)")
 
     db.commit()
     db.refresh(user)

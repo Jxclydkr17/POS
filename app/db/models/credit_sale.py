@@ -10,7 +10,7 @@ class CreditSale(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False, unique=True)
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
 
     total_amount = Column(Numeric(12, 2), nullable=False)
     created_at = Column(DateTime, default=utcnow)

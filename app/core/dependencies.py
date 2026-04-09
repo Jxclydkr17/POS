@@ -1,6 +1,7 @@
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 from app.db.database import get_db
 from app.db.models.user import User
 from app.core.security import decode_token
@@ -32,13 +33,29 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
         raise HTTPException(status_code=401, detail="Token inválido")
 
     # ── FASE 2 — Fix 2.3: Rechazar usuarios desactivados ──
-    # Si un admin desactiva a un empleado, sus tokens existentes
-    # dejan de funcionar inmediatamente en el siguiente request.
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Cuenta desactivada. Contacte al administrador."
         )
+
+    # ── FASE 3 — Fix 3.3: Verificar que el token no fue revocado ──
+    # Si token_revoked_at existe y el token fue emitido antes de esa fecha,
+    # el token es inválido (usuario fue desactivado o cambió password).
+    if user.token_revoked_at:
+        token_iat = payload.get("iat")
+        if token_iat:
+            # jose devuelve iat como int (epoch), convertir para comparar
+            iat_dt = datetime.fromtimestamp(token_iat, tz=timezone.utc)
+            revoked_dt = user.token_revoked_at
+            # Asegurar que revoked_dt tenga timezone
+            if revoked_dt.tzinfo is None:
+                revoked_dt = revoked_dt.replace(tzinfo=timezone.utc)
+            if iat_dt < revoked_dt:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token revocado. Inicie sesión nuevamente."
+                )
 
     return user
 

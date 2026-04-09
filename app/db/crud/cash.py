@@ -24,20 +24,25 @@ def _to_dec(value) -> Decimal:
 # ==========================================================
 # 🟦 Obtener sesión de caja del día
 # ==========================================================
-def get_today_session(db: Session) -> CashSession | None:
+def get_today_session(db: Session, terminal_id: str = "T1") -> CashSession | None:
     today = today_cr()
-    return db.query(CashSession).filter(CashSession.date == today).first()
+    return (
+        db.query(CashSession)
+        .filter(CashSession.date == today, CashSession.terminal_id == terminal_id)
+        .first()
+    )
 
 
 # ==========================================================
 # 🟩 Obtener sesión abierta
 # ==========================================================
-def get_open_session(db: Session) -> CashSession | None:
+def get_open_session(db: Session, terminal_id: str = "T1") -> CashSession | None:
     today = today_cr()
     return (
         db.query(CashSession)
         .filter(
             CashSession.date == today,
+            CashSession.terminal_id == terminal_id,
             CashSession.status == "open"
         )
         .first()
@@ -47,9 +52,9 @@ def get_open_session(db: Session) -> CashSession | None:
 # ==========================================================
 # 🟩 Abrir caja
 # ==========================================================
-def open_session(db: Session, opening_amount: float) -> CashSession:
+def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") -> CashSession:
     today = today_cr()
-    session = get_today_session(db)
+    session = get_today_session(db, terminal_id=terminal_id)
 
     # ── FASE 3 — Fix 3.1: No permitir monto de apertura negativo ──
     if _to_dec(opening_amount) < 0:
@@ -63,6 +68,7 @@ def open_session(db: Session, opening_amount: float) -> CashSession:
     # ── FASE 1: Decimal para almacenamiento ──
     session = CashSession(
         date=today,
+        terminal_id=terminal_id,
         opening_amount=_to_dec(opening_amount),
         status="open",
         created_at=utcnow()

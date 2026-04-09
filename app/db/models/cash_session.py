@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Date, DateTime, Numeric, String
+from sqlalchemy import Column, Integer, Date, DateTime, Numeric, String, UniqueConstraint
 from datetime import datetime
 from app.utils.dt import utcnow
 from app.db.database import Base
@@ -7,8 +7,19 @@ from sqlalchemy.orm import relationship
 class CashSession(Base):
     __tablename__ = "cash_sessions"
 
+    # ── FASE 2 — Fix 2.1: UniqueConstraint(date, terminal_id) ──
+    # Antes: date unique=True impedía 2 cajas/turnos el mismo día.
+    # Ahora: cada terminal puede tener su propia sesión diaria.
+    __table_args__ = (
+        UniqueConstraint("date", "terminal_id", name="uq_cash_date_terminal"),
+    )
+
     id = Column(Integer, primary_key=True, index=True)
-    date = Column(Date, nullable=False, unique=True)  # 1 sesión por día
+    date = Column(Date, nullable=False, index=True)
+
+    # ── FASE 2 — Fix 2.1: Identificador de terminal/caja ──
+    # Default "T1" para compatibilidad con instalaciones single-terminal.
+    terminal_id = Column(String(10), nullable=False, default="T1")
 
     opening_amount = Column(Numeric(12, 2), nullable=False)
     closing_amount = Column(Numeric(12, 2), nullable=True)

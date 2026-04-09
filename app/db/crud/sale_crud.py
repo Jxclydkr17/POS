@@ -33,7 +33,7 @@ from app.utils.email_utils import send_sale_email
 from app.services.cash_movement_service import register_cash_movement
 from app.core.logger import logger
 from app.einvoice.sequence import next_sequence_number, build_consecutivo, build_clave
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, utcnow
 
 # 📏 Helper de unidades de medida
 from app.utils.unit_helpers import is_unit_based
@@ -277,6 +277,20 @@ def _revert_cash_movement(db: Session, sale: Sale, concept: str, source: str):
             description=f"{concept} #{sale.id}",
             reference_id=sale.id,
         )
+    else:
+        # ── FASE 2 — Fix 2.2: No silenciar pérdida contable ──
+        logger.warning(
+            f"ALERTA CONTABLE: No se pudo registrar salida de caja para "
+            f"anulación de venta #{sale.id} (₡{sale.total}). "
+            f"No hay sesión de caja abierta. El movimiento debe registrarse manualmente."
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No hay una sesión de caja abierta para registrar la salida de "
+                f"₡{float(sale.total):,.2f} por la anulación. Abra la caja primero."
+            ),
+        )
 
 
 def _revert_credit(db: Session, sale: Sale, payment_method_label: str):
@@ -320,7 +334,7 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         customer_id=customer_id,
         user_id=current_user.id,
         cash_session_id=cash_session.id,
-        total=0.0,
+        total=Decimal("0"),
         payment_method=payment_method,
         document_type=document_type,
         status="ACTIVA",
@@ -389,15 +403,23 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
             reference_id=new_sale.id,
         )
 
-    db.commit()
+    # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
+    db.flush()
     db.refresh(new_sale)
 
-    # PDF/Email (no bloquea la venta si falla)
+    # ── FASE 4 — Fix 4.3: PDF/Email en background (no bloquea al cajero) ──
     customer_db = db.query(Customer).filter(Customer.id == customer_id).first() if customer_id else None
     customer_name = customer_db.name if customer_db else "Cliente General"
-    pdf_path = _generate_pdf_and_email(db, new_sale, customer_db, customer_name, payment_method, document_type, total)
 
-    # ── FASE 5 — Fix 5.5: Informar al frontend si el PDF falló ──
+    # Preparar datos del PDF sincrónicamente (necesita DB)
+    sale_data = _build_sale_pdf_data(db, new_sale, customer_name, payment_method, document_type, total)
+    customer_email = customer_db.email if customer_db else None
+    business_name = sale_data.get("business", {}).get("name", "")
+
+    # Lanzar PDF + email en thread de background
+    _generate_pdf_and_email_async(sale_data, customer_email, business_name)
+
+    # ── FASE 5 — Fix 5.5: Informar al frontend ──
     result = {
         "message": "Venta registrada correctamente.",
         "sale": {
@@ -406,17 +428,17 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
             "document_type": document_type, "user_id": current_user.id,
             "created_at": new_sale.created_at.isoformat(),
         },
-        "pdf_path": pdf_path,
+        "pdf_path": None,
+        "pdf_note": "El PDF se está generando en segundo plano.",
     }
-    if not pdf_path:
-        result["pdf_warning"] = (
-            "La venta se registró correctamente pero no se pudo generar el PDF. "
-            "Puede regenerarlo desde el historial de ventas."
-        )
     return result
 
 
-def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):
+def _build_sale_pdf_data(db, sale, customer_name, payment_method, document_type, total):
+    """
+    FASE 4 — Fix 4.3: Prepara los datos para el PDF de forma síncrona (necesita DB).
+    Retorna un dict puro que se puede pasar a un thread sin sesión DB.
+    """
     from app.services.settings_service import get_business_info
     biz = get_business_info(db)
 
@@ -440,13 +462,11 @@ def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method
 
     for d in sale.details:
         _unit_type = "Unid"
-        # ✅ PRODUCTO COMÚN: usar common_description en vez de buscar Product
         if getattr(d, "is_common", False) or d.product_id is None:
             prod_name = f"📦 {d.common_description or 'Producto común'}"
         else:
             prod = products_map.get(d.product_id)
             prod_name = prod.name if prod else f"Producto #{d.product_id}"
-            # 📏 Obtener unit_type del producto (si existe)
             if prod:
                 _unit_type = prod.unit_type or "Unid"
 
@@ -457,14 +477,49 @@ def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method
             "tax_rate": float(d.tax_rate or 0), "tax_amount": float(d.tax_amount or 0),
             "unit_type": _unit_type,
         })
+
+    return sale_data
+
+
+def _run_pdf_and_email(sale_data: dict, customer_email: str | None, business_name: str) -> str | None:
+    """
+    Genera PDF y envía email. NO necesita sesión DB.
+    Retorna path del PDF o None si falla.
+    """
     try:
         pdf_path = generate_sale_pdf(sale_data)
-        if customer_db and customer_db.email:
-            send_sale_email(customer_db.email, pdf_path, sale_data["id"], business_name=biz["name"])
+        if customer_email:
+            send_sale_email(customer_email, pdf_path, sale_data["id"], business_name=business_name)
         return pdf_path
     except Exception as e:
         logger.warning(f"Error PDF/Email: {e}")
         return None
+
+
+def _generate_pdf_and_email_async(sale_data: dict, customer_email: str | None, business_name: str):
+    """
+    FASE 4 — Fix 4.3: Lanza PDF + email en un thread de background.
+    El cajero recibe la respuesta de la venta inmediatamente sin esperar
+    a que ReportLab genere el PDF o que el SMTP responda.
+    """
+    import threading
+
+    def _worker():
+        try:
+            _run_pdf_and_email(sale_data, customer_email, business_name)
+        except Exception as e:
+            logger.error(f"Error en background PDF/Email para venta #{sale_data.get('id')}: {e}")
+
+    t = threading.Thread(target=_worker, daemon=True, name=f"pdf-sale-{sale_data.get('id')}")
+    t.start()
+
+
+def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):
+    """Wrapper síncrono para regenerate_sale_pdf y otros flujos que necesitan el path inmediatamente."""
+    sale_data = _build_sale_pdf_data(db, sale, customer_name, payment_method, document_type, total)
+    customer_email = customer_db.email if customer_db else None
+    business_name = sale_data.get("business", {}).get("name", "")
+    return _run_pdf_and_email(sale_data, customer_email, business_name)
 
 
 def list_sales_paginated(
@@ -576,8 +631,8 @@ def get_sale_detail(db: Session, sale_id: int) -> dict:
     }
 
 
-def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate) -> dict:
-    """Edita líneas de una venta cuya FE esté en PENDING."""
+def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate, current_user: User) -> dict:
+    """Edita líneas de una venta cuya FE esté en PENDING. Requiere admin."""
     sale = db.query(Sale).filter(Sale.id == sale_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada.")
@@ -645,10 +700,41 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate) -> dict:
     if cs and abs(diff) > Decimal("0.01"):
         customer = db.query(Customer).filter(Customer.id == cs.customer_id).first()
         if customer:
+            # ── FASE 2 — Fix 2.4: Validar que nuevo total no exceda límite de crédito ──
+            if diff > 0 and customer.has_credit_limit:
+                current_balance = Decimal(str(customer.credit_balance or 0))
+                limit_ = Decimal(str(customer.credit_limit or 0))
+                if limit_ > 0 and (current_balance + diff) > limit_:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"El nuevo total excede el límite de crédito del cliente. "
+                            f"Saldo actual: ₡{float(current_balance):,.2f}, "
+                            f"incremento: ₡{float(diff):,.2f}, "
+                            f"límite: ₡{float(limit_):,.2f}."
+                        ),
+                    )
             customer.credit_balance = Decimal(str(customer.credit_balance or 0)) + diff
             cs.total_amount = new_total
 
-    db.commit()
+    # ── FASE 2 — Fix 2.4: Re-validar credit_days si es venta a crédito ──
+    if cs and sale.credit_days:
+        if sale.credit_days <= 0:
+            raise HTTPException(status_code=400, detail="credit_days debe ser > 0 para ventas a crédito.")
+        cond = sale.condicion_venta_code or "02"
+        if cond == "10" and sale.credit_days > 90:
+            raise HTTPException(status_code=400, detail="credit_days no puede superar 90 para condición 10.")
+
+    # ── FASE 2 — Fix 2.5: Registrar quién editó y cuándo ──
+    sale.updated_by = current_user.id
+    sale.updated_at = utcnow()
+    logger.info(
+        f"Venta #{sale_id} editada por usuario #{current_user.id} "
+        f"({current_user.username}). Total: {float(old_total)} → {float(new_total)}"
+    )
+
+    # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
+    db.flush()
     db.refresh(sale)
     return {"message": f"Venta #{sale_id} actualizada.", "sale_id": sale_id, "total": float(new_total)}
 
@@ -694,7 +780,8 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     db.add(nc_einv)
 
     sale.status = "ANULADA"
-    db.commit()
+    # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
+    db.flush()
 
     return {
         "message": f"Nota de Crédito generada para Venta #{sale_id}.",
@@ -727,7 +814,8 @@ def void_sale_simple(db: Session, sale_id: int) -> dict:
     _revert_credit(db, sale, "Anulación")
 
     sale.status = "ANULADA"
-    db.commit()
+    # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
+    db.flush()
 
     return {"message": f"Venta #{sale_id} anulada.", "sale_id": sale_id, "status": "ANULADA"}
 

@@ -11,6 +11,7 @@ from typing import Optional, Literal
 
 class CashSessionCreate(BaseModel):
     opening_amount: float = Field(gt=0, description="Monto inicial en caja")
+    terminal_id: str = Field(default="T1", max_length=10, description="Identificador de terminal/caja")
 
     @field_validator("opening_amount")
     def validate_opening(cls, value):
@@ -26,6 +27,7 @@ class CashSessionCreate(BaseModel):
 class CashSessionOut(BaseModel):
     id: int
     date: date
+    terminal_id: str = "T1"
     opening_amount: float
     closing_amount: Optional[float] = None
     expected_closing: Optional[float] = None
