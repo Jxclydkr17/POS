@@ -1,23 +1,20 @@
 from app.db.database import SessionLocal
-from app.db.models.user import User
+from app.db.models.user import User, ALL_PERMISSIONS
 from passlib.context import CryptContext
+import json
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 def create_initial_user():
     db = SessionLocal()
-    # Hash de la contraseña
-    hashed_password = pwd_context.hash("123456")
-    
     admin_user = User(
         username="admin",
-        email="admin@pos.com",
-        hashed_password=hashed_password,
+        password=pwd_context.hash("123456"),
         full_name="Administrador",
-        role="admin",  # O el rol que manejes
-        is_active=True
+        role="admin",
+        is_active=True,
+        permissions=json.dumps(ALL_PERMISSIONS),
     )
-    
     db.add(admin_user)
     db.commit()
     db.close()
