@@ -134,6 +134,8 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
     # respaldo: aseguramos snapshot de ayer
     yesterday_snapshot = ensure_dashboard_snapshot(db, yesterday)
+    # FASE 2: Commit explícito porque save_dashboard_snapshot ahora solo hace flush
+    db.commit()
 
     # hoy normalmente lo dejamos dinámico para mostrar tiempo real,
     # pero también podés guardar snapshot si querés.

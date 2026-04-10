@@ -34,6 +34,7 @@ from pathlib import Path
 from datetime import datetime
 
 from app.core.config import settings, is_sqlite, APP_DIR, DATA_DIR
+from app.utils.dt import now_cr
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +116,8 @@ def create_backup(tag: str = "") -> str:
         RuntimeError: Si el backup falla.
     """
     _ensure_backup_dir()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # FASE 4 — Fix 4.3: now_cr() en vez de datetime.now() para consistencia
+    timestamp = now_cr().strftime("%Y%m%d_%H%M%S")
     suffix = f"_{tag}" if tag else ""
 
     if is_sqlite():

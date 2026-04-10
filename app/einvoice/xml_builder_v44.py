@@ -334,11 +334,26 @@ class _ResumenAccumulators:
 # FASE 3: Procesador de línea de detalle con soporte completo v4.4
 # ═════════════════════════════════════════════════════════════
 
+def _prefetch_products(db: Session, details) -> dict:
+    """FASE 3 — Fix 3.2: Prefetch todos los productos en UNA query."""
+    product_ids = [d.product_id for d in details if getattr(d, "product_id", None)]
+    if not product_ids:
+        return {}
+    products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
+    return {p.id: p for p in products}
+
+
 def _process_detail_line(
     db: Session, detalle: ET.Element, d: Any, line_num: int,
     doc_type: str, acc: _ResumenAccumulators,
+    products_map: dict = None,
 ):
-    product = db.query(Product).filter(Product.id == d.product_id).first()
+    # FASE 3 — Fix 3.2: Usar products_map prefetcheado para evitar N+1.
+    # Si no se pasa el mapa, cae en query individual (retrocompatibilidad).
+    if products_map and d.product_id in products_map:
+        product = products_map[d.product_id]
+    else:
+        product = db.query(Product).filter(Product.id == d.product_id).first()
     if not product:
         raise ValueError(f"Producto no encontrado ID {d.product_id}")
 
@@ -934,8 +949,9 @@ def build_xml_for_sale_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
+    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
-        _process_detail_line(db, detalle, d, i, doc_type, acc)
+        _process_detail_line(db, detalle, d, i, doc_type, acc, products_map=_pmap)
 
     resumen = _add(root, schema["resumen_tag"])
     _write_moneda(resumen, sale)
@@ -1094,8 +1110,9 @@ def build_xml_for_nc_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
+    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
-        _process_detail_line(db, detalle, d, i, "NC", acc)
+        _process_detail_line(db, detalle, d, i, "NC", acc, products_map=_pmap)
 
     resumen = _add(root, schema["resumen_tag"])
     _write_moneda(resumen, sale)
@@ -1158,8 +1175,9 @@ def build_xml_for_nd_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
+    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
-        _process_detail_line(db, detalle, d, i, "ND", acc)
+        _process_detail_line(db, detalle, d, i, "ND", acc, products_map=_pmap)
 
     resumen = _add(root, schema["resumen_tag"])
     _write_moneda(resumen, sale)
@@ -1298,8 +1316,9 @@ def build_xml_for_fec_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
+    _pmap = _prefetch_products(db, purchase_details)
     for i, d in enumerate(purchase_details, start=1):
-        _process_detail_line(db, detalle, d, i, "FEC", acc)
+        _process_detail_line(db, detalle, d, i, "FEC", acc, products_map=_pmap)
 
     resumen = _add(root, schema["resumen_tag"])
     _write_moneda(resumen, purchase)
@@ -1379,8 +1398,9 @@ def build_xml_for_fee_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
+    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
-        _process_detail_line(db, detalle, d, i, "FEE", acc)
+        _process_detail_line(db, detalle, d, i, "FEE", acc, products_map=_pmap)
 
     resumen = _add(root, schema["resumen_tag"])
     mon = _add(resumen, "CodigoTipoMoneda")

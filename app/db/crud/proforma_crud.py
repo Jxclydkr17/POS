@@ -88,26 +88,43 @@ def _process_proforma_lines(db: Session, proforma_id: int, items) -> Decimal:
     """
     total = Decimal("0")
 
+    # FASE 3 — Fix 3.4: Prefetch todos los productos en UNA query
+    product_ids = [
+        item.product_id for item in items
+        if not getattr(item, "is_common", False) and getattr(item, "product_id", None)
+    ]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
+        products_map = {p.id: p for p in products}
+
     for item in items:
 
         # ─── PRODUCTO COMÚN: sin inventario ───
+        # FASE 1 — Fix 1.1: Calcular IVA en productos comunes usando
+        # calc_line_tax (misma lógica que sale_crud) para que la proforma
+        # refleje el total real incluyendo impuestos.
         if getattr(item, "is_common", False):
             unit_price_dec = Decimal(str(item.unit_price))
             discount_pct = Decimal(str(item.discount_percent or 0))
-            gross = unit_price_dec * Decimal(str(item.quantity))
-            disc_amt = gross * (discount_pct / Decimal("100"))
-            total_linea = gross - disc_amt
+            qty_dec = Decimal(str(item.quantity))
+            tax_rate_pct = normalize_tax_rate(getattr(item, "tax_rate", 0))
+
+            subtotal_base, tax_amount, total_linea = calc_line_tax(
+                unit_price=unit_price_dec, quantity=qty_dec,
+                discount_percent=discount_pct, tax_rate_pct=tax_rate_pct,
+            )
             total += total_linea
 
             db.add(ProformaDetail(
                 proforma_id=proforma_id,
                 product_id=None,
-                quantity=item.quantity,
+                quantity=qty_dec,
                 unit_price=unit_price_dec,
                 discount_percent=discount_pct,
                 subtotal=total_linea,
-                tax_rate=Decimal("0"),
-                tax_amount=Decimal("0"),
+                tax_rate=tax_rate_pct,
+                tax_amount=tax_amount,
                 is_common=True,
                 common_description=(item.common_description or "Producto común").strip(),
             ))
@@ -115,7 +132,8 @@ def _process_proforma_lines(db: Session, proforma_id: int, items) -> Decimal:
         # ─── FIN PRODUCTO COMÚN ───
 
         # Validar que el producto exista (pero NO descontar stock)
-        product = db.query(Product).filter(Product.id == item.product_id).first()
+        # FASE 3 — Fix 3.4: Lookup desde mapa prefetcheado
+        product = products_map.get(item.product_id)
         if not product:
             raise HTTPException(
                 status_code=404,
@@ -200,7 +218,8 @@ def create_proforma(db: Session, data: ProformaCreate, current_user: User) -> di
 
     new_proforma.total = total
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit (Unit of Work)
+    db.flush()
     db.refresh(new_proforma)
 
     customer_name = "Cliente General"
@@ -280,29 +299,35 @@ def get_proforma_detail(db: Session, proforma_id: int) -> dict:
     # Auto-vencimiento individual
     if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
         proforma.status = "VENCIDA"
-        db.commit()
+        # FASE 1 — Fix 1.2: flush only; router owns commit
+        db.flush()
         db.refresh(proforma)
 
     details = db.query(ProformaDetail).filter(
         ProformaDetail.proforma_id == proforma.id
     ).all()
 
+    # FASE 1 — Fix 1.4: Prefetch todos los productos en UNA query
+    # para evitar N+1 (antes: 2 queries por línea dentro del loop)
+    product_ids = [d.product_id for d in details if d.product_id]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(product_ids)).all()
+        products_map = {p.id: p for p in products}
+
     # Enriquecer con nombre de producto
     detail_list = []
     for d in details:
         product_name = None
-        if d.product_id:
-            prod = db.query(Product).filter(Product.id == d.product_id).first()
-            product_name = prod.name if prod else f"Producto #{d.product_id}"
-        elif d.is_common:
-            product_name = d.common_description or "Producto común"
-
-        # 📏 Obtener unit_type
         _ut = "Unid"
-        if d.product_id:
-            _p = db.query(Product).filter(Product.id == d.product_id).first()
-            if _p:
-                _ut = _p.unit_type or "Unid"
+
+        if d.is_common or not d.product_id:
+            product_name = d.common_description or "Producto común"
+        else:
+            prod = products_map.get(d.product_id)
+            product_name = prod.name if prod else f"Producto #{d.product_id}"
+            if prod:
+                _ut = prod.unit_type or "Unid"
 
         detail_list.append({
             "product_id": d.product_id,
@@ -391,7 +416,8 @@ def update_proforma(db: Session, proforma_id: int, data: ProformaUpdate) -> dict
     if proforma.status == "VENCIDA":
         proforma.status = "VIGENTE"
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(proforma)
 
     return {
@@ -419,7 +445,8 @@ def void_proforma(db: Session, proforma_id: int) -> dict:
         )
 
     proforma.status = "ANULADA"
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
 
     return {
         "message": f"Proforma {proforma.number} anulada.",
@@ -450,7 +477,8 @@ def convert_to_sale(
     # Auto-vencimiento
     if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
         proforma.status = "VENCIDA"
-        db.commit()
+        # FASE 1 — Fix 1.2: flush only; router owns commit
+        db.flush()
 
     if proforma.status != "VIGENTE":
         raise HTTPException(
@@ -465,6 +493,19 @@ def convert_to_sale(
 
     if not details:
         raise HTTPException(status_code=400, detail="La proforma no tiene líneas.")
+
+    # FASE 3 — Fix 3.4: Prefetch productos para evitar N+1
+    # FASE 4 — Fix 4.4: with_for_update() para evitar race condition
+    # si dos cajeros convierten proformas del mismo producto al mismo tiempo.
+    from app.core.config import is_sqlite
+    conv_product_ids = [d.product_id for d in details if d.product_id and not d.is_common]
+    conv_products_map = {}
+    if conv_product_ids:
+        conv_q = db.query(Product).filter(Product.id.in_(set(conv_product_ids)))
+        if not is_sqlite():
+            conv_q = conv_q.with_for_update()
+        conv_products = conv_q.all()
+        conv_products_map = {p.id: p for p in conv_products}
 
     # Revalidar stock y construir items para SaleCreate
     sale_items = []
@@ -482,8 +523,8 @@ def convert_to_sale(
             item_data["product_id"] = None
             item_data["common_description"] = d.common_description or "Producto común"
         else:
-            # Revalidar producto
-            product = db.query(Product).filter(Product.id == d.product_id).first()
+            # Revalidar producto (desde mapa prefetcheado)
+            product = conv_products_map.get(d.product_id)
             if not product:
                 raise HTTPException(
                     status_code=400,
@@ -532,7 +573,8 @@ def convert_to_sale(
     # Marcar proforma como convertida
     proforma.status = "CONVERTIDA"
     proforma.converted_sale_id = sale_result["sale"]["id"]
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
 
     logger.info(
         f"Proforma {proforma.number} convertida a Venta #{sale_result['sale']['id']} "
@@ -592,7 +634,8 @@ def validate_conversion(db: Session, proforma_id: int) -> dict:
     # Auto-vencimiento
     if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
         proforma.status = "VENCIDA"
-        db.commit()
+        # FASE 1 — Fix 1.2: flush only; router owns commit
+        db.flush()
         db.refresh(proforma)
 
     if proforma.status != "VIGENTE":
@@ -618,6 +661,13 @@ def validate_conversion(db: Session, proforma_id: int) -> dict:
         ProformaDetail.proforma_id == proforma.id
     ).all()
 
+    # FASE 1 — Fix 1.4: Prefetch todos los productos en UNA query
+    product_ids = [d.product_id for d in details if d.product_id and not d.is_common]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(product_ids)).all()
+        products_map = {p.id: p for p in products}
+
     issues = []
     ok_lines = 0
     warning_lines = 0
@@ -628,7 +678,7 @@ def validate_conversion(db: Session, proforma_id: int) -> dict:
             ok_lines += 1
             continue
 
-        product = db.query(Product).filter(Product.id == d.product_id).first()
+        product = products_map.get(d.product_id)
 
         if not product:
             issues.append({

@@ -114,9 +114,11 @@ def check_status(einvoice_id: int, db: Session = Depends(get_db)):
 
 
 # -- Callback (Fase 4) --
+# FASE 2 — Fix 2.2: Usa Depends(get_db) en vez de SessionLocal() manual.
+# Esto garantiza que la sesión se cierra siempre, incluso en errores
+# no capturados, y sigue el mismo patrón que todos los demás endpoints.
 @router.post("/callback")
-async def hacienda_callback(request: Request):
-    from app.db.database import SessionLocal
+async def hacienda_callback(request: Request, db: Session = Depends(get_db)):
     from app.db.models.electronic_rep import ElectronicRep
     try:
         body = await request.json()
@@ -134,7 +136,6 @@ async def hacienda_callback(request: Request):
             resp_xml = base64.b64decode(resp_xml_b64).decode("utf-8")
         except Exception:
             resp_xml = resp_xml_b64
-    db = SessionLocal()
     try:
         einv = db.query(ElectronicInvoice).filter(ElectronicInvoice.clave == clave).first()
         if einv:
@@ -148,8 +149,6 @@ async def hacienda_callback(request: Request):
     except Exception as e:
         logger.error(f"Callback error: {e}")
         db.rollback()
-    finally:
-        db.close()
     return {"status": "ok"}
 
 

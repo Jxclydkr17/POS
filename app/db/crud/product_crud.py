@@ -441,7 +441,19 @@ def add_stock(db: Session, product_id: int, quantity, reference: str = None, not
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a cero")
 
-    product = _get_product_orm(db, product_id)
+    # FASE 1 — Fix 1.3: Bloqueo pesimista para evitar race condition
+    # cuando dos usuarios agregan stock al mismo tiempo.
+    from app.core.config import is_sqlite
+    query = db.query(Product).filter(
+        Product.id == product_id,
+        Product.is_active == True
+    )
+    if not is_sqlite():
+        query = query.with_for_update()
+    product = query.first()
+
+    if not product:
+        raise HTTPException(status_code=404, detail="Producto no encontrado")
 
     # ✅ FASE 7: log ANTES de modificar stock
     log_inventory_movement(
@@ -454,7 +466,8 @@ def add_stock(db: Session, product_id: int, quantity, reference: str = None, not
 
     product.stock += quantity
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(product)
     return _product_to_dict(product)
 

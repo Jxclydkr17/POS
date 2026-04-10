@@ -341,14 +341,24 @@ def reactivate(
 @router.post("/{product_id}/add-stock", response_model=APIResponse[ProductOut])
 def add_product_stock(
     product_id: int,
-    quantity: int,
+    # FASE 5 — Fix 5.2: float en vez de int para soportar fracciones (kg, m, L)
+    quantity: float,
     reference: Optional[str] = None,
     notes: Optional[str] = None,
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = add_stock(db, product_id, quantity, reference=reference, notes=notes)
-    return APIResponse(message="Stock agregado correctamente", data=product)
+    try:
+        product = add_stock(db, product_id, quantity, reference=reference, notes=notes)
+        # FASE 1 — Fix 1.2: Router es dueño del commit
+        db.commit()
+        return APIResponse(message="Stock agregado correctamente", data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al agregar stock: {e}")
 
 
 # ==========================================================

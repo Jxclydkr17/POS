@@ -189,19 +189,33 @@ def export_purchases(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    items, total = get_purchases(
-        db=db,
-        status_filter=status_filter,
-        supplier_id=supplier_id,
-        search=search,
-        skip=0,
-        limit=10000,
-    )
+    # FASE 2 — Fix 2.1: Carga por lotes en vez de limit=10000 en memoria.
+    # Itera en batches de 500 para no saturar RAM con años de compras.
+    BATCH_SIZE = 500
+    MAX_ROWS = 5000  # Tope de seguridad para exports
+
+    all_items = []
+    offset = 0
+    while offset < MAX_ROWS:
+        items, total = get_purchases(
+            db=db,
+            status_filter=status_filter,
+            supplier_id=supplier_id,
+            search=search,
+            skip=offset,
+            limit=BATCH_SIZE,
+        )
+        if not items:
+            break
+        all_items.extend(items)
+        offset += BATCH_SIZE
+        if len(items) < BATCH_SIZE:
+            break  # No hay más datos
 
     suppliers_map = {s.id: s.name for s in db.query(Supplier).all()}
 
     data = []
-    for p in items:
+    for p in all_items:
         data.append({
             "id": p.id,
             "invoice_number": p.invoice_number,

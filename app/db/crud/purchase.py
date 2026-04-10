@@ -129,9 +129,16 @@ def _build_details(
     purchase: Purchase,
     items: List[PurchaseItemCreate],
 ) -> float:
+    # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+    product_ids = [item.product_id for item in items if item.product_id]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
+        products_map = {p.id: p for p in products}
+
     total = 0.0
     for item in items:
-        product = db.query(Product).filter(Product.id == item.product_id).first()
+        product = products_map.get(item.product_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -377,8 +384,15 @@ def receive_purchase(db: Session, purchase_id: int) -> Purchase:
             detail="La compra no tiene líneas de detalle.",
         )
 
+    # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+    detail_product_ids = [d.product_id for d in purchase.details if d.product_id]
+    products_map = {}
+    if detail_product_ids:
+        products = db.query(Product).filter(Product.id.in_(set(detail_product_ids))).all()
+        products_map = {p.id: p for p in products}
+
     for detail in purchase.details:
-        product = db.query(Product).filter(Product.id == detail.product_id).first()
+        product = products_map.get(detail.product_id)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -464,8 +478,15 @@ def add_payment(
     # Si la compra tiene detalles y NO fue recibida, recibirla automáticamente al saldar
     db.refresh(purchase)
     if purchase.balance <= 0 and purchase.details and not purchase.received_at:
+        # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+        _pids = [d.product_id for d in purchase.details if d.product_id]
+        _pmap = {}
+        if _pids:
+            _prods = db.query(Product).filter(Product.id.in_(set(_pids))).all()
+            _pmap = {p.id: p for p in _prods}
+
         for detail in purchase.details:
-            product = db.query(Product).filter(Product.id == detail.product_id).first()
+            product = _pmap.get(detail.product_id)
             if product:
                 stock_before = product.stock
                 qty = detail.quantity

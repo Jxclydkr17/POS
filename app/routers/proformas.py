@@ -36,7 +36,10 @@ def create_proforma(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return proforma_crud.create_proforma(db, data, current_user)
+        # FASE 1 — Fix 1.2: Router es dueño del commit (Unit of Work)
+        result = proforma_crud.create_proforma(db, data, current_user)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -68,7 +71,14 @@ def get_proformas(
 # ═══════════════════════════════════════════════════
 @router.get("/{proforma_id}", dependencies=[Depends(get_current_user)])
 def get_proforma(proforma_id: int, db: Session = Depends(get_db)):
-    return proforma_crud.get_proforma_detail(db, proforma_id)
+    try:
+        result = proforma_crud.get_proforma_detail(db, proforma_id)
+        # FASE 1 — Fix 1.2: Commit auto-vencimiento flush si ocurrió
+        db.commit()
+        return result
+    except HTTPException:
+        db.rollback()
+        raise
 
 
 # ═══════════════════════════════════════════════════
@@ -82,7 +92,10 @@ def update_proforma(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return proforma_crud.update_proforma(db, proforma_id, data)
+        # FASE 1 — Fix 1.2: Router es dueño del commit
+        result = proforma_crud.update_proforma(db, proforma_id, data)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -102,7 +115,10 @@ def delete_proforma(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return proforma_crud.void_proforma(db, proforma_id)
+        # FASE 1 — Fix 1.2: Router es dueño del commit
+        result = proforma_crud.void_proforma(db, proforma_id)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise
@@ -124,10 +140,15 @@ def validate_conversion(proforma_id: int, db: Session = Depends(get_db)):
     muestre el resumen antes de confirmar.
     """
     try:
-        return proforma_crud.validate_conversion(db, proforma_id)
+        result = proforma_crud.validate_conversion(db, proforma_id)
+        # FASE 1 — Fix 1.2: Commit auto-vencimiento flush si ocurrió
+        db.commit()
+        return result
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
+        db.rollback()
         logger.error(f"Error validando conversión de proforma #{proforma_id}: {e}")
         raise HTTPException(status_code=500, detail="Error interno al validar la conversión.")
 
@@ -143,7 +164,10 @@ def convert_proforma(
     current_user: User = Depends(get_current_user),
 ):
     try:
-        return proforma_crud.convert_to_sale(db, proforma_id, body, current_user)
+        # FASE 1 — Fix 1.2: Router es dueño del commit (venta + proforma en 1 transacción)
+        result = proforma_crud.convert_to_sale(db, proforma_id, body, current_user)
+        db.commit()
+        return result
     except HTTPException:
         db.rollback()
         raise

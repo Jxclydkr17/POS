@@ -67,6 +67,8 @@ def open_cash(
 ):
     try:
         session = open_session(db, data.opening_amount, terminal_id=data.terminal_id)
+        # FASE 1 — Fix 1.2: Router es dueño del commit
+        db.commit()
 
         return success_response(
             message="Caja abierta correctamente.",
@@ -74,6 +76,7 @@ def open_cash(
         )
 
     except Exception as e:
+        db.rollback()
         return error_response(f"No se pudo abrir la caja: {e}", 400)
 
 
@@ -96,6 +99,8 @@ def create_movement(
 
     try:
         mov = add_movement(db, cash_session_id=session.id, data=data)
+        # FASE 1 — Fix 1.2: Router es dueño del commit
+        db.commit()
 
         return success_response(
             message="Movimiento registrado correctamente.",
@@ -106,6 +111,7 @@ def create_movement(
         )
 
     except Exception as e:
+        db.rollback()
         return error_response(f"Error creando movimiento: {e}", 400)
 
 
@@ -135,6 +141,9 @@ def close_cash(
 
         # Guardar snapshot del día ya cerrado
         save_dashboard_snapshot(db, today_cr())
+
+        # FASE 1 — Fix 1.2: Commit explícito tras ambas operaciones
+        db.commit()
 
         return success_response(
             message="Caja cerrada correctamente.",

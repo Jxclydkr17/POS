@@ -15,7 +15,7 @@ from app.core.dependencies import get_current_user, require_role
 from app.core.logger import logger
 # ── FASE 3 — Fix 3.2: Rate limiting en endpoints sensibles ──
 from app.core.rate_limiter import rate_limit
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, today_cr_datetime_range, TZ_CR
 from app.utils.responses import success_response
 
 from app.db.crud import sale_crud
@@ -65,9 +65,8 @@ def get_sales(
 # ═══════════════════════════════════════════════════
 @router.get("/today", dependencies=[Depends(get_current_user)])
 def get_today_sales(skip: int = 0, limit: int = 100, last_id: int = None, db: Session = Depends(get_db)):
-    today = today_cr()
-    start = datetime.combine(today, datetime.min.time())
-    end = datetime.combine(today, datetime.max.time()) + timedelta(hours=6)  # buffer legacy UTC
+    # FASE 5 — Fix 5.4: Rango timezone-aware en vez de buffer +6h hardcodeado
+    start, end = today_cr_datetime_range()
     data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500), last_id=last_id)
     return success_response(message="Ventas del día", data=data)
 
@@ -82,8 +81,10 @@ def get_sales_by_date(report_date: str, skip: int = 0, limit: int = 100, last_id
     except ValueError:
         raise HTTPException(status_code=400, detail="Formato inválido. Usa YYYY-MM-DD.")
 
-    start = datetime.combine(target_date, datetime.min.time())
-    end = datetime.combine(target_date, datetime.max.time()) + timedelta(hours=6)  # buffer legacy UTC
+    # FASE 5 — Fix 5.4: Rango timezone-aware en vez de buffer +6h
+    from datetime import time as dt_time
+    start = datetime.combine(target_date, dt_time.min).replace(tzinfo=TZ_CR)
+    end = start + timedelta(days=1)
     data = sale_crud.get_sales_by_range(db, start, end, skip=skip, limit=min(limit, 500), last_id=last_id)
     return success_response(message=f"Ventas del {report_date}", data=data)
 

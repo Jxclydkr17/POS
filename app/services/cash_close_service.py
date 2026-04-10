@@ -5,12 +5,8 @@ from datetime import datetime
 from app.db.models.cash_movement import CashMovement
 from app.utils.dt import utcnow
 
-
-def _to_dec(value) -> Decimal:
-    """Convierte cualquier valor numérico a Decimal de forma segura."""
-    if isinstance(value, Decimal):
-        return value
-    return Decimal(str(value or 0))
+# FASE 2 — Fix 2.3: Helper compartido (antes duplicado aquí y en cash crud)
+from app.utils.decimal_utils import to_dec
 
 
 def close_cash_session(db, cash_session, closing_amount: float):
@@ -35,9 +31,9 @@ def close_cash_session(db, cash_session, closing_amount: float):
     )
 
     # ── FASE 1: Aritmética en Decimal ──
-    opening_dec = _to_dec(cash_session.opening_amount)
-    totals_dec = _to_dec(totals)
-    closing_dec = _to_dec(closing_amount)
+    opening_dec = to_dec(cash_session.opening_amount)
+    totals_dec = to_dec(totals)
+    closing_dec = to_dec(closing_amount)
 
     expected = opening_dec + totals_dec
     difference = closing_dec - expected
@@ -48,7 +44,10 @@ def close_cash_session(db, cash_session, closing_amount: float):
     cash_session.status = "closed"
     cash_session.closed_at = utcnow()
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    # Esto permite que close_cash + save_dashboard_snapshot
+    # sean atómicos en una sola transacción.
+    db.flush()
     db.refresh(cash_session)
 
     # ── float() solo al construir la respuesta JSON ──

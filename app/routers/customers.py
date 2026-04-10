@@ -142,7 +142,12 @@ def delete(
 
     # 👉 Soft delete (recomendado)
     customer.is_active = False
-    db.commit()
+    # FASE 4 — Fix 4.1: try/except + rollback
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     return APIResponse(message="Cliente desactivado correctamente")
 
@@ -442,7 +447,15 @@ async def import_customers_csv(
         except Exception as e:
             errors.append({"row": i, "error": str(e)})
 
-    db.commit()
+    # FASE 4 — Fix 4.1: try/except + rollback
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al guardar clientes importados: {e}"
+        )
 
     return success_response(
         f"{created} clientes importados correctamente.",

@@ -12,13 +12,8 @@ from app.constants.payment_methods import ALL_PAYMENT_METHODS
 from app.utils.dt import utcnow, today_cr
 from app.services.settings_service import get_business_name
 
-
-# ── Helper: convierte cualquier valor numérico a Decimal de forma segura ──
-def _to_dec(value) -> Decimal:
-    """Convierte float/int/str/Decimal a Decimal sin pérdida IEEE 754."""
-    if isinstance(value, Decimal):
-        return value
-    return Decimal(str(value or 0))
+# FASE 2 — Fix 2.3: Helper compartido (antes duplicado aquí y en cash_close_service)
+from app.utils.decimal_utils import to_dec
 
 
 # ==========================================================
@@ -57,7 +52,7 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
     session = get_today_session(db, terminal_id=terminal_id)
 
     # ── FASE 3 — Fix 3.1: No permitir monto de apertura negativo ──
-    if _to_dec(opening_amount) < 0:
+    if to_dec(opening_amount) < 0:
         raise ValueError("El monto de apertura no puede ser negativo.")
 
     if session:
@@ -69,13 +64,14 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
     session = CashSession(
         date=today,
         terminal_id=terminal_id,
-        opening_amount=_to_dec(opening_amount),
+        opening_amount=to_dec(opening_amount),
         status="open",
         created_at=utcnow()
     )
 
     db.add(session)
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(session)
     return session
 
@@ -85,7 +81,7 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
 # ==========================================================
 def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
     # ── FASE 1: Decimal para almacenamiento ──
-    amount_dec = _to_dec(data.amount)
+    amount_dec = to_dec(data.amount)
 
     movement = CashMovement(
         cash_session_id=cash_session_id,   
@@ -110,7 +106,8 @@ def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
         }
         add_expense_service(expense_payload, db)
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(movement)
     return movement
 
@@ -143,13 +140,13 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     )
 
     # ── FASE 1: Aritmética en Decimal ──
-    total_sales = sum((_to_dec(s.total) for s in sales), Decimal("0"))
+    total_sales = sum((to_dec(s.total) for s in sales), Decimal("0"))
 
     # Desglose por método de pago
     payment_breakdown = {}
     for method in ALL_PAYMENT_METHODS:
         method_total = sum(
-            (_to_dec(s.total) for s in sales if s.payment_method == method),
+            (to_dec(s.total) for s in sales if s.payment_method == method),
             Decimal("0"),
         )
         if method_total > 0:  # Solo incluir métodos con ventas
@@ -165,12 +162,12 @@ def get_cash_report(db: Session, report_date: date) -> dict:
 
     # Calcular entradas y salidas en Decimal
     total_in = sum(
-        (_to_dec(m.amount) for m in movements if m.type == "in"),
+        (to_dec(m.amount) for m in movements if m.type == "in"),
         Decimal("0"),
     )
     
     total_out = sum(
-        (_to_dec(m.amount) for m in movements if m.type == "out"),
+        (to_dec(m.amount) for m in movements if m.type == "out"),
         Decimal("0"),
     )
 
@@ -178,13 +175,13 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     # Esperado = Apertura + Entradas - Salidas
     # NO sumamos total_sales porque las ventas en efectivo ya están en "Entradas"
     # Las ventas con otros métodos (Tarjeta, Crédito, SINPE) no entran a la caja física
-    expected_closing = _to_dec(session.opening_amount) + total_in - total_out
+    expected_closing = to_dec(session.opening_amount) + total_in - total_out
 
     # Si la caja está cerrada, usar los valores registrados
     # Si está abierta, calcular en tiempo real
     if session.status == "closed":
-        closing_amount = _to_dec(session.closing_amount)
-        difference = _to_dec(session.difference)
+        closing_amount = to_dec(session.closing_amount)
+        difference = to_dec(session.difference)
         status = "closed"
     else:
         closing_amount = Decimal("0")
@@ -195,18 +192,21 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     # FIX #9: Incluir ventas y movimientos en la respuesta
     # para evitar 3 llamadas HTTP separadas desde la UI
     # ─────────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.4: Prefetch clientes en UNA query (elimina N+1)
+    customer_ids = [s.customer_id for s in sales if s.customer_id]
+    customers_map = {}
+    if customer_ids:
+        customers = db.query(Customer).filter(Customer.id.in_(set(customer_ids))).all()
+        customers_map = {c.id: c.name for c in customers}
+
     sales_list = []
     for s in sales:
-        cname = "Cliente General"
-        if s.customer_id:
-            c = db.query(Customer).filter(Customer.id == s.customer_id).first()
-            if c:
-                cname = c.name
+        cname = customers_map.get(s.customer_id, "Cliente General") if s.customer_id else "Cliente General"
         sales_list.append({
             "id": s.id,
             "customer": cname,
             "payment_method": s.payment_method or "Efectivo",
-            "total": float(_to_dec(s.total)),
+            "total": float(to_dec(s.total)),
             "status": s.status,
             "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
         })
@@ -214,7 +214,7 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     movements_list = [
         {
             "type": "Entrada" if m.type == "in" else "Salida",
-            "amount": float(_to_dec(m.amount)),
+            "amount": float(to_dec(m.amount)),
             "description": m.description or "",
             "source": m.source,
             "time": m.created_at.strftime("%H:%M:%S") if m.created_at else "N/A",
@@ -230,7 +230,7 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     return {
         "date": str(report_date),
         "status": status,
-        "opening_amount": float(_to_dec(session.opening_amount)),
+        "opening_amount": float(to_dec(session.opening_amount)),
         "entries": float(total_in),
         "exits": float(total_out),
         "total_sales": float(total_sales),

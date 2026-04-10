@@ -78,7 +78,8 @@ def create_category(db: Session, data: CategoryCreate) -> Category:
         position=data.position,
     )
     db.add(new_cat)
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(new_cat)
     return new_cat
 
@@ -120,7 +121,8 @@ def update_category(
     if "position" in fields:
         cat.position = fields["position"]
 
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(cat)
     return cat
 
@@ -134,7 +136,8 @@ def toggle_category(db: Session, category_id: int) -> Category:
         raise HTTPException(status_code=404, detail="Categoría no encontrada.")
 
     cat.is_active = not bool(cat.is_active)
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     db.refresh(cat)
     return cat
 
@@ -156,7 +159,8 @@ def delete_category(db: Session, category_id: int) -> dict:
 
     if product_count > 0:
         cat.is_active = False
-        db.commit()
+        # FASE 1 — Fix 1.2: flush only; router owns commit
+        db.flush()
         db.refresh(cat)
         return {
             "message": "Categoría desactivada (tiene productos asociados).",
@@ -164,5 +168,6 @@ def delete_category(db: Session, category_id: int) -> dict:
         }
 
     db.delete(cat)
-    db.commit()
+    # FASE 1 — Fix 1.2: flush only; router owns commit
+    db.flush()
     return {"message": "Categoría eliminada correctamente", "soft": False}

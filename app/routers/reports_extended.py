@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from datetime import datetime
 from typing import Optional
 from app.db.database import get_db
@@ -20,14 +20,14 @@ router = APIRouter(prefix="/reports", tags=["Reportes Ext"])
 # ----------------------------------------------------------------------
 
 def parse_date(d: Optional[str], default_time: str) -> Optional[datetime]:
-    """Parse date string, adjusting for Costa Rica timezone.
-    
-    Since Sale.created_at now stores CR local time, filters use CR dates directly.
-    The +6h buffer on end_date catches any legacy records still in UTC.
+    """Parse date string to timezone-aware CR datetime.
+
+    FASE 5 — Fix 5.4: Retorna datetime con TZ_CR. Se eliminó el buffer +6h.
     """
     if not d:
         return None
-    return datetime.fromisoformat(d + default_time)
+    dt = datetime.fromisoformat(d + default_time)
+    return dt.replace(tzinfo=TZ_CR)
 
 # ----------------------------------------------------------------------
 
@@ -43,14 +43,10 @@ def sales_history(
 ):
     qset = db.query(Sale)
 
-    # 🔹 Filtro de fechas
-    #   created_at ahora se almacena en hora CR.
-    #   El margen de +6h en ed atrapa registros viejos que quedaron en UTC.
+    # 🔹 Filtro de fechas (timezone-aware CR, sin buffer +6h)
     if start_date or end_date:
-        sd = parse_date(start_date, " 00:00:00") if start_date else datetime(2000, 1, 1)
-        ed = parse_date(end_date, " 23:59:59") if end_date else datetime(2100, 1, 1)
-        from datetime import timedelta
-        ed = ed + timedelta(hours=6)          # buffer para registros legacy en UTC
+        sd = parse_date(start_date, " 00:00:00") if start_date else datetime(2000, 1, 1, tzinfo=TZ_CR)
+        ed = parse_date(end_date, " 23:59:59") if end_date else datetime(2100, 1, 1, tzinfo=TZ_CR)
         qset = qset.filter(Sale.created_at >= sd, Sale.created_at <= ed)
 
     # 🔹 Método de pago
@@ -76,15 +72,16 @@ def sales_history(
 
 
     qset = qset.order_by(Sale.created_at.desc())
-    sales = qset.all()
+    # FASE 1 — Fix 1.4: joinedload para eliminar N+1 (antes: 1 query por venta)
+    sales = qset.options(joinedload(Sale.customer)).all()
 
     result = []
     for s in sales:
-        cust = db.query(Customer).filter(Customer.id == s.customer_id).first() if s.customer_id else None
+        cust_name = s.customer.name if s.customer else "Cliente general"
         result.append({
             "id": s.id,
             "created_at": s.created_at.strftime("%Y-%m-%d %H:%M"),
-            "customer_name": cust.name if cust else "Cliente general",
+            "customer_name": cust_name,
             "total": float(s.total),
             "payment_method": s.payment_method,
             "status": getattr(s, "status", "aprobada"),
@@ -113,13 +110,20 @@ def get_sale_detail(
     # 🔹 Ítems
     items = db.query(SaleDetail).filter(SaleDetail.sale_id == sale_id).all() 
 
+    # FASE 1 — Fix 1.4: Prefetch productos en UNA query
+    product_ids = [i.product_id for i in items if i.product_id and not getattr(i, "is_common", False)]
+    products_map = {}
+    if product_ids:
+        products = db.query(Product).filter(Product.id.in_(product_ids)).all()
+        products_map = {p.id: p for p in products}
+
     item_data = []
     for i in items:
         # ✅ PRODUCTO COMÚN: usar common_description en vez de buscar Product
         if getattr(i, "is_common", False) or i.product_id is None:
             product_name = f"📦 {i.common_description or 'Producto común'}"
         else:
-            product = db.query(Product).filter(Product.id == i.product_id).first()
+            product = products_map.get(i.product_id)
             product_name = product.name if product else "(Producto eliminado)"
         
         item_data.append({

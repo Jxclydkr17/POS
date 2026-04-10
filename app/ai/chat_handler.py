@@ -2615,10 +2615,11 @@ class ExportResponse(BaseModel):
 @router.post("/export-chat", response_model=ExportResponse)
 def export_chat(req: ExportRequest) -> ExportResponse:
     """FASE 7: Exportar conversación del chat."""
-    from datetime import datetime
+    # FASE 4 — Fix 4.3: now_cr() para consistencia con zona horaria CR
+    from app.utils.dt import now_cr
 
     lines = []
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    ts = now_cr().strftime("%Y-%m-%d %H:%M")
 
     if req.format == "markdown":
         lines.append(f"# Conversación Violette — {ts}\n")
@@ -2629,7 +2630,7 @@ def export_chat(req: ExportRequest) -> ExportResponse:
                 lines.append(f"**Tú:** {content}\n")
             elif role == "assistant":
                 lines.append(f"**Violette:** {content}\n")
-        filename = f"chat_violette_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+        filename = f"chat_violette_{now_cr().strftime('%Y%m%d_%H%M')}.md"
     else:
         lines.append(f"Conversación Violette — {ts}")
         lines.append("=" * 40)
@@ -2640,6 +2641,6 @@ def export_chat(req: ExportRequest) -> ExportResponse:
                 lines.append(f"\nTú: {content}")
             elif role == "assistant":
                 lines.append(f"\nViolette: {content}")
-        filename = f"chat_violette_{datetime.now().strftime('%Y%m%d_%H%M')}.txt"
+        filename = f"chat_violette_{now_cr().strftime('%Y%m%d_%H%M')}.txt"
 
     return ExportResponse(content="\n".join(lines), filename=filename)

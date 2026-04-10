@@ -1,6 +1,6 @@
 # app/routers/categories.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -47,6 +47,7 @@ def get_category(
 
 # ----------------------------------------------------------
 # ✅ CREAR
+# FASE 1 — Fix 1.2: Router es dueño del commit
 # ----------------------------------------------------------
 @router.post("/", response_model=APIResponse[CategoryOut])
 def create_category(
@@ -54,8 +55,16 @@ def create_category(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    cat = crud_create(db, data)
-    return APIResponse(message="Categoría creada correctamente", data=cat)
+    try:
+        cat = crud_create(db, data)
+        db.commit()
+        return APIResponse(message="Categoría creada correctamente", data=cat)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al crear categoría: {e}")
 
 
 # ----------------------------------------------------------
@@ -68,8 +77,16 @@ def update_category(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    cat = crud_update(db, category_id, data)
-    return APIResponse(message="Categoría actualizada", data=cat)
+    try:
+        cat = crud_update(db, category_id, data)
+        db.commit()
+        return APIResponse(message="Categoría actualizada", data=cat)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al actualizar categoría: {e}")
 
 
 # ----------------------------------------------------------
@@ -81,8 +98,16 @@ def toggle_category_active(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    cat = crud_toggle(db, category_id)
-    return APIResponse(message="Estado actualizado", data=cat)
+    try:
+        cat = crud_toggle(db, category_id)
+        db.commit()
+        return APIResponse(message="Estado actualizado", data=cat)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al cambiar estado: {e}")
 
 
 # ----------------------------------------------------------
@@ -94,5 +119,13 @@ def delete_category(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    result = crud_delete(db, category_id)
-    return APIResponse(message=result["message"])
+    try:
+        result = crud_delete(db, category_id)
+        db.commit()
+        return APIResponse(message=result["message"])
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error al eliminar categoría: {e}")

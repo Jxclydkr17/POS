@@ -37,7 +37,7 @@ from app.schemas.issuer_profile import IssuerProfileOut, IssuerProfileUpdate
 from app.core.dependencies import get_current_user, require_role
 from app.utils.cabys_updater import update_cabys
 from app.utils.responses import success_response
-from app.utils.dt import utcnow
+from app.utils.dt import utcnow, now_cr
 
 from app.services.settings_service import (
     get_settings,
@@ -159,7 +159,12 @@ def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db),
 
     settings = get_settings(db)
     settings.logo_path = filepath
-    db.commit()
+    # FASE 4 — Fix 4.1: try/except + rollback
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     log_audit(db, "upload_logo", {"filename": filename},
               user_id=getattr(current_user, "id", None),
@@ -399,7 +404,7 @@ def export_config(db: Session = Depends(get_db), current_user=Depends(get_curren
 
     return JSONResponse(
         content=export_data,
-        headers={"Content-Disposition": f"attachment; filename=config_export_{datetime.now().strftime('%Y%m%d')}.json"}
+        headers={"Content-Disposition": f"attachment; filename=config_export_{now_cr().strftime('%Y%m%d')}.json"}
     )
 
 
@@ -429,7 +434,6 @@ def import_config(file: UploadFile = File(...), db: Session = Depends(get_db),
         for key, value in settings_data.items():
             if hasattr(settings, key) and key not in ("id", "created_at", "updated_at"):
                 setattr(settings, key, value)
-        db.commit()
 
     # Importar issuer profile
     issuer_data = data.get("issuer_profile", {})
@@ -442,7 +446,13 @@ def import_config(file: UploadFile = File(...), db: Session = Depends(get_db),
         for key, value in issuer_data.items():
             if hasattr(issuer, key) and key not in ("id", "created_at"):
                 setattr(issuer, key, value)
+
+    # FASE 4 — Fix 4.1: Un solo commit atómico para settings + issuer
+    try:
         db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     log_audit(db, "import_config", {"filename": file.filename},
               user_id=getattr(current_user, "id", None),
@@ -477,7 +487,12 @@ def get_issuer_profile(db: Session = Depends(get_db)):
             branch_code="101", terminal_code="00001",
         )
         db.add(issuer)
-        db.commit()
+        # FASE 4 — Fix 4.1: try/except + rollback
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         db.refresh(issuer)
     return success_response("Perfil emisor obtenido", issuer)
 
@@ -510,7 +525,12 @@ def update_issuer_profile(payload: IssuerProfileUpdate, db: Session = Depends(ge
     for k, v in data.items():
         setattr(issuer, k, v)
 
-    db.commit()
+    # FASE 4 — Fix 4.1: try/except + rollback
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     db.refresh(issuer)
 
     log_audit(db, "update_issuer", data,

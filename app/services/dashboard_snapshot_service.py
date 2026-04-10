@@ -105,7 +105,9 @@ def save_dashboard_snapshot(db: Session, target_date: date) -> DashboardSnapshot
         snapshot = DashboardSnapshot(**data)
         db.add(snapshot)
 
-    db.commit()
+    # FASE 2 — Fix: flush only; el router (cash.close) es dueño del commit.
+    # Esto hace que cierre de caja + snapshot sean atómicos.
+    db.flush()
     db.refresh(snapshot)
     return snapshot
 
