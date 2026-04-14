@@ -40,6 +40,18 @@ from app.utils.unit_helpers import is_unit_based
 from app.core.config import is_sqlite
 
 
+# ── FASE 4 — Fix 4.5: Redondeo para display ──
+# Internamente los cálculos usan 5 decimales (requerido por Hacienda CR),
+# pero los montos mostrados al usuario deben redondearse a 2 decimales
+# para no mostrar cosas como "₡15,234.56789".
+_DISPLAY_Q = Decimal("0.01")
+
+
+def _display(value) -> float:
+    """Redondea un monto a 2 decimales para respuestas API / UI."""
+    return float(Decimal(str(value)).quantize(_DISPLAY_Q, rounding=ROUND_HALF_UP))
+
+
 # ── FASE 1 — Fix 1.3: with_for_update() no funciona en SQLite ──
 def _lock_for_update(query):
     """Aplica bloqueo pesimista solo si el motor lo soporta (MySQL)."""
@@ -93,14 +105,35 @@ def calc_line_tax(
 
 
 def _get_open_cash_session(db: Session) -> CashSession:
+    """
+    FASE 2 — Fix 2.5: Búsqueda timezone-safe de caja abierta.
+
+    Primero busca la sesión de hoy (caso más común).
+    Si no la encuentra (ej: venta a las 00:05 con caja de ayer aún abierta),
+    busca CUALQUIER sesión abierta como fallback.
+    Esto cubre el edge case de medianoche sin forzar al cajero a cerrar
+    y reabrir caja exactamente a las 12:00 AM.
+    """
+    # Intento 1: sesión de hoy (caso normal, ~99% de las veces)
     cs = (
         db.query(CashSession)
         .filter(CashSession.status == "open", CashSession.date == today_cr())
         .first()
     )
-    if not cs:
-        raise HTTPException(status_code=400, detail="No hay una caja abierta para registrar la venta.")
-    return cs
+    if cs:
+        return cs
+
+    # Intento 2: cualquier sesión abierta (cubre cruce de medianoche)
+    cs = (
+        db.query(CashSession)
+        .filter(CashSession.status == "open")
+        .order_by(CashSession.date.desc())
+        .first()
+    )
+    if cs:
+        return cs
+
+    raise HTTPException(status_code=400, detail="No hay una caja abierta para registrar la venta.")
 
 
 def _get_or_create_issuer(db: Session) -> IssuerProfile:
@@ -262,11 +295,20 @@ def _revert_cash_movement(db: Session, sale: Sale, concept: str, source: str):
         .filter(CashSession.id == sale.cash_session_id, CashSession.status == "open")
         .first()
     )
-    # Si la sesión original ya se cerró, usar la sesión abierta actual
+    # Si la sesión original ya se cerró, buscar la sesión abierta actual
+    # ── FASE 2 — Fix 2.5: Fallback timezone-safe ──
     if not target_session:
         target_session = (
             db.query(CashSession)
             .filter(CashSession.status == "open", CashSession.date == today_cr())
+            .first()
+        )
+    if not target_session:
+        # Cruce de medianoche: buscar cualquier sesión abierta
+        target_session = (
+            db.query(CashSession)
+            .filter(CashSession.status == "open")
+            .order_by(CashSession.date.desc())
             .first()
         )
     if target_session:
@@ -424,7 +466,7 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         "message": "Venta registrada correctamente.",
         "sale": {
             "id": new_sale.id, "customer": customer_name,
-            "total": float(total), "payment_method": payment_method,
+            "total": _display(total), "payment_method": payment_method,
             "document_type": document_type, "user_id": current_user.id,
             "created_at": new_sale.created_at.isoformat(),
         },
@@ -438,6 +480,11 @@ def _build_sale_pdf_data(db, sale, customer_name, payment_method, document_type,
     """
     FASE 4 — Fix 4.3: Prepara los datos para el PDF de forma síncrona (necesita DB).
     Retorna un dict puro que se puede pasar a un thread sin sesión DB.
+
+    FASE 2 — Fix 2.3: Carga los detalles con query explícita en vez de
+    depender del lazy load de sale.details, que podría fallar con
+    DetachedInstanceError si la sesión está en un estado inconsistente
+    después de flush+refresh (especialmente en SQLite con WAL).
     """
     from app.services.settings_service import get_business_info
     biz = get_business_info(db)
@@ -453,14 +500,19 @@ def _build_sale_pdf_data(db, sale, customer_name, payment_method, document_type,
         "business": biz,
     }
 
+    # ── FASE 2 — Fix 2.3: Query explícita en vez de lazy load ──
+    # sale.details podría no estar cargado si la sesión no hizo
+    # eager load. Consultamos directamente para garantizar datos.
+    details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale.id).all()
+
     # ⚡ Prefetch: cargar todos los productos necesarios en UNA sola query
-    product_ids = [d.product_id for d in sale.details if d.product_id and not getattr(d, "is_common", False)]
+    product_ids = [d.product_id for d in details if d.product_id and not getattr(d, "is_common", False)]
     products_map = {}
     if product_ids:
         products = db.query(Product).filter(Product.id.in_(product_ids)).all()
         products_map = {p.id: p for p in products}
 
-    for d in sale.details:
+    for d in details:
         _unit_type = "Unid"
         if getattr(d, "is_common", False) or d.product_id is None:
             prod_name = f"📦 {d.common_description or 'Producto común'}"
@@ -598,7 +650,7 @@ def get_sales_by_range(
         result.append({
             "id": s.id, "customer": cname,
             "payment_method": s.payment_method or "Efectivo",
-            "total": float(s.total), "status": s.status,
+            "total": _display(s.total), "status": s.status,
             "user_id": s.user_id,
             "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
         })
@@ -613,16 +665,16 @@ def get_sale_detail(db: Session, sale_id: int) -> dict:
     details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale.id).all()
     return {
         "id": sale.id, "customer_id": sale.customer_id,
-        "user_id": sale.user_id, "total": sale.total,
+        "user_id": sale.user_id, "total": _display(sale.total),
         "payment_method": sale.payment_method, "status": sale.status,
         "created_at": sale.created_at,
         "details": [
             {
-                "product_id": d.product_id, "quantity": d.quantity,
-                "unit_price": d.unit_price, "subtotal": d.subtotal,
-                "discount_percent": float(d.discount_percent or 0),
-                "tax_rate": float(d.tax_rate or 0),
-                "tax_amount": float(d.tax_amount or 0),
+                "product_id": d.product_id, "quantity": float(d.quantity),
+                "unit_price": _display(d.unit_price), "subtotal": _display(d.subtotal),
+                "discount_percent": _display(d.discount_percent or 0),
+                "tax_rate": _display(d.tax_rate or 0),
+                "tax_amount": _display(d.tax_amount or 0),
                 "is_common": bool(d.is_common),
                 "common_description": d.common_description,
             }
@@ -675,6 +727,7 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate, current_user: Us
     # Ajustar caja
     if is_efectivo(sale.payment_method) and abs(diff) > Decimal("0.01"):
         # Bug 4.2: usar la sesión de la venta, fallback a la abierta hoy
+        # ── FASE 2 — Fix 2.5: Fallback timezone-safe ──
         current_cash = (
             db.query(CashSession)
             .filter(CashSession.id == sale.cash_session_id, CashSession.status == "open")
@@ -684,6 +737,14 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate, current_user: Us
             current_cash = (
                 db.query(CashSession)
                 .filter(CashSession.status == "open", CashSession.date == today_cr())
+                .first()
+            )
+        if not current_cash:
+            # Cruce de medianoche: cualquier sesión abierta
+            current_cash = (
+                db.query(CashSession)
+                .filter(CashSession.status == "open")
+                .order_by(CashSession.date.desc())
                 .first()
             )
         if current_cash:
@@ -736,7 +797,7 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate, current_user: Us
     # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
     db.flush()
     db.refresh(sale)
-    return {"message": f"Venta #{sale_id} actualizada.", "sale_id": sale_id, "total": float(new_total)}
+    return {"message": f"Venta #{sale_id} actualizada.", "sale_id": sale_id, "total": _display(new_total)}
 
 
 def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de comprobante") -> dict:

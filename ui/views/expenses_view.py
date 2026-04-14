@@ -1,14 +1,18 @@
+# ui/views/expenses_view.py
+"""
+FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout en acciones.
+"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QMessageBox, QDateEdit,
-    QDialog, QFormLayout, QDialogButtonBox, QFileDialog
+    QDialog, QFormLayout, QDialogButtonBox, QFileDialog, QHeaderView
 )
 from PySide6.QtCore import Qt, QDate
-import requests
 import logging
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.calendar_fix import fix_calendar_colors
+from ui.utils.http_worker import api_call, api_request
 from app.utils.export_utils import export_expenses_pdf
 from app.constants.expense_categories import EXPENSE_CATEGORIES, EXPENSE_CATEGORIES_FILTER
 from app.constants.payment_methods import ALL_PAYMENT_METHODS
@@ -27,19 +31,22 @@ class ExpensesView(QWidget):
         self.setWindowTitle("Gastos Operativos")
         self.resize(1050, 700)
 
-        # Estado de paginación
         self.current_page = 0
         self.page_size = PAGE_SIZE
         self.total_count = 0
+        self.expenses = []
+        self.total_backend = 0
 
         self.setup_ui()
         self.load_expenses()
+
+    def _auth_headers(self):
+        return {"Authorization": f"Bearer {session.token}"} if session.token else {}
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignTop)
 
-        # ----- TÍTULO -----
         title = QLabel("💸 Registro de Gastos Operativos")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("font-size:18px; font-weight:bold; margin-bottom:10px;")
@@ -77,60 +84,42 @@ class ExpensesView(QWidget):
         self.table.setHorizontalHeaderLabels(
             ["Fecha", "Categoría", "Descripción", "Monto (₡)", "Pago", "Usuario"]
         )
-
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.table.setStyleSheet("""
             QTableWidget {
-                background-color: #1e1e1e;
-                color: #f0f0f0;
-                gridline-color: #3a3a3a;
-                border: none;
-                outline: 0;
+                background-color: #1e1e1e; color: #f0f0f0;
+                gridline-color: #3a3a3a; border: none; outline: 0;
             }
-            QTableWidget::item:selected {
-                background-color: #0078D7;
-                color: white;
-            }
+            QTableWidget::item:selected { background-color: #0078D7; color: white; }
             QHeaderView::section {
-                background-color: #2c2c2c;
-                color: #f0f0f0;
-                padding: 6px;
-                border: none;
-                font-weight: bold;
+                background-color: #2c2c2c; color: #f0f0f0;
+                padding: 6px; border: none; font-weight: bold;
             }
         """)
-        from PySide6.QtWidgets import QHeaderView
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
-
         layout.addWidget(self.table)
 
         # --- Total + Paginación ---
         info_row = QHBoxLayout()
-
         self.lbl_total = QLabel("Total de gastos: ₡0.00")
         self.lbl_total.setStyleSheet("font-size:14px; font-weight:bold;")
         info_row.addWidget(self.lbl_total)
-
         info_row.addStretch()
-
         self.btn_prev = QPushButton("◀ Anterior")
         self.btn_prev.clicked.connect(self.prev_page)
         self.btn_prev.setEnabled(False)
         info_row.addWidget(self.btn_prev)
-
         self.lbl_page = QLabel("Página 1")
         self.lbl_page.setStyleSheet("font-size:12px; margin: 0 8px;")
         info_row.addWidget(self.lbl_page)
-
         self.btn_next = QPushButton("Siguiente ▶")
         self.btn_next.clicked.connect(self.next_page)
         self.btn_next.setEnabled(False)
         info_row.addWidget(self.btn_next)
-
         layout.addLayout(info_row)
 
         # --- Formulario de registro ---
@@ -142,7 +131,6 @@ class ExpensesView(QWidget):
         self.cmb_method = QComboBox(); self.cmb_method.addItems(ALL_PAYMENT_METHODS)
         btn_add = QPushButton("➕ Registrar gasto")
         btn_add.clicked.connect(self.add_expense)
-
         for w in [self.txt_desc, self.cmb_new_cat, self.txt_amount, self.cmb_method, btn_add]:
             form.addWidget(w)
         layout.addLayout(form)
@@ -159,9 +147,7 @@ class ExpensesView(QWidget):
 
         self.table.cellClicked.connect(self.on_row_selected)
 
-    # ----------------------------------------------------------------------
-    # Paginación
-    # ----------------------------------------------------------------------
+    # ── Paginación ──
     def filter_from_first_page(self):
         self.current_page = 0
         self.load_expenses()
@@ -185,64 +171,60 @@ class ExpensesView(QWidget):
             f"Página {self.current_page + 1} de {max_page + 1}  ({self.total_count} registros)"
         )
 
-    # ----------------------------------------------------------------------
-
     def on_row_selected(self, row, column):
-        pass  # Selección visual manejada por el estilo de la tabla
+        pass
 
-    # ----------------------------------------------------------------------
-    # load_expenses
-    # ----------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Carga asíncrona
+    # ─────────────────────────────────────────────────────
     def load_expenses(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            selected_category = self.cmb_category.currentText()
+        selected_category = self.cmb_category.currentText()
+        skip = self.current_page * self.page_size
+        params = {
+            "start_date": self.dt_from.date().toString("yyyy-MM-dd"),
+            "end_date": self.dt_to.date().toString("yyyy-MM-dd"),
+            "skip": skip,
+            "limit": self.page_size,
+        }
+        if selected_category and selected_category != "Todos":
+            params["category"] = selected_category
 
-            skip = self.current_page * self.page_size
-            params = {
-                "start_date": self.dt_from.date().toString("yyyy-MM-dd"),
-                "end_date": self.dt_to.date().toString("yyyy-MM-dd"),
-                "skip": skip,
-                "limit": self.page_size,
-            }
+        api_call(
+            "get", API_URL_EXPENSES,
+            headers=self._auth_headers(),
+            params=params,
+            on_success=self._on_expenses_loaded,
+            on_error=self._on_expenses_error,
+        )
 
-            if selected_category and selected_category != "Todos":
-                params["category"] = selected_category
+    def _on_expenses_loaded(self, payload):
+        if not isinstance(payload, dict):
+            return
+        if not payload.get("success", True):
+            self._on_expenses_error(payload.get("message", "Error al cargar gastos"))
+            return
 
-            res = requests.get(API_URL_EXPENSES, headers=headers, params=params)
+        data = payload.get("data", {})
+        self.expenses = data.get("items", [])
+        self.total_backend = data.get("total_amount", 0)
+        self.total_count = data.get("total_count", 0)
 
-            if res.status_code != 200:
-                raise Exception(res.text)
+        self.update_table()
+        self.update_pagination_controls()
 
-            payload = res.json()
+    def _on_expenses_error(self, msg):
+        QMessageBox.critical(self, "Error", f"No se pudieron cargar los gastos:\n{msg}")
+        logger.error(f"Error cargando gastos: {msg}")
 
-            if not payload.get("success", True):
-                raise Exception(payload.get("message", "Error al cargar gastos"))
-
-            data = payload.get("data", {})
-            self.expenses = data.get("items", [])
-            self.total_backend = data.get("total_amount", 0)
-            self.total_count = data.get("total_count", 0)
-
-            self.update_table()
-            self.update_pagination_controls()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar los gastos:\n{e}")
-            logger.error(f"Error cargando gastos: {e}")
-
-    # ----------------------------------------------------------------------
-    # update_table
-    # ----------------------------------------------------------------------
+    # ── update_table (sin cambios, ya era local) ──
     def update_table(self):
-        if not hasattr(self, 'expenses') or not self.expenses:
+        if not self.expenses:
             self.table.setRowCount(0)
             self.lbl_total.setText("Total de gastos: ₡0.00")
             return
 
         self.table.setRowCount(len(self.expenses))
         total = 0
-
         for row, e in enumerate(self.expenses):
             date_str = str(e.get("date", ""))
             category = e.get("category", "")
@@ -257,50 +239,37 @@ class ExpensesView(QWidget):
             self.table.setItem(row, 3, QTableWidgetItem(f'{amount:,.2f}'))
             self.table.setItem(row, 4, QTableWidgetItem(payment))
             self.table.setItem(row, 5, QTableWidgetItem(created_by))
-
             total += amount
 
         self.lbl_total.setText(f"Total de gastos: ₡{total:,.2f}")
         self.table.viewport().update()
 
-    # ----------------------------------------------------------------------
-    # Registrar gasto
-    # ----------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.2: Acciones con timeout
+    # ─────────────────────────────────────────────────────
     def add_expense(self):
         try:
             desc = self.txt_desc.text().strip()
-            category = self.cmb_new_cat.currentText()
             amount_text = self.txt_amount.text().strip()
-
             if not desc:
-                QMessageBox.warning(self, "Atención", "Ingrese una descripción.")
-                return
+                QMessageBox.warning(self, "Atención", "Ingrese una descripción."); return
             if not amount_text:
-                QMessageBox.warning(self, "Atención", "Ingrese un monto.")
-                return
-
+                QMessageBox.warning(self, "Atención", "Ingrese un monto."); return
             try:
                 amount = float(amount_text)
-                if amount <= 0:
-                    raise ValueError("El monto debe ser mayor a 0")
+                if amount <= 0: raise ValueError("El monto debe ser mayor a 0")
             except ValueError as e:
-                QMessageBox.warning(self, "Atención", f"Monto inválido: {e}")
-                return
+                QMessageBox.warning(self, "Atención", f"Monto inválido: {e}"); return
 
-            payment = self.cmb_method.currentText()
             data = {
                 "description": desc,
-                "category": category,
+                "category": self.cmb_new_cat.currentText(),
                 "amount": amount,
-                "payment_method": payment
+                "payment_method": self.cmb_method.currentText(),
             }
-
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.post(API_URL_EXPENSES, json=data, headers=headers)
-
+            res = api_request("post", API_URL_EXPENSES, json=data, headers=self._auth_headers())
             if res.status_code != 200:
                 raise Exception(f"Error del servidor: {res.text}")
-
             response_data = res.json()
             if not response_data.get("success", True):
                 raise Exception(response_data.get("message", "Error desconocido"))
@@ -309,95 +278,57 @@ class ExpensesView(QWidget):
             self.txt_amount.clear()
             self.load_expenses()
             QMessageBox.information(self, "Éxito", f"Gasto de ₡{amount:,.2f} registrado correctamente.")
-
-        except requests.exceptions.RequestException as e:
-            QMessageBox.critical(self, "Error", f"Error de conexión:\n{e}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo registrar el gasto:\n{e}")
 
-    # ----------------------------------------------------------------------
-    # Editar gasto
-    # ----------------------------------------------------------------------
     def edit_expense(self):
         row = self.table.currentRow()
         if row < 0:
-            QMessageBox.warning(self, "Atención", "Seleccione un gasto para editar.")
-            return
+            QMessageBox.warning(self, "Atención", "Seleccione un gasto para editar."); return
 
         expense = self.expenses[row]
         dlg = EditExpenseDialog(expense, self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             updates = dlg.get_updates()
-            if not updates:
-                return
-
+            if not updates: return
             try:
-                headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-                res = requests.put(
-                    f"{API_URL_EXPENSES}/{expense['id']}",
-                    json=updates,
-                    headers=headers
+                res = api_request(
+                    "put", f"{API_URL_EXPENSES}/{expense['id']}",
+                    json=updates, headers=self._auth_headers(),
                 )
-
-                if res.status_code != 200:
-                    raise Exception(res.text)
-
+                if res.status_code != 200: raise Exception(res.text)
                 response_data = res.json()
                 if not response_data.get("success", True):
                     raise Exception(response_data.get("message", "Error desconocido"))
-
                 QMessageBox.information(self, "Éxito", "Gasto actualizado correctamente.")
                 self.load_expenses()
-
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"No se pudo actualizar el gasto:\n{e}")
 
-    # ----------------------------------------------------------------------
-    # Eliminar gasto
-    # ----------------------------------------------------------------------
     def delete_expense(self):
         row = self.table.currentRow()
         if row < 0:
-            QMessageBox.warning(self, "Atención", "Seleccione un gasto para eliminar.")
-            return
+            QMessageBox.warning(self, "Atención", "Seleccione un gasto para eliminar."); return
 
         expense_id = self.expenses[row]["id"]
         confirm = QMessageBox.question(self, "Confirmar", "¿Eliminar gasto seleccionado?")
-        if confirm != QMessageBox.Yes:
-            return
-
+        if confirm != QMessageBox.Yes: return
         try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.delete(f"{API_URL_EXPENSES}/{expense_id}", headers=headers)
-
-            if res.status_code != 200:
-                raise Exception(res.text)
-
+            res = api_request("delete", f"{API_URL_EXPENSES}/{expense_id}", headers=self._auth_headers())
+            if res.status_code != 200: raise Exception(res.text)
             QMessageBox.information(self, "Éxito", "Gasto eliminado correctamente.")
             self.load_expenses()
-
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo eliminar el gasto:\n{e}")
 
-    # ----------------------------------------------------------------------
-    # Exportar Excel (con diálogo de ubicación)
-    # ----------------------------------------------------------------------
+    # ── Exportar (sin cambios — no hacen HTTP) ──
     def export_excel(self):
         try:
             rows = self.table.rowCount()
             if rows == 0:
-                QMessageBox.warning(self, "Atención", "No hay gastos para exportar.")
-                return
-
-            # Pedir ubicación al usuario
-            filepath, _ = QFileDialog.getSaveFileName(
-                self,
-                "Guardar reporte Excel",
-                "reporte_gastos.xlsx",
-                "Archivos Excel (*.xlsx)"
-            )
-            if not filepath:
-                return  # El usuario canceló
+                QMessageBox.warning(self, "Atención", "No hay gastos para exportar."); return
+            filepath, _ = QFileDialog.getSaveFileName(self, "Guardar reporte Excel", "reporte_gastos.xlsx", "Archivos Excel (*.xlsx)")
+            if not filepath: return
 
             data = []
             for i in range(rows):
@@ -408,32 +339,19 @@ class ExpensesView(QWidget):
                     "amount": float(self.table.item(i, 3).text().replace(",", "")),
                     "payment_method": self.table.item(i, 4).text(),
                 })
-
             from app.utils.export_utils import export_expenses_excel
             filename = export_expenses_excel(data, filename=filepath)
             QMessageBox.information(self, "Éxito", f"Archivo Excel generado:\n{filename}")
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el Excel:\n{e}")
 
-    # ----------------------------------------------------------------------
-    # Exportar PDF (con diálogo de ubicación)
-    # ----------------------------------------------------------------------
     def export_pdf(self):
         try:
             rows = self.table.rowCount()
             if rows == 0:
-                QMessageBox.warning(self, "Atención", "No hay gastos para exportar.")
-                return
-
-            # Pedir ubicación al usuario
-            filepath, _ = QFileDialog.getSaveFileName(
-                self,
-                "Guardar reporte PDF",
-                "reporte_gastos.pdf",
-                "Archivos PDF (*.pdf)"
-            )
-            if not filepath:
-                return  # El usuario canceló
+                QMessageBox.warning(self, "Atención", "No hay gastos para exportar."); return
+            filepath, _ = QFileDialog.getSaveFileName(self, "Guardar reporte PDF", "reporte_gastos.pdf", "Archivos PDF (*.pdf)")
+            if not filepath: return
 
             data = []
             for i in range(rows):
@@ -444,7 +362,6 @@ class ExpensesView(QWidget):
                     "amount": float(self.table.item(i, 3).text().replace(",", "")),
                     "payment_method": self.table.item(i, 4).text(),
                 })
-
             total = sum(row["amount"] for row in data)
             start_date = self.dt_from.date().toString("yyyy-MM-dd")
             end_date = self.dt_to.date().toString("yyyy-MM-dd")
@@ -455,7 +372,7 @@ class ExpensesView(QWidget):
 
 
 # ==================================================================
-# Diálogo de edición de gasto
+# Diálogo de edición de gasto (sin cambios — no hace HTTP)
 # ==================================================================
 class EditExpenseDialog(QDialog):
     def __init__(self, expense: dict, parent=None):
@@ -473,8 +390,7 @@ class EditExpenseDialog(QDialog):
         self.cmb_cat.addItems(EXPENSE_CATEGORIES)
         current_cat = expense.get("category", "")
         idx = self.cmb_cat.findText(current_cat)
-        if idx >= 0:
-            self.cmb_cat.setCurrentIndex(idx)
+        if idx >= 0: self.cmb_cat.setCurrentIndex(idx)
         layout.addRow("Categoría:", self.cmb_cat)
 
         self.txt_amount = QLineEdit(str(expense.get("amount", "")))
@@ -484,8 +400,7 @@ class EditExpenseDialog(QDialog):
         self.cmb_method.addItems(ALL_PAYMENT_METHODS)
         current_pm = expense.get("payment_method", "")
         idx_pm = self.cmb_method.findText(current_pm)
-        if idx_pm >= 0:
-            self.cmb_method.setCurrentIndex(idx_pm)
+        if idx_pm >= 0: self.cmb_method.setCurrentIndex(idx_pm)
         layout.addRow("Método de pago:", self.cmb_method)
 
         buttons = QDialogButtonBox(
@@ -496,26 +411,20 @@ class EditExpenseDialog(QDialog):
         layout.addRow(buttons)
 
     def get_updates(self) -> dict:
-        """Devuelve solo los campos que cambiaron respecto al original."""
         updates = {}
-
         new_desc = self.txt_desc.text().strip()
         if new_desc != (self.expense.get("description") or ""):
             updates["description"] = new_desc
-
         new_cat = self.cmb_cat.currentText()
         if new_cat != self.expense.get("category", ""):
             updates["category"] = new_cat
-
         try:
             new_amount = float(self.txt_amount.text().strip())
             if new_amount != self.expense.get("amount"):
                 updates["amount"] = new_amount
         except ValueError:
             pass
-
         new_pm = self.cmb_method.currentText()
         if new_pm != self.expense.get("payment_method", ""):
             updates["payment_method"] = new_pm
-
         return updates

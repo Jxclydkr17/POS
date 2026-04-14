@@ -1,3 +1,7 @@
+# ui/views/categories_view.py
+"""
+FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout en acciones.
+"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QMessageBox, QHeaderView,
@@ -5,13 +9,12 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
-import requests
 
 from ui.dialogs.add_category_dialog import AddCategoryDialog
 from ui.dialogs.edit_category_dialog import EditCategoryDialog
 from ui.session_manager import session
-
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call, api_request
 
 API_URL = f"{BASE_URL}/categories"
 
@@ -156,68 +159,76 @@ class CategoriesView(QWidget):
             self.table.setRowHidden(row, query not in name)
 
     # -----------------------------------------------------
-    # Cargar categorías
+    # Headers de autenticación
     # -----------------------------------------------------
+    def _auth_headers(self):
+        return {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Carga asíncrona de categorías
+    # ─────────────────────────────────────────────────────
     def load_categories(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            r = requests.get(API_URL, headers=headers)
+        """Carga las categorías en background sin congelar la UI."""
+        api_call(
+            "get", API_URL,
+            headers=self._auth_headers(),
+            on_success=self._on_categories_loaded,
+            on_error=self._on_load_error,
+        )
 
-            if r.status_code != 200:
-                raise Exception("Error al cargar categorías")
+    def _on_categories_loaded(self, payload):
+        """Callback: categorías recibidas del servidor."""
+        cats = payload.get("data", []) if isinstance(payload, dict) else []
 
-            payload = r.json()
-            cats = payload.get("data", [])
+        self.table.setRowCount(len(cats))
 
-            self.table.setRowCount(len(cats))
+        for row, c in enumerate(cats):
+            self.table.setItem(row, 0, QTableWidgetItem(str(c["id"])))
 
-            for row, c in enumerate(cats):
-                self.table.setItem(row, 0, QTableWidgetItem(str(c["id"])))
+            name = c.get("name", "")
+            icon = c.get("icon") or "📦"
+            desc = c.get("description") or ""
 
-                name = c.get("name", "")
-                icon = c.get("icon") or "📦"
-                desc = c.get("description") or ""
+            name_item = QTableWidgetItem(f"{icon}  {name}")
+            name_item.setTextAlignment(Qt.AlignCenter)
+            name_item.setData(ROLE_NAME, name)
+            name_item.setData(ROLE_ICON, icon)
+            name_item.setData(ROLE_DESC, desc)
+            self.table.setItem(row, 1, name_item)
 
-                # Guardar icon, name y description como datos estructurados
-                name_item = QTableWidgetItem(f"{icon}  {name}")
-                name_item.setTextAlignment(Qt.AlignCenter)
-                name_item.setData(ROLE_NAME, name)
-                name_item.setData(ROLE_ICON, icon)
-                name_item.setData(ROLE_DESC, desc)
-                self.table.setItem(row, 1, name_item)
+            total = int(c.get("total_products", 0) or 0)
+            item_total = QTableWidgetItem(str(total))
+            item_total.setTextAlignment(Qt.AlignCenter)
+            font = item_total.font()
+            font.setBold(True)
+            item_total.setFont(font)
 
-                total = int(c.get("total_products", 0) or 0)
-                item_total = QTableWidgetItem(str(total))
-                item_total.setTextAlignment(Qt.AlignCenter)
-                font = item_total.font()
-                font.setBold(True)
-                item_total.setFont(font)
+            if total == 0:
+                item_total.setForeground(Qt.gray)
+            elif total < 5:
+                item_total.setForeground(Qt.yellow)
+            else:
+                item_total.setForeground(Qt.green)
 
-                if total == 0:
-                    item_total.setForeground(Qt.gray)
-                elif total < 5:
-                    item_total.setForeground(Qt.yellow)
-                else:
-                    item_total.setForeground(Qt.green)
+            self.table.setItem(row, 2, item_total)
 
-                self.table.setItem(row, 2, item_total)
+            is_active = bool(c.get("is_active", True))
+            estado_text = "🟢 Activa" if is_active else "🔴 Inactiva"
+            item_estado = QTableWidgetItem(estado_text)
+            item_estado.setTextAlignment(Qt.AlignCenter)
 
-                is_active = bool(c.get("is_active", True))
-                estado_text = "🟢 Activa" if is_active else "🔴 Inactiva"
-                item_estado = QTableWidgetItem(estado_text)
-                item_estado.setTextAlignment(Qt.AlignCenter)
+            if not is_active:
+                item_estado.setForeground(Qt.gray)
+                name_item.setForeground(Qt.gray)
 
-                if not is_active:
-                    item_estado.setForeground(Qt.gray)
-                    name_item.setForeground(Qt.gray)
+            self.table.setItem(row, 3, item_estado)
 
-                self.table.setItem(row, 3, item_estado)
+        # Reaplicar filtro activo
+        self._apply_filter()
 
-            # Reaplicar filtro activo
-            self._apply_filter()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar las categorías.\n{e}")
+    def _on_load_error(self, msg):
+        """Callback: error al cargar categorías."""
+        QMessageBox.critical(self, "Error", f"No se pudieron cargar las categorías.\n{msg}")
 
     # -----------------------------------------------------
     # Crear categoría
@@ -246,9 +257,10 @@ class CategoriesView(QWidget):
         if dialog.exec():
             self.load_categories()
 
-    # -----------------------------------------------------
-    # Toggle activo / inactivo
-    # -----------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.2: Acciones con timeout
+    # ─────────────────────────────────────────────────────
+
     def toggle_category(self):
         row = self.table.currentRow()
         if row < 0:
@@ -270,8 +282,7 @@ class CategoriesView(QWidget):
             return
 
         try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            r = requests.patch(f"{API_URL}/{cat_id}/toggle", headers=headers)
+            r = api_request("patch", f"{API_URL}/{cat_id}/toggle", headers=self._auth_headers())
 
             if r.status_code != 200:
                 payload = r.json()
@@ -284,9 +295,6 @@ class CategoriesView(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo actualizar el estado.\n{e}")
 
-    # -----------------------------------------------------
-    # Eliminar
-    # -----------------------------------------------------
     def delete_category(self):
         row = self.table.currentRow()
         if row < 0:
@@ -305,8 +313,7 @@ class CategoriesView(QWidget):
             return
 
         try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            r = requests.delete(f"{API_URL}/{cat_id}", headers=headers)
+            r = api_request("delete", f"{API_URL}/{cat_id}", headers=self._auth_headers())
 
             if r.status_code != 200:
                 msg = r.json().get("message", "Error desconocido")

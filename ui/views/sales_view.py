@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QSize, QTimer, QEvent
 from PySide6.QtGui import QDoubleValidator, QPixmap
 from PySide6.QtWidgets import QApplication
 
-import requests
+from ui.utils.http_worker import api_call, api_request
 import copy
 import time
 
@@ -740,7 +740,7 @@ class SalesView(QWidget):
                 if cat_id is not None:
                     params["category_id"] = cat_id
 
-            resp = requests.get(
+            resp = api_request("get",
                 PRODUCTS_URL,
                 headers=self._auth_headers(),
                 params=params,
@@ -841,7 +841,7 @@ class SalesView(QWidget):
     def load_categories(self):
         """Llena el combo de categorías desde /categories/ (no depende de productos cargados)."""
         try:
-            resp = requests.get(
+            resp = api_request("get",
                 CATEGORIES_URL,
                 headers=self._auth_headers(),
                 timeout=10
@@ -872,7 +872,7 @@ class SalesView(QWidget):
     def load_favorite_products(self):
         """Carga productos rápidos basados en los más vendidos."""
         try:
-            resp = requests.get(
+            resp = api_request("get",
                 FAVORITES_URL,
                 headers=self._auth_headers(),
                 params={"limit": 6, "days": 30},
@@ -954,7 +954,7 @@ class SalesView(QWidget):
             except Exception:
                 prev_text = ""
 
-            resp = requests.get(CUSTOMERS_URL, headers=self._auth_headers(), timeout=10)
+            resp = api_request("get", CUSTOMERS_URL, headers=self._auth_headers(), timeout=10)
             if resp.status_code != 200:
                 show_toast(f"Error al cargar clientes ({resp.status_code})", success=False, parent=self)
                 return
@@ -1089,7 +1089,7 @@ class SalesView(QWidget):
 
         # Intentar endpoint /products/barcode/{barcode}
         try:
-            resp = requests.get(
+            resp = api_request("get",
                 f"{API_BASE_URL}/products/barcode/{barcode}",
                 headers=self._auth_headers(),
                 timeout=5
@@ -1104,7 +1104,7 @@ class SalesView(QWidget):
         # Si el endpoint de barcode no devolvió nada, intentar búsqueda por código exacto
         if not product_found:
             try:
-                resp = requests.get(
+                resp = api_request("get",
                     PRODUCTS_URL,
                     headers=self._auth_headers(),
                     params={"search": barcode, "limit": 5, "skip": 0},
@@ -1812,7 +1812,6 @@ class SalesView(QWidget):
     # ------------------------------------------------------------------
     from PySide6.QtWidgets import QMessageBox, QDialog
     from PySide6.QtCore import Qt
-    import requests
 
 
     def on_quick_sale_toggled(self, checked: bool):
@@ -1883,7 +1882,7 @@ class SalesView(QWidget):
 
     def _submit_sale(self, payload: dict, print_ticket: bool = False):
         try:
-            resp = requests.post(
+            resp = api_request("post",
                 SALES_URL,
                 json=payload,
                 headers=self._auth_headers(),
@@ -2432,7 +2431,7 @@ class SalesView(QWidget):
 
     def check_cash_session(self):
         try:
-            resp = requests.get(
+            resp = api_request("get",
                 f"{API_BASE_URL}/cash/current",
                 headers=self._auth_headers(),
                 timeout=5
@@ -2483,7 +2482,7 @@ class SalesView(QWidget):
             return
 
         try:
-            resp = requests.post(
+            resp = api_request("post",
                 f"{API_BASE_URL}/cash/open",
                 json={"opening_amount": amount},
                 headers=self._auth_headers(),
@@ -2562,7 +2561,6 @@ class SalesView(QWidget):
         dialog.exec()
 
     def send_cash_movement(self, movement_type: str, concept: str, amount: float):
-        import requests
         from PySide6.QtWidgets import QMessageBox
 
         payload = {
@@ -2573,7 +2571,7 @@ class SalesView(QWidget):
         }
 
         try:
-            resp = requests.post(
+            resp = api_request("post",
                 f"{API_BASE_URL}/cash/movements",
                 json=payload,
                 headers=self._auth_headers(),
@@ -2597,14 +2595,13 @@ class SalesView(QWidget):
         self.btn_cash_out.setEnabled(enabled)
 
     def open_close_cash_dialog(self):
-        import requests
         from PySide6.QtWidgets import (
             QDialog, QVBoxLayout, QLabel, QLineEdit,
             QPushButton, QMessageBox, QGridLayout
         )
 
         try:
-            resp = requests.get(
+            resp = api_request("get",
                 f"{API_BASE_URL}/cash/report/today",
                 headers=self._auth_headers(),
                 timeout=5
@@ -2672,7 +2669,6 @@ class SalesView(QWidget):
         dialog.exec()
 
     def confirm_close_cash(self, dialog, real_amount_text):
-        import requests
         from PySide6.QtWidgets import QMessageBox
 
         try:
@@ -2684,7 +2680,7 @@ class SalesView(QWidget):
             return
 
         try:
-            resp = requests.post(
+            resp = api_request("post",
                 f"{API_BASE_URL}/cash/close",
                 json={"closing_amount": real_amount},
                 headers=self._auth_headers(),
@@ -2744,7 +2740,7 @@ class SalesView(QWidget):
             
     def fetch_customer_credit_status(self, customer_id: int):
         try:
-            r = requests.get(
+            r = api_request("get",
                 f"{API_BASE_URL}/credits/{customer_id}",
                 headers=self._auth_headers()
             )

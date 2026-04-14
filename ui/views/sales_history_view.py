@@ -1,18 +1,20 @@
+# ui/views/sales_history_view.py
+"""
+FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout.
+"""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QComboBox, QTableWidget, QTableWidgetItem, QDateEdit, QMessageBox, QFrame
 )
 from PySide6.QtCore import Qt, QDate
-import requests
+from PySide6.QtGui import QColor, QBrush
 import os
-from datetime import date
-from PySide6.QtCore import QDate
 import logging
-
 
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.utils.calendar_fix import fix_calendar_colors
+from ui.utils.http_worker import api_call, api_request
 
 API_URL = BASE_URL
 
@@ -20,11 +22,14 @@ API_URL = BASE_URL
 class SalesHistoryView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.main = parent  # referencia al MainWindow
+        self.main = parent
         self.setWindowTitle("Registro de Ventas")
         self.resize(1100, 650)
         self.setup_ui()
         self.load_sales()
+
+    def _auth_headers(self):
+        return {"Authorization": f"Bearer {session.token}"}
 
     # ----------------------------------------------------------------------
 
@@ -35,8 +40,6 @@ class SalesHistoryView(QWidget):
         left = QVBoxLayout()
         left.setAlignment(Qt.AlignTop)
 
-
-        # ----- TÍTULO -----
         title = QLabel("🧾 Registro de Ventas")
         title.setStyleSheet("font-size:18px; font-weight:bold; margin:6px 0;")
         left.addWidget(title)
@@ -119,12 +122,10 @@ class SalesHistoryView(QWidget):
         self.lbl_total.setStyleSheet("font-size:16px; font-weight:bold;")
         right.addWidget(self.lbl_total)
 
-        # Botón PDF individual
         self.btn_open_pdf = QPushButton("🧾 Ver comprobante PDF")
         self.btn_open_pdf.clicked.connect(self.open_pdf)
         right.addWidget(self.btn_open_pdf)
 
-        # Botones futuros
         btns = QHBoxLayout()
         self.btn_email = QPushButton("📧 Enviar factura (placeholder)")
         self.btn_return = QPushButton("↩️ Devolución (placeholder)")
@@ -136,88 +137,106 @@ class SalesHistoryView(QWidget):
         right.addLayout(btns)
         root.addLayout(right, 5)
 
-    # ----------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Carga asíncrona de ventas
+    # ─────────────────────────────────────────────────────
 
     def load_sales(self):
-        try:
-            params = {
-                "start_date": self.dt_from.date().toString("yyyy-MM-dd"),
-                "end_date": self.dt_to.date().toString("yyyy-MM-dd")
-            }
+        """Carga el listado de ventas en background."""
+        params = {
+            "start_date": self.dt_from.date().toString("yyyy-MM-dd"),
+            "end_date": self.dt_to.date().toString("yyyy-MM-dd"),
+        }
 
-            pay = self.cmb_payment.currentText().lower()
-            if pay != "todos":
-                params["payment"] = pay
+        pay = self.cmb_payment.currentText().lower()
+        if pay != "todos":
+            params["payment"] = pay
 
-            st = self.cmb_status.currentText().lower()
-            if st != "todos":
-                params["status"] = st
+        st = self.cmb_status.currentText().lower()
+        if st != "todos":
+            params["status"] = st
 
-            q = self.txt_search.text()
-            if q:
-                params["q"] = q
+        q = self.txt_search.text()
+        if q:
+            params["q"] = q
 
-            headers = {"Authorization": f"Bearer {session.token}"}
-            r = requests.get(f"{API_URL}/reports/sales/history", params=params, headers=headers)
-            r.raise_for_status()
+        api_call(
+            "get", f"{API_URL}/reports/sales/history",
+            params=params,
+            headers=self._auth_headers(),
+            on_success=self._on_sales_loaded,
+            on_error=self._on_sales_error,
+        )
 
-            data = r.json()["sales"]
+    def _on_sales_loaded(self, response):
+        """Callback: ventas recibidas."""
+        data = response.get("sales", []) if isinstance(response, dict) else []
 
-            self.tbl.setRowCount(len(data))
-            for row, s in enumerate(data):
-                self.tbl.setItem(row, 0, QTableWidgetItem(str(s["id"])))
-                self.tbl.setItem(row, 1, QTableWidgetItem(s["created_at"]))
-                self.tbl.setItem(row, 2, QTableWidgetItem(s["customer_name"]))
-                self.tbl.setItem(row, 3, QTableWidgetItem(s["payment_method"]))
-                self.tbl.setItem(row, 4, QTableWidgetItem(f"{s['total']:,.2f}"))
+        self.tbl.setRowCount(len(data))
+        for row, s in enumerate(data):
+            self.tbl.setItem(row, 0, QTableWidgetItem(str(s["id"])))
+            self.tbl.setItem(row, 1, QTableWidgetItem(s["created_at"]))
+            self.tbl.setItem(row, 2, QTableWidgetItem(s["customer_name"]))
+            self.tbl.setItem(row, 3, QTableWidgetItem(s["payment_method"]))
+            self.tbl.setItem(row, 4, QTableWidgetItem(f"{s['total']:,.2f}"))
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo cargar el registro:\n{e}")
+    def _on_sales_error(self, msg):
+        QMessageBox.critical(self, "Error", f"No se pudo cargar el registro:\n{msg}")
 
-    # ----------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Detalle de venta asíncrono
+    # ─────────────────────────────────────────────────────
 
     def on_row_clicked(self, row, col):
-        try:
-            sale_id = int(self.tbl.item(row, 0).text())
-            headers = {"Authorization": f"Bearer {session.token}"}
-            r = requests.get(f"{API_URL}/reports/sales/{sale_id}", headers=headers)
-            r.raise_for_status()
+        """Carga el detalle de la venta seleccionada en background."""
+        item = self.tbl.item(row, 0)
+        if not item:
+            return
+        sale_id = int(item.text())
 
-            d = r.json()
+        api_call(
+            "get", f"{API_URL}/reports/sales/{sale_id}",
+            headers=self._auth_headers(),
+            on_success=self._on_detail_loaded,
+            on_error=self._on_detail_error,
+        )
 
-            self.lbl_header.setText(f"Factura #{d['id']} — {d['created_at']}")
-            self.lbl_meta.setText(
-                f"Cliente: <b>{d['customer_name']}</b>  |  Método: <b>{d['payment_method']}</b>  |  Estado: <b>{d['status']}</b>"
-            )
+    def _on_detail_loaded(self, d):
+        """Callback: detalle de venta recibido."""
+        if not isinstance(d, dict):
+            return
 
-            items = d.get("items", [])
+        self.lbl_header.setText(f"Factura #{d['id']} — {d['created_at']}")
+        self.lbl_meta.setText(
+            f"Cliente: <b>{d['customer_name']}</b>  |  Método: <b>{d['payment_method']}</b>  |  Estado: <b>{d['status']}</b>"
+        )
 
-            self.tbl_items.clearContents()
-            self.tbl_items.setRowCount(len(items))
+        items = d.get("items", [])
 
-            if not items:
-                self.tbl_items.setRowCount(1)
-                self.tbl_items.setItem(0, 0, QTableWidgetItem("Sin productos"))
-                self.tbl_items.setItem(0, 1, QTableWidgetItem("-"))
-                self.tbl_items.setItem(0, 2, QTableWidgetItem("-"))
-                self.tbl_items.setItem(0, 3, QTableWidgetItem("-"))
-            else:
-                for i, it in enumerate(items):
-                    name_item = QTableWidgetItem(it["product_name"])
-                    # ✅ PRODUCTO COMÚN: resaltar con color diferente
-                    if it.get("is_common", False):
-                        from PySide6.QtGui import QColor, QBrush
-                        name_item.setForeground(QBrush(QColor("#94a3b8")))
-                        name_item.setToolTip("Producto común — sin inventario")
-                    self.tbl_items.setItem(i, 0, name_item)
-                    self.tbl_items.setItem(i, 1, QTableWidgetItem(str(it["quantity"])))
-                    self.tbl_items.setItem(i, 2, QTableWidgetItem(f"{it['price']:,.2f}"))
-                    self.tbl_items.setItem(i, 3, QTableWidgetItem(f"{it['subtotal']:,.2f}"))
+        self.tbl_items.clearContents()
+        self.tbl_items.setRowCount(len(items))
 
-            self.lbl_total.setText(f"Total: ₡{d['total']:,.2f}")
+        if not items:
+            self.tbl_items.setRowCount(1)
+            self.tbl_items.setItem(0, 0, QTableWidgetItem("Sin productos"))
+            self.tbl_items.setItem(0, 1, QTableWidgetItem("-"))
+            self.tbl_items.setItem(0, 2, QTableWidgetItem("-"))
+            self.tbl_items.setItem(0, 3, QTableWidgetItem("-"))
+        else:
+            for i, it in enumerate(items):
+                name_item = QTableWidgetItem(it["product_name"])
+                if it.get("is_common", False):
+                    name_item.setForeground(QBrush(QColor("#94a3b8")))
+                    name_item.setToolTip("Producto común — sin inventario")
+                self.tbl_items.setItem(i, 0, name_item)
+                self.tbl_items.setItem(i, 1, QTableWidgetItem(str(it["quantity"])))
+                self.tbl_items.setItem(i, 2, QTableWidgetItem(f"{it['price']:,.2f}"))
+                self.tbl_items.setItem(i, 3, QTableWidgetItem(f"{it['subtotal']:,.2f}"))
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo cargar el detalle:\n{e}")
+        self.lbl_total.setText(f"Total: ₡{d['total']:,.2f}")
+
+    def _on_detail_error(self, msg):
+        QMessageBox.critical(self, "Error", f"No se pudo cargar el detalle:\n{msg}")
 
     # ----------------------------------------------------------------------
 
@@ -273,7 +292,9 @@ class SalesHistoryView(QWidget):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo exportar el PDF:\n{e}")
 
-    # ----------------------------------------------------------------------
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.2: Timeout en regeneración de PDF
+    # ─────────────────────────────────────────────────────
 
     def open_pdf(self):
         try:
@@ -296,8 +317,12 @@ class SalesHistoryView(QWidget):
                 if reply != QMessageBox.Yes:
                     return
                 try:
-                    headers = {"Authorization": f"Bearer {session.token}"}
-                    resp = requests.post(f"{API_URL}/sales/{sale_id}/regenerate-pdf", headers=headers, timeout=15)
+                    resp = api_request(
+                        "post",
+                        f"{API_URL}/sales/{sale_id}/regenerate-pdf",
+                        headers=self._auth_headers(),
+                        timeout=20,
+                    )
                     resp.raise_for_status()
                 except Exception as e:
                     QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{e}")
@@ -316,44 +341,30 @@ class SalesHistoryView(QWidget):
             QMessageBox.critical(self, "Error", f"No se pudo abrir el PDF:\n{e}")
 
     # ----------------------------------------------------------------------
-    # ----------------------------------------------------------------------
     def apply_period_filter(self, period: str, start_iso: str | None = None, end_iso: str | None = None):
-        """
-        Aplica un filtro de periodo desde IA:
-        period: today | week | month
-        start_iso / end_iso: fechas yyyy-mm-dd (opcional)
-        """
         today = QDate.currentDate()
 
         if period == "today":
             self.dt_from.setDate(today)
             self.dt_to.setDate(today)
-
         elif period == "week":
-            # lunes a domingo
             start = today.addDays(-today.dayOfWeek() + 1)
             end = start.addDays(6)
             self.dt_from.setDate(start)
             self.dt_to.setDate(end)
-
         elif period == "month":
             start = QDate(today.year(), today.month(), 1)
             end = start.addMonths(1).addDays(-1)
             self.dt_from.setDate(start)
             self.dt_to.setDate(end)
 
-        # Si vienen fechas exactas desde el backend, tienen prioridad
         if start_iso and end_iso:
             self.dt_from.setDate(QDate.fromString(start_iso, "yyyy-MM-dd"))
             self.dt_to.setDate(QDate.fromString(end_iso, "yyyy-MM-dd"))
 
-        # 🔄 refrescar tabla
         self.load_sales()
-        
+
     def apply_date_range(self, start_date: str, end_date: str):
-        """
-        start_date/end_date vienen ISO: 'YYYY-MM-DD'
-        """
         try:
             y, m, d = map(int, start_date.split("-"))
             y2, m2, d2 = map(int, end_date.split("-"))
@@ -361,7 +372,6 @@ class SalesHistoryView(QWidget):
             self.dt_from.setDate(QDate(y, m, d))
             self.dt_to.setDate(QDate(y2, m2, d2))
 
-            # dispara el filtrado normal
             self.load_sales()
 
         except Exception as e:

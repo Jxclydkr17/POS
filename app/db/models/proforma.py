@@ -23,8 +23,11 @@ class Proforma(Base):
     # VIGENTE | CONVERTIDA | VENCIDA | ANULADA
     status = Column(String(20), nullable=False, default="VIGENTE")
 
-    # ── FASE 2 — Fix 2.1: Float → Numeric para consistencia con Sale.total ──
-    total = Column(Numeric(12, 2), nullable=False, default=0)
+    # ── FASE 3 — Fix 3.5: Numeric(18, 5) para consistencia con Sale.total ──
+    # Sale.total y SaleDetail.subtotal usan (18, 5) para mantener precisión
+    # en cálculos de impuestos. Proforma.total debe coincidir para que
+    # la conversión proforma→venta no pierda centavos.
+    total = Column(Numeric(18, 5), nullable=False, default=0)
 
     # Notas libres del vendedor
     notes = Column(Text, nullable=True)

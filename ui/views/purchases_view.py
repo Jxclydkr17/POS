@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from datetime import date
-import requests
+from ui.utils.http_worker import api_call, api_request
 from ui.session_manager import session
 from PySide6 import QtGui
 from PySide6.QtWidgets import QAbstractItemView
@@ -289,7 +289,7 @@ class PurchasesView(QWidget):
     def load_dashboard(self):
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.get(f"{API_URL}/dashboard", headers=headers, timeout=10)
+            res = api_request("get", f"{API_URL}/dashboard", headers=headers, timeout=10)
             if res.status_code != 200:
                 return
 
@@ -342,7 +342,7 @@ class PurchasesView(QWidget):
             if search_text and search_text.text().strip():
                 params["search"] = search_text.text().strip()
 
-            res = requests.get(API_URL, headers=headers, params=params)
+            res = api_request("get", API_URL, headers=headers, params=params)
             if res.status_code != 200:
                 raise Exception(res.text)
 
@@ -367,7 +367,7 @@ class PurchasesView(QWidget):
 
             # Cargar proveedores (solo la primera vez o si el combo está vacío)
             if not getattr(self, "suppliers_map", None) or not self.suppliers_map:
-                res_sup = requests.get(API_SUPPLIERS, headers=headers)
+                res_sup = api_request("get", API_SUPPLIERS, headers=headers)
                 suppliers_payload = res_sup.json() if res_sup.status_code == 200 else []
                 if isinstance(suppliers_payload, dict):
                     suppliers_list = suppliers_payload.get("items", suppliers_payload.get("data", []))
@@ -466,7 +466,7 @@ class PurchasesView(QWidget):
         purchase = self.filtered_purchases[row]
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.get(f"{API_URL}/{purchase['id']}", headers=headers)
+            res = api_request("get", f"{API_URL}/{purchase['id']}", headers=headers)
             if res.status_code == 200:
                 full = res.json()
                 if isinstance(full, dict) and "data" in full:
@@ -483,7 +483,7 @@ class PurchasesView(QWidget):
         pid = self.table.item(row, 0).text()
         if QMessageBox.question(self, "Eliminar", f"¿Eliminar factura ID {pid}?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            requests.delete(f"{API_URL}/{pid}", headers=headers)
+            api_request("delete", f"{API_URL}/{pid}", headers=headers)
             show_toast("Factura eliminada", success=True, parent=self.window())
             self.load_purchases()
 
@@ -501,7 +501,7 @@ class PurchasesView(QWidget):
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
         try:
-            res = requests.put(f"{API_URL}/{pid}/receive", headers=headers)
+            res = api_request("put", f"{API_URL}/{pid}/receive", headers=headers)
             if res.status_code == 200:
                 show_toast("📦 Mercadería recibida", success=True, parent=self.window())
                 self.load_purchases()
@@ -552,7 +552,7 @@ class PurchasesView(QWidget):
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
         try:
-            res = requests.put(f"{API_URL}/{pid}/pay", json={"payment_method": dlg.selected_method()}, headers=headers)
+            res = api_request("put", f"{API_URL}/{pid}/pay", json={"payment_method": dlg.selected_method()}, headers=headers)
             if res.status_code == 200:
                 show_toast("💰 Factura pagada", success=True, parent=self.window())
                 self.load_purchases()
@@ -571,7 +571,7 @@ class PurchasesView(QWidget):
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
         with open(file, "rb") as f:
-            res = requests.post(f"{API_URL}/{pid}/upload-pdf", files={"file": f}, headers=headers)
+            res = api_request("post", f"{API_URL}/{pid}/upload-pdf", files={"file": f}, headers=headers)
         if res.status_code == 200:
             show_toast("PDF subido", success=True, parent=self.window())
             self.load_purchases()
@@ -597,7 +597,7 @@ class PurchasesView(QWidget):
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
             params = self._export_params()
             params["format"] = "excel"
-            res = requests.get(f"{API_URL}/export", headers=headers, params=params, timeout=30)
+            res = api_request("get", f"{API_URL}/export", headers=headers, params=params, timeout=30)
             if res.status_code == 200:
                 path, _ = QFileDialog.getSaveFileName(self, "Guardar Excel", "compras.xlsx", "Excel (*.xlsx)")
                 if path:
@@ -614,7 +614,7 @@ class PurchasesView(QWidget):
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
             params = self._export_params()
             params["format"] = "pdf"
-            res = requests.get(f"{API_URL}/export", headers=headers, params=params, timeout=30)
+            res = api_request("get", f"{API_URL}/export", headers=headers, params=params, timeout=30)
             if res.status_code == 200:
                 path, _ = QFileDialog.getSaveFileName(self, "Guardar PDF", "compras.pdf", "PDF (*.pdf)")
                 if path:
@@ -635,7 +635,7 @@ class PurchasesView(QWidget):
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
         try:
-            res = requests.post(
+            res = api_request("post",
                 f"{API_URL}/notify-expiring",
                 headers=headers,
                 params={"recipient": email.strip(), "days_ahead": 3},
@@ -806,7 +806,7 @@ class AddPaymentDialog(QDialog):
     def save(self):
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.post(f"{API_URL}/{self.purchase['id']}/payments", json={
+            res = api_request("post", f"{API_URL}/{self.purchase['id']}/payments", json={
                 "amount": self.amount_spin.value(), "payment_method": self.method_combo.currentText(),
                 "notes": self.notes_input.text().strip() or None,
             }, headers=headers)
@@ -859,7 +859,7 @@ class AddCreditNoteDialog(QDialog):
     def _load_products(self):
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.get(API_PRODUCTS, headers=headers)
+            res = api_request("get", API_PRODUCTS, headers=headers)
             payload = res.json()
             products = payload.get("data", []) if isinstance(payload, dict) else payload
             if isinstance(products, dict):
@@ -875,7 +875,7 @@ class AddCreditNoteDialog(QDialog):
             return
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.post(f"{API_URL}/{self.purchase['id']}/credit-notes", json={
+            res = api_request("post", f"{API_URL}/{self.purchase['id']}/credit-notes", json={
                 "amount": self.amount_spin.value(), "reason": reason,
                 "product_id": self.product_combo.currentData(), "quantity_returned": self.qty_spin.value(),
             }, headers=headers)
@@ -915,7 +915,7 @@ class PaymentDetailDialog(QDialog):
 
         layout.addWidget(QLabel("<b>💵 Abonos:</b>"))
         try:
-            res = requests.get(f"{API_URL}/{pid}/payments", headers=headers)
+            res = api_request("get", f"{API_URL}/{pid}/payments", headers=headers)
             pays = res.json().get("data", []) if res.status_code == 200 else []
             for pp in (pays if isinstance(pays, list) else []):
                 layout.addWidget(QLabel(f"  • {pp.get('date','?')} — ₡{float(pp.get('amount',0)):,.2f} ({pp.get('payment_method','')})"))
@@ -925,7 +925,7 @@ class PaymentDetailDialog(QDialog):
 
         layout.addWidget(QLabel("<b>📋 Notas crédito:</b>"))
         try:
-            res = requests.get(f"{API_URL}/{pid}/credit-notes", headers=headers)
+            res = api_request("get", f"{API_URL}/{pid}/credit-notes", headers=headers)
             cns = res.json().get("data", []) if res.status_code == 200 else []
             for cn in (cns if isinstance(cns, list) else []):
                 t = f"  • {cn.get('date','?')} — ₡{float(cn.get('amount',0)):,.2f} — {cn.get('reason','')}"

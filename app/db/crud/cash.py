@@ -1,4 +1,5 @@
 from sqlalchemy.orm import Session
+from sqlalchemy import func, case
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -30,10 +31,17 @@ def get_today_session(db: Session, terminal_id: str = "T1") -> CashSession | Non
 
 # ==========================================================
 # 🟩 Obtener sesión abierta
+# ── FASE 2 — Fix 2.5: Fallback timezone-safe ──
 # ==========================================================
 def get_open_session(db: Session, terminal_id: str = "T1") -> CashSession | None:
+    """
+    Busca la sesión de caja abierta.
+    Primero intenta la de hoy; si no existe (cruce de medianoche),
+    busca cualquier sesión abierta para ese terminal.
+    """
     today = today_cr()
-    return (
+    # Intento 1: sesión de hoy
+    cs = (
         db.query(CashSession)
         .filter(
             CashSession.date == today,
@@ -42,16 +50,29 @@ def get_open_session(db: Session, terminal_id: str = "T1") -> CashSession | None
         )
         .first()
     )
+    if cs:
+        return cs
+
+    # Intento 2: cualquier sesión abierta (cruce de medianoche)
+    return (
+        db.query(CashSession)
+        .filter(
+            CashSession.terminal_id == terminal_id,
+            CashSession.status == "open"
+        )
+        .order_by(CashSession.date.desc())
+        .first()
+    )
 
 
 # ==========================================================
 # 🟩 Abrir caja
+# ── FASE 2 — Fix 2.5: Auto-cierre de sesiones stale ──
 # ==========================================================
 def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") -> CashSession:
     today = today_cr()
     session = get_today_session(db, terminal_id=terminal_id)
 
-    # ── FASE 3 — Fix 3.1: No permitir monto de apertura negativo ──
     if to_dec(opening_amount) < 0:
         raise ValueError("El monto de apertura no puede ser negativo.")
 
@@ -60,7 +81,30 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
             return session
         raise ValueError("La caja de hoy ya fue cerrada.")
 
-    # ── FASE 1: Decimal para almacenamiento ──
+    # ── FASE 2 — Fix 2.5: Si hay una sesión de un día anterior aún abierta,
+    # cerrarla automáticamente antes de abrir la nueva.
+    # Esto cubre el caso donde el cajero olvidó cerrar la caja ayer
+    # o la app se cerró sin hacer cierre. ──
+    stale_sessions = (
+        db.query(CashSession)
+        .filter(
+            CashSession.terminal_id == terminal_id,
+            CashSession.status == "open",
+            CashSession.date < today,
+        )
+        .all()
+    )
+    for stale in stale_sessions:
+        from app.core.logger import logger
+        logger.warning(
+            f"CAJA: Auto-cerrando sesión del {stale.date} (terminal {terminal_id}) "
+            f"que quedó abierta. Monto de cierre = apertura ({stale.opening_amount})."
+        )
+        stale.status = "closed"
+        stale.closing_amount = stale.opening_amount
+        stale.difference = to_dec(0)
+        stale.closed_at = utcnow()
+
     session = CashSession(
         date=today,
         terminal_id=terminal_id,
@@ -70,7 +114,6 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
     )
 
     db.add(session)
-    # FASE 1 — Fix 1.2: flush only; router owns commit
     db.flush()
     db.refresh(session)
     return session
@@ -142,33 +185,43 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     # ── FASE 1: Aritmética en Decimal ──
     total_sales = sum((to_dec(s.total) for s in sales), Decimal("0"))
 
-    # Desglose por método de pago
+    # ── FASE 3 — Fix 3.2: Desglose de pago en una sola pasada O(n) ──
+    # Antes: iteraba ALL_PAYMENT_METHODS × sales = O(m×n)
     payment_breakdown = {}
-    for method in ALL_PAYMENT_METHODS:
-        method_total = sum(
-            (to_dec(s.total) for s in sales if s.payment_method == method),
-            Decimal("0"),
+    for s in sales:
+        pm = s.payment_method or "Efectivo"
+        payment_breakdown[pm] = float(
+            to_dec(payment_breakdown.get(pm, 0)) + to_dec(s.total)
         )
-        if method_total > 0:  # Solo incluir métodos con ventas
-            payment_breakdown[method] = float(method_total)
+    # Remover métodos con total 0 (no debería haber, pero por seguridad)
+    payment_breakdown = {k: v for k, v in payment_breakdown.items() if v > 0}
 
-    # Obtener movimientos de caja
+    # ── FASE 3 — Fix 3.2: Totales IN/OUT con SQL aggregate ──
+    # Una sola query con SUM + CASE en vez de cargar todos los movimientos
+    # y sumarlos en Python. Los movimientos se cargan aparte para la lista.
+    agg = (
+        db.query(
+            func.coalesce(
+                func.sum(case((CashMovement.type == "in", CashMovement.amount), else_=0)),
+                0,
+            ).label("total_in"),
+            func.coalesce(
+                func.sum(case((CashMovement.type == "out", CashMovement.amount), else_=0)),
+                0,
+            ).label("total_out"),
+        )
+        .filter(CashMovement.cash_session_id == session.id)
+        .first()
+    )
+    total_in = to_dec(agg.total_in)
+    total_out = to_dec(agg.total_out)
+
+    # Obtener movimientos de caja (solo para la lista de display)
     movements = (
         db.query(CashMovement)
         .filter(CashMovement.cash_session_id == session.id)
         .order_by(CashMovement.created_at.desc())
         .all()
-    )
-
-    # Calcular entradas y salidas en Decimal
-    total_in = sum(
-        (to_dec(m.amount) for m in movements if m.type == "in"),
-        Decimal("0"),
-    )
-    
-    total_out = sum(
-        (to_dec(m.amount) for m in movements if m.type == "out"),
-        Decimal("0"),
     )
 
     # 🔥 CÁLCULO CORRECTO DEL ESPERADO

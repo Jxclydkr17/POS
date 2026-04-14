@@ -210,6 +210,15 @@ def download_update(url: str = DEFAULT_UPDATE_URL) -> dict:
             result["message"] = f"Actualización {version} ya descargada en {filepath}"
             return result
 
+    # ── FASE 4 — Fix 4.1: Exigir HTTPS para la URL de descarga ──
+    if not download_url.startswith("https://"):
+        result["message"] = (
+            "El servidor proporcionó una URL de descarga insegura (no HTTPS). "
+            "Descarga rechazada por seguridad."
+        )
+        logger.error(f"Descarga rechazada: URL no HTTPS: {download_url}")
+        return result
+
     # ── FASE 3 — Fix 3.1: Exigir SHA-256 del servidor ──
     if not expected_hash:
         result["message"] = (

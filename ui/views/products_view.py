@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QSize
 from PySide6.QtGui import QColor, QPixmap, QIcon, QPainter, QPen, QBrush, QPainterPath
-import requests
+from ui.utils.http_worker import api_call, api_request
 import os
 from ui.session_manager import session
 from decimal import Decimal, ROUND_HALF_UP
@@ -476,12 +476,12 @@ class ProductsView(QWidget):
     def _load_filter_options(self):
         try:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp_cat = requests.get(f"{BASE_URL}/categories", headers=headers)
+            resp_cat = api_request("get", f"{BASE_URL}/categories", headers=headers)
             if resp_cat.status_code == 200:
                 cats = resp_cat.json().get("data", [])
                 self._categories_map = {c["name"]: c["id"] for c in cats if c.get("is_active", True)}
 
-            resp_sup = requests.get(f"{BASE_URL}/suppliers", headers=headers)
+            resp_sup = api_request("get", f"{BASE_URL}/suppliers", headers=headers)
             if resp_sup.status_code == 200:
                 sups = resp_sup.json() if isinstance(resp_sup.json(), list) else resp_sup.json().get("items", resp_sup.json().get("data", []))
                 self._suppliers_map = {s["name"]: s["id"] for s in sups if s.get("is_active", True)}
@@ -661,7 +661,7 @@ class ProductsView(QWidget):
                     if not sup_name.startswith("🏭") and sup_name in self._suppliers_map:
                         params["supplier_id"] = self._suppliers_map[sup_name]
 
-            response = requests.get(API_URL, headers=headers, params=params)
+            response = api_request("get", API_URL, headers=headers, params=params)
 
             if response.status_code == 200:
                 from ui.dialogs.add_product_dialog import IVA_RATES
@@ -963,7 +963,7 @@ class ProductsView(QWidget):
         try:
             product_id = int(self.table.item(selected_row, COL_ID).text())
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(f"{API_URL}/{product_id}", headers=headers)
+            resp = api_request("get", f"{API_URL}/{product_id}", headers=headers)
             if resp.status_code != 200:
                 QMessageBox.critical(self, "Error", "No se pudo obtener información completa del producto.")
                 return
@@ -991,7 +991,7 @@ class ProductsView(QWidget):
             if confirm.exec() != QMessageBox.Yes:
                 return
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.patch(f"{API_URL}/{product_id}/deactivate", headers=headers)
+            resp = api_request("patch", f"{API_URL}/{product_id}/deactivate", headers=headers)
             if resp.status_code == 200:
                 QMessageBox.information(self, "OK", "Producto desactivado correctamente.")
                 self.load_products()
@@ -1018,7 +1018,7 @@ class ProductsView(QWidget):
             if confirm.exec() != QMessageBox.Yes:
                 return
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.patch(f"{API_URL}/{product_id}/reactivate", headers=headers)
+            resp = api_request("patch", f"{API_URL}/{product_id}/reactivate", headers=headers)
             if resp.status_code == 200:
                 QMessageBox.information(self, "OK", "Producto reactivado correctamente.")
                 self.load_products()
@@ -1042,7 +1042,7 @@ class ProductsView(QWidget):
         try:
             product_id = int(self.table.item(selected_row, COL_ID).text())
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(f"{API_URL}/{product_id}", headers=headers)
+            resp = api_request("get", f"{API_URL}/{product_id}", headers=headers)
             if resp.status_code != 200:
                 QMessageBox.critical(self, "Error", "No se pudo obtener el producto.")
                 return
@@ -1062,7 +1062,7 @@ class ProductsView(QWidget):
             product_id = int(id_item.text())
             new_value  = not id_item.data(Qt.UserRole + 1)
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.patch(
+            resp = api_request("patch",
                 f"{API_URL}/{product_id}/favorite",
                 headers=headers,
                 params={"is_pos_favorite": str(new_value).lower()}
@@ -1181,7 +1181,7 @@ class ProductsView(QWidget):
         try:
             product_id = int(self.table.item(selected_row, COL_ID).text())
             headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(f"{API_URL}/{product_id}", headers=headers)
+            resp = api_request("get", f"{API_URL}/{product_id}", headers=headers)
             if resp.status_code != 200:
                 QMessageBox.critical(self, "Error", "No se pudo obtener el producto para duplicar.")
                 return

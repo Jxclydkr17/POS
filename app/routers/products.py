@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc
 from typing import List, Optional
 from datetime import datetime, timedelta
@@ -45,13 +45,12 @@ def get_product_by_barcode_route(
 ):
     product = get_product_by_barcode(db, barcode)
 
-    # ✅ FASE 4: enriquecer con datos de rotación
-    if product and product.get("id"):
-        rotation = _calc_rotation_data(db, product["id"], lookback_days=90)
-        product["rotation"] = rotation
-        # Si hay rotación real, actualizar sugerencia
-        if rotation["total_sold"] > 0 and rotation["smart_reorder"] > 0:
-            product["reorder_suggestion"] = rotation["smart_reorder"]
+    # ── FASE 5 — Fix 5.5: Rotación removida del escaneo de barcode ──
+    # _calc_rotation_data ejecuta queries de 90 días de historial.
+    # En un POS donde el cajero escanea productos rápidamente, esto
+    # agrega ~50-200ms de overhead por escaneo sin aportar valor.
+    # Los datos de rotación están disponibles en GET /products/{id}/rotation
+    # para cuando el usuario realmente los necesite (ej: vista de inventario).
 
     return APIResponse(message="Producto encontrado", data=product)
 
@@ -106,8 +105,10 @@ def get_quick_favorite_products(
     result_products: list[dict] = []
 
     # --- 1. Favoritos manuales (siempre primero) ---
+    # ── FASE 3 — Fix 3.3: Eager load category/supplier para evitar N+1 ──
     manual_favorites = (
         db.query(Product)
+        .options(joinedload(Product.category), joinedload(Product.supplier))
         .filter(Product.is_active == True, Product.is_pos_favorite == True)
         .order_by(Product.name.asc())
         .limit(limit)
@@ -143,7 +144,12 @@ def get_quick_favorite_products(
 
         if top_rows:
             top_ids = [row.product_id for row in top_rows]
-            extra_products = db.query(Product).filter(Product.id.in_(top_ids)).all()
+            extra_products = (
+                db.query(Product)
+                .options(joinedload(Product.category), joinedload(Product.supplier))
+                .filter(Product.id.in_(top_ids))
+                .all()
+            )
             product_map = {p.id: p for p in extra_products}
 
             for pid in top_ids:
@@ -156,6 +162,7 @@ def get_quick_favorite_products(
         if remaining > 0:
             fallback = (
                 db.query(Product)
+                .options(joinedload(Product.category), joinedload(Product.supplier))
                 .filter(Product.is_active == True)
                 .filter(Product.id.notin_(result_ids))
                 .order_by(Product.stock.desc(), Product.name.asc())

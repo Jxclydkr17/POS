@@ -10,10 +10,10 @@ from fastapi.security import OAuth2PasswordRequestForm
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-import json
 import logging
 import threading
-from pathlib import Path
+import time
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -80,119 +80,62 @@ router = APIRouter(
 #  - Compartido entre workers de uvicorn (vía filesystem)
 #  - Thread-safe con lock
 # ────────────────────────────────────────────────────────────
-LOGIN_MAX_ATTEMPTS = 5          # intentos permitidos
-LOGIN_WINDOW_SECONDS = 300      # ventana de 5 minutos
-LOGIN_LOCKOUT_SECONDS = 600     # bloqueo de 10 minutos tras exceder
-_MAX_TRACKED_IPS = 10_000       # tope de IPs en archivo
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_LOCKOUT_SECONDS = 600
+_MAX_TRACKED_IPS = 10_000
 _lock = threading.Lock()
 
-
-def _get_rate_limit_path() -> Path:
-    """Ruta al archivo JSON de rate limiting en DATA_DIR."""
-    from app.core.config import DATA_DIR
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    return DATA_DIR / "login_attempts.json"
-
-
-def _load_attempts() -> dict[str, list[str]]:
-    """Carga intentos desde disco. Retorna dict vacío si no existe o falla."""
-    path = _get_rate_limit_path()
-    try:
-        if path.exists() and path.stat().st_size > 0:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                return data
-    except Exception as e:
-        logger.debug(f"Rate limiter: no se pudo leer {path}: {e}")
-    return {}
-
-
-def _save_attempts(data: dict[str, list[str]]) -> None:
-    """Guarda intentos en disco. Falla silenciosamente (fallback a memoria)."""
-    path = _get_rate_limit_path()
-    try:
-        path.write_text(json.dumps(data), encoding="utf-8")
-    except Exception as e:
-        logger.warning(f"Rate limiter: no se pudo guardar en {path}: {e}")
-
-
-def _now_utc() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _parse_ts(ts_str: str) -> datetime:
-    return datetime.fromisoformat(ts_str)
-
-
-def _cleanup_and_load() -> dict[str, list[str]]:
-    """Carga, limpia entradas expiradas y devuelve datos limpios."""
-    data = _load_attempts()
-    now = _now_utc()
-    cutoff = now - timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
-    cleaned = {}
-    for ip, timestamps in data.items():
-        valid = [ts for ts in timestamps if _parse_ts(ts) > cutoff]
-        if valid:
-            cleaned[ip] = valid
-    return cleaned
+_login_attempts: dict[str, deque] = {}
 
 
 def _check_rate_limit(client_ip: str):
     """Lanza HTTPException 429 si el IP excedió los intentos permitidos."""
     with _lock:
-        data = _cleanup_and_load()
-        now = _now_utc()
-        window_start = now - timedelta(seconds=LOGIN_WINDOW_SECONDS)
+        now = time.monotonic()
+        window_start = now - LOGIN_WINDOW_SECONDS
 
-        # Filtrar intentos dentro de la ventana para este IP
-        ip_attempts = [
-            ts for ts in data.get(client_ip, [])
-            if _parse_ts(ts) > window_start
-        ]
-        data[client_ip] = ip_attempts
+        timestamps = _login_attempts.get(client_ip, deque())
 
-        if len(ip_attempts) >= LOGIN_MAX_ATTEMPTS:
-            oldest = _parse_ts(ip_attempts[0])
-            lockout_until = oldest + timedelta(seconds=LOGIN_LOCKOUT_SECONDS)
+        # Limpiar timestamps fuera del lockout
+        while timestamps and timestamps[0] < (now - LOGIN_LOCKOUT_SECONDS):
+            timestamps.popleft()
+
+        recent = [ts for ts in timestamps if ts > window_start]
+
+        if len(recent) >= LOGIN_MAX_ATTEMPTS:
+            oldest = recent[0]
+            lockout_until = oldest + LOGIN_LOCKOUT_SECONDS
             if now < lockout_until:
-                retry_secs = int((lockout_until - now).total_seconds())
-                _save_attempts(data)
+                retry_secs = max(1, int(lockout_until - now))
                 raise HTTPException(
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
                     detail=f"Demasiados intentos de login. Intente de nuevo en {retry_secs} segundos.",
                     headers={"Retry-After": str(retry_secs)},
                 )
-            # Lockout expirado: limpiar
-            data[client_ip] = []
-
-        _save_attempts(data)
+            _login_attempts.pop(client_ip, None)
 
 
 def _record_attempt(client_ip: str):
-    """Registra un intento fallido."""
+    """Registra un intento fallido de login."""
     with _lock:
-        data = _cleanup_and_load()
+        if client_ip not in _login_attempts:
+            _login_attempts[client_ip] = deque()
+        _login_attempts[client_ip].append(time.monotonic())
 
-        # Si llegamos al tope de IPs, descartar la mitad más vieja
-        if len(data) >= _MAX_TRACKED_IPS:
+        if len(_login_attempts) > _MAX_TRACKED_IPS:
             sorted_ips = sorted(
-                data.items(),
-                key=lambda x: x[1][-1] if x[1] else ""
+                _login_attempts.items(),
+                key=lambda x: x[1][-1] if x[1] else 0,
             )
-            data = dict(sorted_ips[len(sorted_ips) // 2:])
-
-        attempts = data.get(client_ip, [])
-        attempts.append(_now_utc().isoformat())
-        data[client_ip] = attempts
-        _save_attempts(data)
+            for ip, _ in sorted_ips[: len(sorted_ips) // 2]:
+                del _login_attempts[ip]
 
 
 def _clear_attempts(client_ip: str):
     """Limpia intentos de un IP (login exitoso)."""
     with _lock:
-        data = _load_attempts()
-        data.pop(client_ip, None)
-        _save_attempts(data)
+        _login_attempts.pop(client_ip, None)
 
 
 # ────────────────────────────────────────────────────────────

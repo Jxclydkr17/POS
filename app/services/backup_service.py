@@ -48,11 +48,99 @@ BACKUP_DIR = DATA_DIR / "backups"
 MAX_BACKUPS = 30          # Mantener últimos 30 backups
 BACKUP_INTERVAL = 86400   # 24 horas en segundos
 
+# ── FASE 4 — Fix 4.2: Estado del último backup verificable ──
+_STATUS_FILE = DATA_DIR / "backup_status.json"
+_last_backup_status: dict = {
+    "last_success_at": None,
+    "last_success_path": None,
+    "last_error_at": None,
+    "last_error_msg": None,
+    "total_backups": 0,
+    "consecutive_failures": 0,
+}
+
 
 def _ensure_backup_dir() -> Path:
     """Crea el directorio de backups si no existe."""
     BACKUP_DIR.mkdir(parents=True, exist_ok=True)
     return BACKUP_DIR
+
+
+def _load_backup_status() -> None:
+    """Carga el estado del último backup desde disco (startup)."""
+    global _last_backup_status
+    try:
+        import json
+        if _STATUS_FILE.exists():
+            data = json.loads(_STATUS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                _last_backup_status.update(data)
+    except Exception:
+        pass
+
+
+def _save_backup_status() -> None:
+    """Persiste el estado del backup en disco."""
+    try:
+        import json
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _STATUS_FILE.write_text(
+            json.dumps(_last_backup_status, default=str),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        logger.debug(f"No se pudo guardar estado de backup: {e}")
+
+
+def _record_success(path: str) -> None:
+    """Registra un backup exitoso."""
+    _last_backup_status["last_success_at"] = now_cr().isoformat()
+    _last_backup_status["last_success_path"] = path
+    _last_backup_status["total_backups"] = _last_backup_status.get("total_backups", 0) + 1
+    _last_backup_status["consecutive_failures"] = 0
+    _save_backup_status()
+
+
+def _record_failure(error_msg: str) -> None:
+    """Registra un backup fallido."""
+    _last_backup_status["last_error_at"] = now_cr().isoformat()
+    _last_backup_status["last_error_msg"] = str(error_msg)
+    _last_backup_status["consecutive_failures"] = _last_backup_status.get("consecutive_failures", 0) + 1
+    _save_backup_status()
+
+
+def get_backup_status() -> dict:
+    """
+    FASE 4 — Fix 4.2: Retorna el estado verificable del backup.
+
+    Uso desde la UI o desde el endpoint /system/backup-status:
+        status = get_backup_status()
+        if status["healthy"]:
+            ...  # todo bien
+        else:
+            ...  # alertar al usuario
+
+    Returns:
+        dict con: healthy, last_success_at, last_error_msg,
+                  consecutive_failures, backups_available, etc.
+    """
+    backups = list_backups()
+    status = {
+        **_last_backup_status,
+        "healthy": _last_backup_status.get("consecutive_failures", 0) == 0,
+        "backups_available": len(backups),
+        "backup_dir": str(BACKUP_DIR),
+        "latest_backup": backups[0] if backups else None,
+    }
+    # Marcar como no-healthy si nunca se ha hecho un backup
+    if not _last_backup_status.get("last_success_at") and not backups:
+        status["healthy"] = False
+        status["last_error_msg"] = status.get("last_error_msg") or "Nunca se ha creado un backup."
+    return status
+
+
+# Cargar estado al importar el módulo
+_load_backup_status()
 
 
 def _find_mysqldump() -> str | None:
@@ -103,11 +191,8 @@ def _find_mysql() -> str | None:
 def create_backup(tag: str = "") -> str:
     """
     Crea un backup completo de la BD.
-    - MySQL: usa mysqldump
-    - SQLite: copia el archivo .db
 
-    Args:
-        tag: Etiqueta opcional para el nombre del archivo (ej: "pre_update")
+    FASE 4 — Fix 4.2: Registra éxito/fallo para verificación desde la UI.
 
     Returns:
         Ruta absoluta del archivo de backup creado.
@@ -116,14 +201,21 @@ def create_backup(tag: str = "") -> str:
         RuntimeError: Si el backup falla.
     """
     _ensure_backup_dir()
-    # FASE 4 — Fix 4.3: now_cr() en vez de datetime.now() para consistencia
     timestamp = now_cr().strftime("%Y%m%d_%H%M%S")
     suffix = f"_{tag}" if tag else ""
 
-    if is_sqlite():
-        return _create_sqlite_backup(timestamp, suffix)
-    else:
-        return _create_mysql_backup(timestamp, suffix)
+    try:
+        if is_sqlite():
+            path = _create_sqlite_backup(timestamp, suffix)
+        else:
+            path = _create_mysql_backup(timestamp, suffix)
+
+        _record_success(path)
+        return path
+
+    except Exception as e:
+        _record_failure(str(e))
+        raise
 
 
 def _get_sqlite_db_path() -> Path:
@@ -364,7 +456,16 @@ def start_scheduled_backups() -> None:
                 path = create_backup(tag="auto")
                 logger.info(f"Backup automático creado: {path}")
             except Exception as e:
-                logger.error(f"Error en backup automático: {e}")
+                # create_backup ya registró el fallo vía _record_failure
+                failures = _last_backup_status.get("consecutive_failures", 0)
+                logger.error(
+                    f"Error en backup automático (fallo consecutivo #{failures}): {e}"
+                )
+                if failures >= 3:
+                    logger.critical(
+                        f"ALERTA: {failures} backups automáticos consecutivos han fallado. "
+                        f"Último error: {e}. Verifique el espacio en disco y los permisos."
+                    )
 
     _backup_task = asyncio.ensure_future(_backup_loop())
     logger.info(

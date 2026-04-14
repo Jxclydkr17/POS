@@ -1,6 +1,9 @@
+# ui/views/customer_profile_view.py
 """
 customer_profile_view.py
 Perfil completo del cliente: datos, estadísticas, historial, crédito, notas.
+
+FASE 1 — Fix 1.1 / 1.2: Carga asíncrona.
 """
 
 from PySide6.QtWidgets import (
@@ -10,9 +13,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-import requests
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call
 
 API_URL = f"{BASE_URL}/customers"
 
@@ -179,59 +182,67 @@ class CustomerProfileView(QDialog):
         vl.addWidget(lbl)
         return frame
 
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Carga asíncrona del perfil
+    # ─────────────────────────────────────────────────────
     def load_profile(self):
-        try:
-            r = requests.get(f"{API_URL}/{self.customer_id}/profile", headers=self._auth(), timeout=10)
-            if r.status_code != 200:
-                QMessageBox.warning(self, "Error", f"No se pudo cargar el perfil.\n{r.text}")
-                return
+        """Lanza la carga del perfil en background."""
+        api_call(
+            "get", f"{API_URL}/{self.customer_id}/profile",
+            headers=self._auth(),
+            on_success=self._on_profile_loaded,
+            on_error=self._on_profile_error,
+        )
 
-            data = r.json().get("data", {})
-            cust = data.get("customer", {})
-            stats = data.get("stats", {})
-            credit = data.get("credit", {})
-            sales = data.get("recent_sales", [])
+    def _on_profile_loaded(self, response):
+        """Callback: perfil recibido — poblar todos los paneles."""
+        data = response.get("data", {}) if isinstance(response, dict) else {}
+        cust = data.get("customer", {})
+        stats = data.get("stats", {})
+        credit = data.get("credit", {})
+        sales = data.get("recent_sales", [])
 
-            self.lbl_title.setText(f"Perfil: {cust.get('name', '')}")
-            self.lbl_name.setText(cust.get("name", "-"))
-            self.lbl_id.setText(f"{cust.get('id_type', '')} - {cust.get('id_number', '')}")
-            self.lbl_email.setText(cust.get("email") or "N/A")
-            self.lbl_phone.setText(cust.get("phone") or "N/A")
-            self.lbl_phone2.setText(cust.get("secondary_phone") or "N/A")
-            self.lbl_type.setText(cust.get("customer_type") or "Normal")
-            loc = f"{cust.get('province_name', '')} - {cust.get('canton_name', '')}"
-            self.lbl_location.setText(loc if cust.get("province_name") else "N/A")
-            self.lbl_created.setText(cust.get("created_at") or "N/A")
-            self.lbl_active.setText("✅ Activo" if cust.get("is_active") else "❌ Inactivo")
-            self.lbl_birth.setText(cust.get("birth_date") or "N/A")
-            self.txt_notes.setPlainText(cust.get("notes") or "(Sin notas)")
+        self.lbl_title.setText(f"Perfil: {cust.get('name', '')}")
+        self.lbl_name.setText(cust.get("name", "-"))
+        self.lbl_id.setText(f"{cust.get('id_type', '')} - {cust.get('id_number', '')}")
+        self.lbl_email.setText(cust.get("email") or "N/A")
+        self.lbl_phone.setText(cust.get("phone") or "N/A")
+        self.lbl_phone2.setText(cust.get("secondary_phone") or "N/A")
+        self.lbl_type.setText(cust.get("customer_type") or "Normal")
+        loc = f"{cust.get('province_name', '')} - {cust.get('canton_name', '')}"
+        self.lbl_location.setText(loc if cust.get("province_name") else "N/A")
+        self.lbl_created.setText(cust.get("created_at") or "N/A")
+        self.lbl_active.setText("✅ Activo" if cust.get("is_active") else "❌ Inactivo")
+        self.lbl_birth.setText(cust.get("birth_date") or "N/A")
+        self.txt_notes.setPlainText(cust.get("notes") or "(Sin notas)")
 
-            self.lbl_total_sales.setText(str(stats.get("total_sales", 0)))
-            self.lbl_total_amount.setText(f"₡{stats.get('total_amount', 0):,.2f}")
-            self.lbl_avg_ticket.setText(f"₡{stats.get('avg_ticket', 0):,.2f}")
-            self.lbl_frequency.setText(str(stats.get("frequency_per_month", 0)))
-            self.lbl_first_sale.setText(stats.get("first_sale_date") or "N/A")
-            self.lbl_last_sale.setText(stats.get("last_sale_date") or "N/A")
+        self.lbl_total_sales.setText(str(stats.get("total_sales", 0)))
+        self.lbl_total_amount.setText(f"₡{stats.get('total_amount', 0):,.2f}")
+        self.lbl_avg_ticket.setText(f"₡{stats.get('avg_ticket', 0):,.2f}")
+        self.lbl_frequency.setText(str(stats.get("frequency_per_month", 0)))
+        self.lbl_first_sale.setText(stats.get("first_sale_date") or "N/A")
+        self.lbl_last_sale.setText(stats.get("last_sale_date") or "N/A")
 
-            bal = credit.get("balance", 0)
-            self.lbl_balance.setText(f"₡{bal:,.2f}")
-            self.lbl_balance.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {'#ef4444' if bal > 0 else '#22c55e'};")
-            if credit.get("has_limit"):
-                self.lbl_limit.setText(f"₡{credit.get('limit', 0):,.2f}")
-            else:
-                self.lbl_limit.setText("Ilimitado")
-            self.lbl_last_pay.setText(credit.get("last_payment_date") or "N/A")
-            if credit.get("last_payment_amount"):
-                self.lbl_last_pay_amt.setText(f"₡{credit['last_payment_amount']:,.2f}")
-            else:
-                self.lbl_last_pay_amt.setText("N/A")
+        bal = credit.get("balance", 0)
+        self.lbl_balance.setText(f"₡{bal:,.2f}")
+        self.lbl_balance.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {'#ef4444' if bal > 0 else '#22c55e'};")
+        if credit.get("has_limit"):
+            self.lbl_limit.setText(f"₡{credit.get('limit', 0):,.2f}")
+        else:
+            self.lbl_limit.setText("Ilimitado")
+        self.lbl_last_pay.setText(credit.get("last_payment_date") or "N/A")
+        if credit.get("last_payment_amount"):
+            self.lbl_last_pay_amt.setText(f"₡{credit['last_payment_amount']:,.2f}")
+        else:
+            self.lbl_last_pay_amt.setText("N/A")
 
-            self.sales_table.setRowCount(len(sales))
-            for i, s in enumerate(sales):
-                self.sales_table.setItem(i, 0, QTableWidgetItem(str(s["id"])))
-                self.sales_table.setItem(i, 1, QTableWidgetItem(f"₡{s['total']:,.2f}"))
-                self.sales_table.setItem(i, 2, QTableWidgetItem(s["payment_method"]))
-                self.sales_table.setItem(i, 3, QTableWidgetItem(s["date"]))
+        self.sales_table.setRowCount(len(sales))
+        for i, s in enumerate(sales):
+            self.sales_table.setItem(i, 0, QTableWidgetItem(str(s["id"])))
+            self.sales_table.setItem(i, 1, QTableWidgetItem(f"₡{s['total']:,.2f}"))
+            self.sales_table.setItem(i, 2, QTableWidgetItem(s["payment_method"]))
+            self.sales_table.setItem(i, 3, QTableWidgetItem(s["date"]))
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error cargando perfil:\n{e}")
+    def _on_profile_error(self, msg):
+        """Callback: error al cargar perfil."""
+        QMessageBox.critical(self, "Error", f"Error cargando perfil:\n{msg}")

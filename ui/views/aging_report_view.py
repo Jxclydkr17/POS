@@ -1,6 +1,9 @@
+# ui/views/aging_report_view.py
 """
 aging_report_view.py
 Reporte global de aging de crédito. Exportable a Excel.
+
+FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout.
 """
 
 from PySide6.QtWidgets import (
@@ -10,11 +13,10 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-import requests
 import csv
-import io
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call
 
 API_URL = f"{BASE_URL}/customers/reports/aging"
 
@@ -106,45 +108,53 @@ class AgingReportView(QDialog):
         lbl.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: bold; padding: 0 8px;")
         return lbl
 
+    # ─────────────────────────────────────────────────────
+    # FASE 1 — Fix 1.1: Carga asíncrona
+    # ─────────────────────────────────────────────────────
     def load_report(self):
-        try:
-            r = requests.get(API_URL, headers=self._auth(), timeout=15)
-            if r.status_code != 200:
-                QMessageBox.warning(self, "Error", f"No se pudo cargar el reporte.\n{r.text}")
-                return
+        """Lanza la carga del reporte en background."""
+        api_call(
+            "get", API_URL,
+            headers=self._auth(),
+            on_success=self._on_report_loaded,
+            on_error=self._on_report_error,
+        )
 
-            data = r.json().get("data", {})
-            self._data = data
-            items = data.get("items", [])
-            totals = data.get("totals", {})
+    def _on_report_loaded(self, response):
+        """Callback: reporte recibido — poblar tabla y totales."""
+        data = response.get("data", {}) if isinstance(response, dict) else {}
+        self._data = data
+        items = data.get("items", [])
+        totals = data.get("totals", {})
 
-            self.lbl_total.setText(f"Total adeudado: ₡{totals.get('total', 0):,.2f}")
-            self.lbl_0_30.setText(f"0-30d: ₡{totals.get('0_30', 0):,.2f}")
-            self.lbl_31_60.setText(f"31-60d: ₡{totals.get('31_60', 0):,.2f}")
-            self.lbl_61_90.setText(f"61-90d: ₡{totals.get('61_90', 0):,.2f}")
-            self.lbl_90_plus.setText(f"+90d: ₡{totals.get('90_plus', 0):,.2f}")
+        self.lbl_total.setText(f"Total adeudado: ₡{totals.get('total', 0):,.2f}")
+        self.lbl_0_30.setText(f"0-30d: ₡{totals.get('0_30', 0):,.2f}")
+        self.lbl_31_60.setText(f"31-60d: ₡{totals.get('31_60', 0):,.2f}")
+        self.lbl_61_90.setText(f"61-90d: ₡{totals.get('61_90', 0):,.2f}")
+        self.lbl_90_plus.setText(f"+90d: ₡{totals.get('90_plus', 0):,.2f}")
 
-            self.table.setRowCount(len(items))
-            for row, it in enumerate(items):
-                self.table.setItem(row, 0, QTableWidgetItem(str(it["customer_id"])))
-                self.table.setItem(row, 1, QTableWidgetItem(it["name"]))
-                self.table.setItem(row, 2, QTableWidgetItem(it.get("id_number", "")))
-                self.table.setItem(row, 3, QTableWidgetItem(it.get("phone", "")))
+        self.table.setRowCount(len(items))
+        for row, it in enumerate(items):
+            self.table.setItem(row, 0, QTableWidgetItem(str(it["customer_id"])))
+            self.table.setItem(row, 1, QTableWidgetItem(it["name"]))
+            self.table.setItem(row, 2, QTableWidgetItem(it.get("id_number", "")))
+            self.table.setItem(row, 3, QTableWidgetItem(it.get("phone", "")))
 
-                for col, key, color in [
-                    (4, "0_30", "#3b82f6"), (5, "31_60", "#f59e0b"),
-                    (6, "61_90", "#f97316"), (7, "90_plus", "#ef4444"),
-                ]:
-                    val = it.get(key, 0)
-                    item = QTableWidgetItem(f"₡{val:,.2f}")
-                    if val > 0:
-                        item.setForeground(QColor(color))
-                    self.table.setItem(row, col, item)
+            for col, key, color in [
+                (4, "0_30", "#3b82f6"), (5, "31_60", "#f59e0b"),
+                (6, "61_90", "#f97316"), (7, "90_plus", "#ef4444"),
+            ]:
+                val = it.get(key, 0)
+                item = QTableWidgetItem(f"₡{val:,.2f}")
+                if val > 0:
+                    item.setForeground(QColor(color))
+                self.table.setItem(row, col, item)
 
-            self.table.resizeColumnsToContents()
+        self.table.resizeColumnsToContents()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error cargando reporte:\n{e}")
+    def _on_report_error(self, msg):
+        """Callback: error al cargar reporte."""
+        QMessageBox.critical(self, "Error", f"Error cargando reporte:\n{msg}")
 
     def export_csv(self):
         if not self._data:

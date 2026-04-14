@@ -1,41 +1,165 @@
-# pos/ui/api.py
+# ui/api.py
+"""
+FASE 5 — Fix 5.1: API URLs como clase con métodos tipados.
+
+Antes: dict con mezcla de strings y lambdas, sin autocompletado.
+Ahora: clase ApiUrls con propiedades y métodos, con backward
+       compatibility vía __getitem__ para no romper el código existente.
+
+Uso nuevo (preferido):
+    from ui.api import api
+    url = api.products                    # string fijo
+    url = api.product_by_id(42)          # método con parámetro
+    url = api.districts("1", "01")       # método con múltiples parámetros
+
+Uso legacy (sigue funcionando):
+    from ui.api import API, BASE_URL
+    url = API["products"]                # string fijo
+    url = API["product_by_id"](42)       # lambda
+"""
 import os
 
 BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 
-API = {
-    "login": f"{BASE_URL}/users/login",
-    "products": f"{BASE_URL}/products",
-    "product_by_id": lambda product_id: f"{BASE_URL}/products/{product_id}",
-    "customers": f"{BASE_URL}/customers",
-    "customer_by_id": lambda customer_id: f"{BASE_URL}/customers/{customer_id}",
-    "sales": f"{BASE_URL}/sales",
-    "sale_by_id": lambda sale_id: f"{BASE_URL}/sales/{sale_id}",
-    "delete_sale": lambda sale_id: f"{BASE_URL}/sales/{sale_id}",
-    "credits": lambda customer_id: f"{BASE_URL}/credits/{customer_id}",
-    "create_credit": lambda customer_id: f"{BASE_URL}/credits/{customer_id}/create",
-    "add_credit_sale": lambda customer_id: f"{BASE_URL}/credits/{customer_id}/add",
-    "add_credit_payment": lambda credit_id: f"{BASE_URL}/credits/{credit_id}/payments",
-    "expenses": f"{BASE_URL}/expenses",
-    "delete_expense": lambda expense_id: f"{BASE_URL}/expenses/{expense_id}",
-    "payment_methods": f"{BASE_URL}/payment-methods",
-    "users": f"{BASE_URL}/users",
-    "provinces": f"{BASE_URL}/locations/provinces",
-    "cantons": lambda province_id: f"{BASE_URL}/locations/provinces/{province_id}/cantons",
-    "districts": lambda province_id, canton_id: f"{BASE_URL}/locations/provinces/{province_id}/cantons/{canton_id}/districts",
-    "economic_activity_search": lambda q: f"{BASE_URL}/economic-activities/search?q={q}",
-    "product_movements": lambda product_id: f"{BASE_URL}/products/{product_id}/movements",
-    "reorder_suggestions": f"{BASE_URL}/products/reorder-suggestions",
-    # 🕳️ Productos sin rotación
-    "no_rotation": f"{BASE_URL}/analytics/no-rotation",
 
-    # ── Fase 4: Analytics de compras ──
-    "purchases_spending_by_supplier": f"{BASE_URL}/analytics/purchases/spending-by-supplier",
-    "purchases_monthly_evolution": f"{BASE_URL}/analytics/purchases/monthly-evolution",
-    "purchases_avg_payment_days": f"{BASE_URL}/analytics/purchases/avg-payment-days",
-    "purchases_top_products": f"{BASE_URL}/analytics/purchases/top-products",
+class ApiUrls:
+    """URLs del backend organizadas como propiedades y métodos."""
 
-    # ── Fase 4: Comparador de proveedores ──
-    "supplier_comparison": lambda product_id: f"{BASE_URL}/analytics/purchases/supplier-comparison?product_id={product_id}",
-    "multi_supplier_products": f"{BASE_URL}/analytics/purchases/multi-supplier-products",
-}
+    def __init__(self, base: str = BASE_URL):
+        self._base = base
+
+    # ── Auth ──
+    @property
+    def login(self) -> str:
+        return f"{self._base}/users/login"
+
+    # ── Productos ──
+    @property
+    def products(self) -> str:
+        return f"{self._base}/products"
+
+    def product_by_id(self, product_id: int) -> str:
+        return f"{self._base}/products/{product_id}"
+
+    def product_movements(self, product_id: int) -> str:
+        return f"{self._base}/products/{product_id}/movements"
+
+    @property
+    def reorder_suggestions(self) -> str:
+        return f"{self._base}/products/reorder-suggestions"
+
+    # ── Clientes ──
+    @property
+    def customers(self) -> str:
+        return f"{self._base}/customers"
+
+    def customer_by_id(self, customer_id: int) -> str:
+        return f"{self._base}/customers/{customer_id}"
+
+    # ── Ventas ──
+    @property
+    def sales(self) -> str:
+        return f"{self._base}/sales"
+
+    def sale_by_id(self, sale_id: int) -> str:
+        return f"{self._base}/sales/{sale_id}"
+
+    def delete_sale(self, sale_id: int) -> str:
+        return f"{self._base}/sales/{sale_id}"
+
+    # ── Créditos ──
+    def credits(self, customer_id: int) -> str:
+        return f"{self._base}/credits/{customer_id}"
+
+    def create_credit(self, customer_id: int) -> str:
+        return f"{self._base}/credits/{customer_id}/create"
+
+    def add_credit_sale(self, customer_id: int) -> str:
+        return f"{self._base}/credits/{customer_id}/add"
+
+    def add_credit_payment(self, credit_id: int) -> str:
+        return f"{self._base}/credits/{credit_id}/payments"
+
+    # ── Gastos ──
+    @property
+    def expenses(self) -> str:
+        return f"{self._base}/expenses"
+
+    def delete_expense(self, expense_id: int) -> str:
+        return f"{self._base}/expenses/{expense_id}"
+
+    # ── Métodos de pago ──
+    @property
+    def payment_methods(self) -> str:
+        return f"{self._base}/payment-methods"
+
+    # ── Usuarios ──
+    @property
+    def users(self) -> str:
+        return f"{self._base}/users"
+
+    # ── Ubicaciones ──
+    @property
+    def provinces(self) -> str:
+        return f"{self._base}/locations/provinces"
+
+    def cantons(self, province_id: str) -> str:
+        return f"{self._base}/locations/provinces/{province_id}/cantons"
+
+    def districts(self, province_id: str, canton_id: str) -> str:
+        return f"{self._base}/locations/provinces/{province_id}/cantons/{canton_id}/districts"
+
+    # ── Actividades económicas ──
+    def economic_activity_search(self, q: str) -> str:
+        return f"{self._base}/economic-activities/search?q={q}"
+
+    # ── Analytics ──
+    @property
+    def no_rotation(self) -> str:
+        return f"{self._base}/analytics/no-rotation"
+
+    @property
+    def purchases_spending_by_supplier(self) -> str:
+        return f"{self._base}/analytics/purchases/spending-by-supplier"
+
+    @property
+    def purchases_monthly_evolution(self) -> str:
+        return f"{self._base}/analytics/purchases/monthly-evolution"
+
+    @property
+    def purchases_avg_payment_days(self) -> str:
+        return f"{self._base}/analytics/purchases/avg-payment-days"
+
+    @property
+    def purchases_top_products(self) -> str:
+        return f"{self._base}/analytics/purchases/top-products"
+
+    def supplier_comparison(self, product_id: int) -> str:
+        return f"{self._base}/analytics/purchases/supplier-comparison?product_id={product_id}"
+
+    @property
+    def multi_supplier_products(self) -> str:
+        return f"{self._base}/analytics/purchases/multi-supplier-products"
+
+    # ── Backward compatibility ──────────────────────────────
+    # Permite seguir usando API["key"] y API["key"](args)
+    # sin romper el código existente en dialogs.
+    def __getitem__(self, key: str):
+        """Acceso tipo dict para backward compatibility."""
+        attr = getattr(self, key, None)
+        if attr is None:
+            raise KeyError(f"API endpoint '{key}' no existe")
+        # Si es una property (string), retornarlo directamente
+        if isinstance(attr, str):
+            return attr
+        # Si es un método, retornar el callable
+        return attr
+
+
+# ── Instancia global ──
+api = ApiUrls()
+
+# ── Backward compatibility: API dict-like ──
+# El código existente usa `from ui.api import API, BASE_URL`
+# Esto sigue funcionando sin cambiar nada.
+API = api
