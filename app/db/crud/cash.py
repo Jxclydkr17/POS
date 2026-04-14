@@ -30,7 +30,28 @@ def get_today_session(db: Session, terminal_id: str = "T1") -> CashSession | Non
 
 
 # ==========================================================
-# 🟩 Obtener sesión abierta
+# 🟩 Obtener sesión abierta DE HOY (solo para checks de UI)
+# ==========================================================
+def get_today_open_session(db: Session, terminal_id: str = "T1") -> CashSession | None:
+    """
+    Busca la sesión de caja abierta SOLO del día de hoy.
+    Usar en /cash/current para decidir si mostrar el prompt de apertura.
+    NO usar para registrar movimientos (usar get_open_session para eso).
+    """
+    today = today_cr()
+    return (
+        db.query(CashSession)
+        .filter(
+            CashSession.date == today,
+            CashSession.terminal_id == terminal_id,
+            CashSession.status == "open"
+        )
+        .first()
+    )
+
+
+# ==========================================================
+# 🟩 Obtener sesión abierta (con fallback timezone-safe)
 # ── FASE 2 — Fix 2.5: Fallback timezone-safe ──
 # ==========================================================
 def get_open_session(db: Session, terminal_id: str = "T1") -> CashSession | None:

@@ -1,0 +1,58 @@
+# .gitattributes — FASE 5 — Fix 5.2: Normalizar line endings
+#
+# Problema: 223 archivos .py con CRLF y 57 con LF.
+# Esto causa diffs innecesarios en git y dificulta code review.
+#
+# Solución: forzar LF en el repositorio, y que git convierta
+# automáticamente al checkout según el OS del desarrollador.
+#
+# Para aplicar a archivos existentes después de agregar este archivo:
+#   git add --renormalize .
+#   git commit -m "Normalizar line endings a LF"
+
+# Default: auto-detect, prefer LF in repo
+* text=auto eol=lf
+
+# Python: siempre LF
+*.py text eol=lf
+*.pyx text eol=lf
+
+# Config files: siempre LF
+*.ini text eol=lf
+*.cfg text eol=lf
+*.toml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.env text eol=lf
+
+# Web assets
+*.html text eol=lf
+*.css text eol=lf
+*.js text eol=lf
+*.qss text eol=lf
+
+# Scripts
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Markdown / docs
+*.md text eol=lf
+*.txt text eol=lf
+*.rst text eol=lf
+
+# Binarios — no tocar
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.p12 binary
+*.pfx binary
+*.db binary
+*.sqlite binary
+*.xlsx binary
+*.pdf binary
+*.exe binary
+*.dll binary
+*.zip binary

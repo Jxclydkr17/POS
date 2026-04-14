@@ -14,6 +14,7 @@ from app.services.dashboard_snapshot_service import save_dashboard_snapshot
 
 from app.db.crud.cash import (
     get_today_session,
+    get_today_open_session,
     get_open_session,
     open_session,
     add_movement,
@@ -314,12 +315,27 @@ def get_current_cash(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    session = get_open_session(db)
+    # ── HOTFIX: Usar get_today_open_session para el check de la UI ──
+    # get_open_session (con fallback) es para REGISTRAR movimientos.
+    # Para decidir si mostrar el prompt de apertura, solo importa HOY.
+    session = get_today_open_session(db)
 
     if not session:
+        # Verificar si hay una sesión stale de días anteriores sin cerrar
+        stale = get_open_session(db)
+        stale_info = None
+        if stale:
+            stale_info = {
+                "date": str(stale.date),
+                "opening_amount": float(stale.opening_amount),
+            }
+
         return success_response(
-            message="No hay caja abierta.",
-            data={"is_open": False}
+            message="No hay caja abierta hoy.",
+            data={
+                "is_open": False,
+                "stale_session": stale_info,
+            }
         )
 
     return success_response(
