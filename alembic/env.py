@@ -1,62 +1,40 @@
 """
 alembic/env.py — Configuración de entorno para migraciones Alembic
-
-FASE 2 FIX:
-- Importa TODOS los modelos via app.db.models (no una lista parcial)
-- Lee la URL de la BD desde .env via app.core.config
-- Soporta tanto migraciones online como offline
-
-FASE 3 FIX:
-- render_as_batch=True para compatibilidad SQLite
-  (SQLite no soporta ALTER TABLE nativamente; batch mode
-   recrea la tabla completa de forma transparente)
 """
-
 import sys
 from pathlib import Path
-from os.path import abspath, dirname
 from logging.config import fileConfig
-from sqlalchemy import pool, engine_from_config, create_engine
+from sqlalchemy import pool, create_engine
 from alembic import context
 
-# --- 1. CONFIGURAR EL PATH PRIMERO QUE NADA ---
-# Esto permite que Python encuentre la carpeta 'app'
+# --- 1. CONFIGURAR EL PATH ---
 BASE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE_DIR))
 
-# --- 2. AHORA SÍ, IMPORTAR LO DE TU APP ---
+# --- 2. IMPORTACIONES DE LA APP ---
 from app.db.database import Base
 import app.db.models  # noqa: F401
-from app.core.config import get_database_url, is_sqlite
+from app.core.config import get_database_url
 
-
-# Configuración de Alembic
 config = context.config
-
-# Logging desde alembic.ini
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Alembic usa esto para detectar cambios en los modelos
 target_metadata = Base.metadata
 
-
 def run_migrations_offline() -> None:
-    """Ejecuta migraciones en modo 'offline' (genera SQL sin conectar)."""
     url = get_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
-        render_as_batch=True,
+        render_as_batch=True, # Activado para SQLite
     )
     with context.begin_transaction():
         context.run_migrations()
 
-
 def run_migrations_online() -> None:
-    """Ejecuta migraciones conectando a la BD."""
     connectable = create_engine(
         get_database_url(),
         poolclass=pool.NullPool,
@@ -65,11 +43,10 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True,
+            render_as_batch=True, # Activado para SQLite
         )
         with context.begin_transaction():
             context.run_migrations()
-
 
 if context.is_offline_mode():
     run_migrations_offline()
