@@ -25,8 +25,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.core.security import decode_token
+from app.core.config import APP_DIR
 
-SESSION_FILE = "session.json"
+SESSION_FILE = str(APP_DIR / "session.json")
 
 logger = logging.getLogger(__name__)
 

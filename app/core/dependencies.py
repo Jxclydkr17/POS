@@ -45,7 +45,7 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
     if user.token_revoked_at:
         token_iat = payload.get("iat")
         if token_iat:
-            # jose devuelve iat como int (epoch), convertir para comparar
+            # PyJWT devuelve iat como int (epoch), convertir para comparar
             iat_dt = datetime.fromtimestamp(token_iat, tz=timezone.utc)
             revoked_dt = user.token_revoked_at
             # Asegurar que revoked_dt tenga timezone

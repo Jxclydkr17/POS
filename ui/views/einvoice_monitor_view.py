@@ -22,6 +22,7 @@ import logging
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.components.toast_notifier import show_toast
+from ui.utils.http_worker import api_call, run_async
 
 logger = logging.getLogger(__name__)
 
@@ -573,23 +574,22 @@ class EinvoiceMonitorView(QWidget):
         self._run_action(f"{API}/einvoices/{einv_id}/re-sign", "XML refirmado", "Error refirmando")
 
     def _action_view_response(self, einv_id):
-        try:
-            r = requests.get(f"{API}/einvoices/{einv_id}/hacienda-response",
-                             headers=_headers(), timeout=10)
-            if r.status_code == 200:
-                data = r.json()
-                parsed = data.get("parsed") or {}
-                msg = (
-                    f"Estado: {data.get('hacienda_status', '?')}\n"
-                    f"Mensaje: {parsed.get('mensaje', '?')} "
-                    f"({'Aceptado' if parsed.get('mensaje') == '1' else 'Rechazado' if parsed.get('mensaje') == '3' else 'Parcial'})\n"
-                    f"Detalle: {parsed.get('detalle_mensaje', 'Sin detalle')}\n"
-                )
-                QMessageBox.information(self, "Respuesta de Hacienda", msg)
-            else:
-                QMessageBox.warning(self, "Error", f"HTTP {r.status_code}")
-        except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+        api_call(
+            "get", f"{API}/einvoices/{einv_id}/hacienda-response",
+            headers=_headers(),
+            on_success=self._on_hacienda_response,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", msg),
+        )
+
+    def _on_hacienda_response(self, data):
+        parsed = data.get("parsed") or {}
+        msg = (
+            f"Estado: {data.get('hacienda_status', '?')}\n"
+            f"Mensaje: {parsed.get('mensaje', '?')} "
+            f"({'Aceptado' if parsed.get('mensaje') == '1' else 'Rechazado' if parsed.get('mensaje') == '3' else 'Parcial'})\n"
+            f"Detalle: {parsed.get('detalle_mensaje', 'Sin detalle')}\n"
+        )
+        QMessageBox.information(self, "Respuesta de Hacienda", msg)
 
     def _build_all_pending(self):
         reply = QMessageBox.question(
@@ -685,12 +685,20 @@ class EinvoiceMonitorView(QWidget):
     # ════════════════════════════════════════════════════════
 
     def _load_diagnostics(self):
-        self.diag_text.setText("Cargando diagnóstico...")
+        self.diag_text.setText("⏳ Cargando diagnóstico...")
+        run_async(
+            self._fetch_diagnostics_data,
+            on_success=self._on_diagnostics_loaded,
+            on_error=lambda msg: self.diag_text.setText(f"❌ Error cargando diagnóstico:\n{msg}"),
+        )
+
+    def _fetch_diagnostics_data(self):
+        """Se ejecuta en hilo de background — NO tocar widgets Qt aquí."""
+        hdrs = _headers()
         lines = []
 
         try:
-            # XSD status
-            r = requests.get(f"{API}/einvoices/xsd-status", headers=_headers(), timeout=5)
+            r = requests.get(f"{API}/einvoices/xsd-status", headers=hdrs, timeout=5)
             if r.status_code == 200:
                 xsd = r.json()
                 lines.append("═══ VALIDACIÓN XSD ═══")
@@ -706,8 +714,7 @@ class EinvoiceMonitorView(QWidget):
         lines.append("")
 
         try:
-            # Signing status
-            r = requests.get(f"{API}/einvoices/signing-status", headers=_headers(), timeout=5)
+            r = requests.get(f"{API}/einvoices/signing-status", headers=hdrs, timeout=5)
             if r.status_code == 200:
                 sig = r.json()
                 lines.append("═══ FIRMA DIGITAL ═══")
@@ -727,8 +734,7 @@ class EinvoiceMonitorView(QWidget):
         lines.append("")
 
         try:
-            # Connection status
-            r = requests.get(f"{API}/einvoices/connection-status", headers=_headers(), timeout=10)
+            r = requests.get(f"{API}/einvoices/connection-status", headers=hdrs, timeout=10)
             if r.status_code == 200:
                 conn = r.json()
                 lines.append("═══ CONEXIÓN HACIENDA ═══")
@@ -744,8 +750,7 @@ class EinvoiceMonitorView(QWidget):
         lines.append("")
 
         try:
-            # Pending summary
-            r = requests.get(f"{API}/einvoices/pending-summary", headers=_headers(), timeout=5)
+            r = requests.get(f"{API}/einvoices/pending-summary", headers=hdrs, timeout=5)
             if r.status_code == 200:
                 summary = r.json()
                 inv = summary.get("invoices", {})
@@ -756,4 +761,8 @@ class EinvoiceMonitorView(QWidget):
         except Exception as e:
             lines.append(f"Resumen: error {e}")
 
-        self.diag_text.setText("\n".join(lines))
+        return "\n".join(lines)
+
+    def _on_diagnostics_loaded(self, text):
+        """Callback en hilo principal — seguro actualizar la UI."""
+        self.diag_text.setText(text)

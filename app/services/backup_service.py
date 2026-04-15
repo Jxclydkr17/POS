@@ -346,10 +346,26 @@ def restore_backup(filename: str) -> None:
 
 
 def _restore_sqlite_backup(filepath: Path) -> None:
-    """Restaura SQLite: copia el archivo .db de vuelta."""
+    """
+    Restaura SQLite: cierra todas las conexiones y copia el archivo .db.
+
+    IMPORTANTE: SQLite con WAL mode mantiene archivos -wal y -shm abiertos.
+    Si copiamos el .db mientras SQLAlchemy tiene conexiones activas,
+    el archivo puede quedar corrupto.  engine.dispose() cierra todo
+    el pool; SQLAlchemy reconecta automáticamente en la siguiente query.
+    """
+    from app.db.database import engine
+
     db_path = _get_sqlite_db_path()
     try:
+        engine.dispose()
+        logger.info("Conexiones SQLite cerradas antes de restaurar.")
         shutil.copy2(str(filepath), str(db_path))
+        # Eliminar archivos WAL/SHM residuales del backup anterior
+        for suffix in ("-wal", "-shm"):
+            residual = Path(str(db_path) + suffix)
+            if residual.exists():
+                residual.unlink()
         logger.info(f"Base de datos SQLite restaurada desde: {filepath.name}")
     except OSError as e:
         raise RuntimeError(f"Error restaurando SQLite: {e}")

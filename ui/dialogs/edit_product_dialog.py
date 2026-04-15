@@ -250,7 +250,7 @@ class EditProductDialog(QDialog):
 
         try:
             product_rate_decimal = Decimal(str(rate_value))
-        except:
+        except (ValueError, TypeError, ArithmeticError):
             self.tax_rate_combo.setCurrentIndex(0)
             return
 
@@ -263,7 +263,7 @@ class EditProductDialog(QDialog):
                 continue
             try:
                 rate_to_compare_decimal = Decimal(str(value))
-            except:
+            except (ValueError, TypeError, ArithmeticError):
                 continue
 
             if product_rate_decimal == rate_to_compare_decimal:
@@ -290,7 +290,7 @@ class EditProductDialog(QDialog):
             self.price_input.blockSignals(True)
             self.price_input.setText(str(round(price, 2)))
             self.price_input.blockSignals(False)
-        except:
+        except (ValueError, TypeError, ZeroDivisionError):
             pass
 
     def recalculate_utility(self):
@@ -309,7 +309,7 @@ class EditProductDialog(QDialog):
             self.utilidad_input.blockSignals(True)
             self.utilidad_input.setText(str(round(utilidad, 2)))
             self.utilidad_input.blockSignals(False)
-        except:
+        except (ValueError, TypeError, ZeroDivisionError):
             pass
 
     def search_cabys(self):

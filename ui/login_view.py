@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QSizePolicy
+    QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QSizePolicy,
+    QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush
@@ -65,7 +66,7 @@ class BrandPanel(QWidget):
         )
         layout.addWidget(separator)
 
-        tagline = QLabel("Control total de tu negocion\nen una sola pantalla\nVende más y gestiona mejor")
+        tagline = QLabel("Control total de tu negocio\nen una sola pantalla\nVende más y gestiona mejor")
         tagline.setAlignment(Qt.AlignCenter)
         tagline.setWordWrap(True)
         tagline.setStyleSheet(
@@ -181,6 +182,8 @@ class LoginWindow(QWidget):
         self.setFixedSize(800, 500)
         self.setStyleSheet(f"background-color: {PANEL_BG};")
         self._setup_ui()
+        # ── FASE 3 — Fix 3.4: Verificar si necesita setup inicial ──
+        self._check_needs_setup()
 
     def _setup_ui(self):
         root = QHBoxLayout(self)
@@ -269,7 +272,235 @@ class LoginWindow(QWidget):
 
         root.addWidget(form_panel)
 
-    # ── Lógica de login (sin cambios) ──────────────────────────────
+    # ── FASE 3 — Fix 3.4: Setup inicial si no hay usuarios ────────
+    def _check_needs_setup(self):
+        """Consulta al backend si la BD tiene cero usuarios."""
+        try:
+            resp = requests.get(f"{BASE_URL}/users/needs-setup", timeout=5)
+            if resp.status_code == 200 and resp.json().get("needs_setup"):
+                self._show_setup_dialog()
+        except Exception:
+            pass  # Si el backend no responde, mostrar login normal
+
+    def _show_setup_dialog(self):
+        """Diálogo para crear el primer administrador cuando la BD está vacía."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Configuración inicial — Violette POS")
+        dlg.setFixedSize(420, 340)
+        dlg.setStyleSheet(f"""
+            QDialog {{
+                background-color: {PANEL_BG};
+            }}
+            QLabel {{
+                color: {TEXT_PRIMARY};
+            }}
+            QLineEdit {{
+                background-color: {INPUT_BG};
+                border: 1.5px solid {INPUT_BORDER};
+                border-radius: 8px;
+                padding: 8px 12px;
+                color: {TEXT_PRIMARY};
+                font-size: 14px;
+            }}
+            QLineEdit:focus {{
+                border-color: {VIOLET_ACCENT};
+            }}
+            QPushButton {{
+                background-color: {VIOLET_ACCENT};
+                color: white;
+                border: none;
+                border-radius: 8px;
+                padding: 10px;
+                font-size: 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {VIOLET_LIGHT};
+            }}
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(30, 25, 30, 25)
+
+        # Título
+        title = QLabel("🔐  Primera ejecución")
+        title.setStyleSheet(f"font-size: 20px; font-weight: bold; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        info = QLabel(
+            "No se encontraron usuarios en la base de datos.\n"
+            "Cree el administrador inicial para comenzar."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED}; margin-bottom: 4px;")
+        layout.addWidget(info)
+
+        # Campos
+        lbl_user = QLabel("Usuario")
+        lbl_user.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_user)
+        setup_user = QLineEdit()
+        setup_user.setPlaceholderText("admin")
+        setup_user.setText("admin")
+        layout.addWidget(setup_user)
+
+        lbl_pass = QLabel("Contraseña (mínimo 8 caracteres)")
+        lbl_pass.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_pass)
+        setup_pass = QLineEdit()
+        setup_pass.setEchoMode(QLineEdit.Password)
+        setup_pass.setPlaceholderText("••••••••")
+        layout.addWidget(setup_pass)
+
+        lbl_confirm = QLabel("Confirmar contraseña")
+        lbl_confirm.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_confirm)
+        setup_confirm = QLineEdit()
+        setup_confirm.setEchoMode(QLineEdit.Password)
+        setup_confirm.setPlaceholderText("••••••••")
+        layout.addWidget(setup_confirm)
+
+        # Botón
+        btn_create = QPushButton("Crear administrador")
+        layout.addWidget(btn_create)
+
+        def _do_setup():
+            username = setup_user.text().strip()
+            password = setup_pass.text()
+            confirm = setup_confirm.text()
+
+            if not username or len(username) < 3:
+                QMessageBox.warning(dlg, "Error", "El usuario debe tener al menos 3 caracteres.")
+                return
+            if len(password) < 8:
+                QMessageBox.warning(dlg, "Error", "La contraseña debe tener al menos 8 caracteres.")
+                return
+            if password != confirm:
+                QMessageBox.warning(dlg, "Error", "Las contraseñas no coinciden.")
+                return
+
+            try:
+                resp = requests.post(
+                    f"{BASE_URL}/users/setup",
+                    json={"username": username, "password": password},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    QMessageBox.information(
+                        dlg, "Listo",
+                        f"Administrador '{username}' creado exitosamente.\n"
+                        "Ahora puede iniciar sesión."
+                    )
+                    dlg.accept()
+                else:
+                    detail = resp.json().get("detail", "Error desconocido")
+                    QMessageBox.critical(dlg, "Error", f"No se pudo crear el usuario:\n{detail}")
+            except Exception as e:
+                QMessageBox.critical(dlg, "Error", f"Error de conexión:\n{e}")
+
+        btn_create.clicked.connect(_do_setup)
+        setup_pass.returnPressed.connect(_do_setup)
+        setup_confirm.returnPressed.connect(_do_setup)
+
+        dlg.exec()
+
+    # ── FASE 6 — Fix 6.1: Diálogo de cambio de contraseña obligatorio ──
+    def _show_change_password_dialog(self, current_password):
+        """Muestra diálogo para cambiar la contraseña. Retorna True si se cambió."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Cambio de contraseña obligatorio")
+        dlg.setFixedSize(420, 280)
+        dlg.setStyleSheet(f"""
+            QDialog {{ background-color: {PANEL_BG}; }}
+            QLabel {{ color: {TEXT_PRIMARY}; }}
+            QLineEdit {{
+                background-color: {INPUT_BG}; border: 1.5px solid {INPUT_BORDER};
+                border-radius: 8px; padding: 8px 12px; color: {TEXT_PRIMARY}; font-size: 14px;
+            }}
+            QLineEdit:focus {{ border-color: {VIOLET_ACCENT}; }}
+            QPushButton {{
+                background-color: {VIOLET_ACCENT}; color: white; border: none;
+                border-radius: 8px; padding: 10px; font-size: 14px; font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {VIOLET_LIGHT}; }}
+        """)
+
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
+        layout.setContentsMargins(30, 25, 30, 25)
+
+        title = QLabel("🔒  Debe cambiar su contraseña")
+        title.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {TEXT_PRIMARY};")
+        layout.addWidget(title)
+
+        info = QLabel("Por seguridad, debe establecer una contraseña personalizada antes de continuar.")
+        info.setWordWrap(True)
+        info.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED}; margin-bottom: 4px;")
+        layout.addWidget(info)
+
+        lbl_new = QLabel("Nueva contraseña (mínimo 8 caracteres)")
+        lbl_new.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_new)
+        new_pass = QLineEdit()
+        new_pass.setEchoMode(QLineEdit.Password)
+        new_pass.setPlaceholderText("••••••••")
+        layout.addWidget(new_pass)
+
+        lbl_confirm = QLabel("Confirmar nueva contraseña")
+        lbl_confirm.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_confirm)
+        confirm_pass = QLineEdit()
+        confirm_pass.setEchoMode(QLineEdit.Password)
+        confirm_pass.setPlaceholderText("••••••••")
+        layout.addWidget(confirm_pass)
+
+        btn_save = QPushButton("Guardar nueva contraseña")
+        layout.addWidget(btn_save)
+
+        result = {"changed": False}
+
+        def _do_change():
+            pwd = new_pass.text()
+            conf = confirm_pass.text()
+            if len(pwd) < 8:
+                QMessageBox.warning(dlg, "Error", "La contraseña debe tener al menos 8 caracteres.")
+                return
+            if pwd != conf:
+                QMessageBox.warning(dlg, "Error", "Las contraseñas no coinciden.")
+                return
+            if pwd == current_password:
+                QMessageBox.warning(dlg, "Error", "La nueva contraseña debe ser diferente a la actual.")
+                return
+            try:
+                headers = {"Authorization": f"Bearer {session.token}"}
+                resp = requests.post(
+                    f"{BASE_URL}/users/me/change-password",
+                    json={"current_password": current_password, "new_password": pwd},
+                    headers=headers,
+                    timeout=(5, 15),
+                )
+                if resp.status_code == 200:
+                    new_data = resp.json()
+                    new_token = new_data.get("access_token")
+                    if new_token:
+                        session.token = new_token
+                        session.save_session()
+                    result["changed"] = True
+                    QMessageBox.information(dlg, "Listo", "Contraseña actualizada exitosamente.")
+                    dlg.accept()
+                else:
+                    detail = resp.json().get("detail", "Error desconocido")
+                    QMessageBox.critical(dlg, "Error", f"No se pudo cambiar la contraseña:\n{detail}")
+            except Exception as e:
+                QMessageBox.critical(dlg, "Error", f"Error de conexión:\n{e}")
+
+        btn_save.clicked.connect(_do_change)
+        confirm_pass.returnPressed.connect(_do_change)
+        dlg.exec()
+        return result["changed"]
+
+    # ── Lógica de login ──────────────────────────────────────────
     def _handle_login(self):
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
@@ -281,7 +512,8 @@ class LoginWindow(QWidget):
         try:
             response = requests.post(
                 API_URL,
-                data={"username": username, "password": password}
+                data={"username": username, "password": password},
+                timeout=(5, 15),
             )
 
             if response.status_code == 200:
@@ -293,7 +525,13 @@ class LoginWindow(QWidget):
                 session.start_session(username, role, token)
 
                 logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
-                logging.debug(f"TOKEN: {token}")
+
+                # ── FASE 6 — Fix 6.1: Forzar cambio de contraseña ──
+                if data.get("must_change_password"):
+                    changed = self._show_change_password_dialog(password)
+                    if not changed:
+                        session.end_session()
+                        return
 
                 QMessageBox.information(self, "Bienvenido", f"Acceso concedido, {username}.")
 

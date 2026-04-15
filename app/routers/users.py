@@ -67,10 +67,66 @@ class PermissionsUpdate(BaseModel):
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
 
+
+# ── FASE 3 — Fix 3.4: Schema para setup inicial ──
+class InitialSetupRequest(BaseModel):
+    """Solo se usa cuando la BD está vacía (cero usuarios)."""
+    username: str = Field(..., min_length=3, max_length=100)
+    password: str = Field(..., min_length=8, max_length=255)
+    full_name: Optional[str] = Field("Administrador", max_length=150)
+
+
+# ── FASE 6 — Fix 6.1: Schema para cambio de contraseña ──
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=255)
+
+
 router = APIRouter(
     prefix="/users",
     tags=["Usuarios"]
 )
+
+
+# ────────────────────────────────────────────────────────────
+#  FASE 3 — Fix 3.4: Setup inicial (primer arranque sin admin)
+#
+#  Estos endpoints NO requieren autenticación, pero /setup solo
+#  funciona cuando la BD tiene CERO usuarios.  Una vez creado
+#  el primer admin, /setup devuelve 403 para siempre.
+# ────────────────────────────────────────────────────────────
+
+@router.get("/needs-setup")
+def needs_setup(db: Session = Depends(get_db)):
+    """Indica si el sistema necesita configuración inicial (no hay usuarios)."""
+    count = db.query(User).count()
+    return {"needs_setup": count == 0}
+
+
+@router.post("/setup")
+def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
+    """
+    Crea el primer usuario administrador.
+    Solo funciona cuando NO existen usuarios en la BD.
+    """
+    count = db.query(User).count()
+    if count > 0:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="El sistema ya fue configurado. Use /users/register con credenciales de admin.",
+        )
+
+    admin = User(
+        username=data.username,
+        password=hash_password(data.password),
+        full_name=data.full_name or "Administrador",
+        role="admin",
+        is_active=True,
+    )
+    db.add(admin)
+    db.commit()
+    logger.info(f"Setup inicial completado — admin '{admin.username}' creado.")
+    return {"message": "Administrador creado exitosamente", "username": admin.username}
 
 # ────────────────────────────────────────────────────────────
 #  Rate limiter persistido en archivo JSON (Fase 2 — Fix 2.1)
@@ -208,6 +264,7 @@ def login(
         "access_token": token,
         "refresh_token": refresh,
         "token_type": "bearer",
+        "must_change_password": bool(user.must_change_password),
     }
 
 
@@ -260,6 +317,40 @@ def get_profile(current_user: User = Depends(get_current_user)):
         "full_name": current_user.full_name,
         "role": current_user.role,
         "permissions": current_user.get_permissions(),
+    }
+
+
+# ── FASE 6 — Fix 6.1: Cambio de contraseña propio ──
+@router.post("/me/change-password")
+def change_own_password(
+    data: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Permite al usuario cambiar su propia contraseña.
+    Verifica la contraseña actual antes de aplicar el cambio.
+    Limpia el flag must_change_password si estaba activo.
+    """
+    if not verify_password(data.current_password, current_user.password):
+        raise HTTPException(status_code=400, detail="La contraseña actual es incorrecta")
+
+    current_user.password = hash_password(data.new_password)
+    current_user.must_change_password = False
+
+    # Revocar tokens anteriores (forzar re-login con nueva contraseña)
+    from app.utils.dt import utcnow as _utcnow
+    current_user.token_revoked_at = _utcnow()
+
+    db.commit()
+    logger.info(f"Usuario '{current_user.username}' cambió su contraseña.")
+
+    # Generar nuevo token para que no se cierre la sesión inmediatamente
+    new_token = create_access_token({"sub": current_user.username, "role": current_user.role})
+    return {
+        "message": "Contraseña actualizada exitosamente",
+        "access_token": new_token,
+        "token_type": "bearer",
     }
 
 
@@ -341,6 +432,7 @@ def update_user(
 
     if data.password:
         user.password = hash_password(data.password)
+        user.must_change_password = False
         # ── FASE 3 — Fix 3.3: Revocar tokens al cambiar password ──
         from app.utils.dt import utcnow as _utcnow
         user.token_revoked_at = _utcnow()

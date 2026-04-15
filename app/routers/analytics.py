@@ -19,6 +19,7 @@ from app.db.models.supplier import Supplier
 from app.db.models.category import Category
 from app.db.models.user import User
 from app.utils.dt import utcnow, today_cr
+from app.utils.db_compat import sql_datediff, sql_year, sql_month
 
 # ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
 from app.core.dependencies import get_current_user
@@ -505,8 +506,8 @@ def purchases_monthly_evolution(
         y -= 1
     cutoff = date(y, m, 1)
 
-    year_col = func.year(Purchase.entry_date).label("yr")
-    month_col = func.month(Purchase.entry_date).label("mn")
+    year_col = sql_year(Purchase.entry_date).label("yr")
+    month_col = sql_month(Purchase.entry_date).label("mn")
 
     rows = (
         db.query(
@@ -570,7 +571,7 @@ def purchases_avg_payment_days(
     # Promedio global
     global_avg = (
         db.query(
-            func.avg(func.datediff(Purchase.paid_at, Purchase.entry_date)).label("avg_days"),
+            func.avg(sql_datediff(Purchase.paid_at, Purchase.entry_date)).label("avg_days"),
             func.count(Purchase.id).label("count"),
         )
         .filter(*base_filter)
@@ -582,13 +583,13 @@ def purchases_avg_payment_days(
         db.query(
             Supplier.id.label("supplier_id"),
             Supplier.name.label("supplier_name"),
-            func.avg(func.datediff(Purchase.paid_at, Purchase.entry_date)).label("avg_days"),
+            func.avg(sql_datediff(Purchase.paid_at, Purchase.entry_date)).label("avg_days"),
             func.count(Purchase.id).label("count"),
         )
         .join(Purchase, Purchase.supplier_id == Supplier.id)
         .filter(*base_filter)
         .group_by(Supplier.id, Supplier.name)
-        .order_by(func.avg(func.datediff(Purchase.paid_at, Purchase.entry_date)).asc())
+        .order_by(func.avg(sql_datediff(Purchase.paid_at, Purchase.entry_date)).asc())
         .all()
     )
 
@@ -758,7 +759,7 @@ def supplier_comparison(
     delivery_rows = (
         db.query(
             Purchase.supplier_id,
-            func.avg(func.datediff(Purchase.received_at, Purchase.entry_date)).label("avg_days"),
+            func.avg(sql_datediff(Purchase.received_at, Purchase.entry_date)).label("avg_days"),
         )
         .join(PurchaseDetail, PurchaseDetail.purchase_id == Purchase.id)
         .filter(

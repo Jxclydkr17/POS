@@ -141,7 +141,7 @@ class Settings(BaseSettings):
         return v or "sandbox"
 
     class Config:
-        env_file = os.environ.get("VIOLETTE_ENV_FILE", r"D:/pos/.env")
+        env_file = os.environ.get("VIOLETTE_ENV_FILE", str(APP_DIR / ".env"))
         env_file_encoding = "utf-8"
 
 

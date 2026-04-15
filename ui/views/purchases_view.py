@@ -816,7 +816,7 @@ class AddPaymentDialog(QDialog):
             else:
                 err = res.text
                 try: err = res.json().get("detail", err)
-                except: pass
+                except Exception: pass
                 QMessageBox.critical(self, "Error", str(err))
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -866,7 +866,8 @@ class AddCreditNoteDialog(QDialog):
                 products = products.get("items", [])
             for p in products:
                 self.product_combo.addItem(f"{p['name']} (Stock: {p.get('stock', 0)})", p["id"])
-        except: pass
+        except Exception:
+            pass
 
     def save(self):
         reason = self.reason_input.toPlainText().strip()
@@ -885,7 +886,7 @@ class AddCreditNoteDialog(QDialog):
             else:
                 err = res.text
                 try: err = res.json().get("detail", err)
-                except: pass
+                except Exception: pass
                 QMessageBox.critical(self, "Error", str(err))
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -921,7 +922,7 @@ class PaymentDetailDialog(QDialog):
                 layout.addWidget(QLabel(f"  • {pp.get('date','?')} — ₡{float(pp.get('amount',0)):,.2f} ({pp.get('payment_method','')})"))
             if not pays:
                 layout.addWidget(QLabel("  Sin abonos."))
-        except: layout.addWidget(QLabel("  Error."))
+        except Exception: layout.addWidget(QLabel("  Error."))
 
         layout.addWidget(QLabel("<b>📋 Notas crédito:</b>"))
         try:
@@ -934,7 +935,7 @@ class PaymentDetailDialog(QDialog):
                 layout.addWidget(QLabel(t))
             if not cns:
                 layout.addWidget(QLabel("  Sin NC."))
-        except: layout.addWidget(QLabel("  Error."))
+        except Exception: layout.addWidget(QLabel("  Error."))
 
         btn = QPushButton("Cerrar"); btn.clicked.connect(self.accept)
         layout.addWidget(btn)

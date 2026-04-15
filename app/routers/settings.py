@@ -309,26 +309,37 @@ def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db),
 @router.get("/system-info", dependencies=[Depends(get_current_user)])
 def get_system_info(db: Session = Depends(get_db)):
     """Información del sistema: versión, DB, disco, Python, OS."""
-    from app.core.config import settings as env
+    from app.core.config import settings as env, APP_DIR
 
-    # Versión de MySQL
+    # ── Versión del motor de BD ──
     db_version = "desconocida"
     try:
-        row = db.execute(text("SELECT VERSION()")).fetchone()
-        if row:
-            db_version = row[0]
+        if is_sqlite():
+            row = db.execute(text("SELECT sqlite_version()")).fetchone()
+            if row:
+                db_version = f"SQLite {row[0]}"
+        else:
+            row = db.execute(text("SELECT VERSION()")).fetchone()
+            if row:
+                db_version = row[0]
     except Exception:
         pass
 
-    # Tamaño de la base de datos
+    # ── Tamaño de la base de datos ──
     db_size_mb = "desconocido"
     try:
-        row = db.execute(text(
-            "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) "
-            "FROM information_schema.tables WHERE table_schema = :db"
-        ), {"db": env.db_name}).fetchone()
-        if row and row[0]:
-            db_size_mb = f"{row[0]} MB"
+        if is_sqlite():
+            db_path = APP_DIR / env.db_sqlite_path
+            if db_path.exists():
+                size_bytes = os.path.getsize(db_path)
+                db_size_mb = f"{size_bytes / (1024 * 1024):.2f} MB"
+        else:
+            row = db.execute(text(
+                "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 2) "
+                "FROM information_schema.tables WHERE table_schema = :db"
+            ), {"db": env.db_name}).fetchone()
+            if row and row[0]:
+                db_size_mb = f"{row[0]} MB"
     except Exception:
         pass
 
@@ -353,6 +364,10 @@ def get_system_info(db: Session = Depends(get_db)):
         except Exception:
             table_counts[table] = "N/A"
 
+    # ── Nombre y host adaptados al motor ──
+    db_display_name = env.db_sqlite_path if is_sqlite() else env.db_name
+    db_display_host = "local (archivo)" if is_sqlite() else env.db_host
+
     return APIResponse(
         message="Información del sistema",
         data={
@@ -361,8 +376,8 @@ def get_system_info(db: Session = Depends(get_db)):
             "python_version": platform.python_version(),
             "os": f"{platform.system()} {platform.release()}",
             "db_version": db_version,
-            "db_name": env.db_name,
-            "db_host": env.db_host,
+            "db_name": db_display_name,
+            "db_host": db_display_host,
             "db_size": db_size_mb,
             "disk": disk_info,
             "table_counts": table_counts,

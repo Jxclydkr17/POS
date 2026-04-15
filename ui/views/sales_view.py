@@ -2652,7 +2652,7 @@ class SalesView(QWidget):
                 color = "#22c55e" if diff == 0 else "#f59e0b" if abs(diff) < 100 else "#ef4444"
                 lbl_diff.setText(f"Diferencia: ₡ {diff:.2f}")
                 lbl_diff.setStyleSheet(f"font-weight: bold; color: {color}")
-            except:
+            except (ValueError, TypeError):
                 lbl_diff.setText("Diferencia: ₡ 0.00")
 
         txt_real.textChanged.connect(update_diff)
@@ -2675,7 +2675,7 @@ class SalesView(QWidget):
             real_amount = float(real_amount_text)
             if real_amount < 0:
                 raise ValueError
-        except:
+        except (ValueError, TypeError):
             QMessageBox.warning(dialog, "Error", "Monto inválido.")
             return
 

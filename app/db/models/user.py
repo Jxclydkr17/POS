@@ -66,6 +66,9 @@ class User(Base):
     # son rechazados. Se actualiza al desactivar usuario o cambiar password.
     token_revoked_at = Column(DateTime, nullable=True)
 
+    # ── FASE 6 — Fix 6.1: Forzar cambio de contraseña en primer login ──
+    must_change_password = Column(Boolean, default=False)
+
     def get_permissions(self) -> list[str]:
         """Retorna los permisos del usuario. Si no tiene, usa los del rol."""
         if self.role == "admin":

@@ -388,7 +388,7 @@ class AddProductDialog(QDialog):
                     font-weight: bold;
                 }
             """)
-        except:
+        except (ValueError, TypeError, ZeroDivisionError):
             pass
 
     def recalculate_utilidad_from_price(self):
@@ -405,7 +405,7 @@ class AddProductDialog(QDialog):
             self.utilidad_input.blockSignals(False)
 
             self.price_input.setStyleSheet("")
-        except:
+        except (ValueError, TypeError, ZeroDivisionError):
             pass
 
     def search_cabys(self):
@@ -462,7 +462,7 @@ class AddProductDialog(QDialog):
 
         try:
             rate_value = float(rate_value)
-        except:
+        except (ValueError, TypeError):
             self.tax_rate_combo.setCurrentIndex(0)
             return
 

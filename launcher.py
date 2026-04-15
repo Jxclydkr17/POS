@@ -28,17 +28,16 @@ else:
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 # ── FASE 4 — Fix 4.3: Logging con rotación desde el inicio ──
-# Antes: logging.basicConfig() escribía solo a consola/stderr.
-# En un .exe con stderr redirigido, esto podía llenar el disco.
-# Ahora usa RotatingFileHandler desde el arranque.
+# ── FASE 6 — Fix 6.3: Logs consolidados bajo data/logs/ ──
 import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path as _LogPath
 
-_log_dir = _LogPath(os.path.dirname(os.path.abspath(
+_app_base = _LogPath(os.path.dirname(os.path.abspath(
     sys.executable if getattr(sys, 'frozen', False)
     else __file__
-))) / "logs"
+)))
+_log_dir = _app_base / "data" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
 
 _log_formatter = logging.Formatter(

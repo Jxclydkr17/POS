@@ -16,12 +16,10 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # ── Directorio de logs ──
-if getattr(sys, 'frozen', False):
-    _BASE = Path(sys.executable).parent
-else:
-    _BASE = Path(__file__).resolve().parents[2]
+# ── FASE 6 — Fix 6.3: Consolidar bajo DATA_DIR/logs/ ──
+from app.core.config import DATA_DIR
 
-LOG_DIR = _BASE / "logs"
+LOG_DIR = DATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 LOG_FILE = LOG_DIR / "app.log"

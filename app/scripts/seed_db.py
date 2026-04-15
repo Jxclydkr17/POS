@@ -60,6 +60,7 @@ def seed_admin(db: Session, force: bool = False) -> None:
         existing.role = "admin"
         existing.is_active = True
         existing.full_name = "Administrador"
+        existing.must_change_password = True
         db.commit()
         print("  🔄 Usuario 'admin' actualizado (contraseña: admin123).")
         return
@@ -70,6 +71,7 @@ def seed_admin(db: Session, force: bool = False) -> None:
         full_name="Administrador",
         role="admin",
         is_active=True,
+        must_change_password=True,
     )
     db.add(admin)
     db.commit()

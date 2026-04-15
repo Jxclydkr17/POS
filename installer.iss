@@ -62,12 +62,10 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-; Limpiar archivos generados en runtime
+; Limpiar archivos generados en runtime (NUNCA borrar *.db — son datos del usuario)
 Type: filesandordirs; Name: "{app}\*.log"
-Type: filesandordirs; Name: "{app}\*.db"
 Type: filesandordirs; Name: "{app}\session.json"
-Type: filesandordirs; Name: "{app}\app\pdfs"
-Type: filesandordirs; Name: "{app}\app\backups"
+Type: filesandordirs; Name: "{app}\data\pdfs"
 Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
@@ -76,8 +74,8 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
-    ForceDirectories(ExpandConstant('{app}\app\backups'));
-    ForceDirectories(ExpandConstant('{app}\app\pdfs'));
+    ForceDirectories(ExpandConstant('{app}\data\backups'));
+    ForceDirectories(ExpandConstant('{app}\data\pdfs'));
     ForceDirectories(ExpandConstant('{app}\certs'));
   end;
 end;

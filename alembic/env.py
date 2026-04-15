@@ -5,6 +5,11 @@ FASE 2 FIX:
 - Importa TODOS los modelos via app.db.models (no una lista parcial)
 - Lee la URL de la BD desde .env via app.core.config
 - Soporta tanto migraciones online como offline
+
+FASE 3 FIX:
+- render_as_batch=True para compatibilidad SQLite
+  (SQLite no soporta ALTER TABLE nativamente; batch mode
+   recrea la tabla completa de forma transparente)
 """
 
 import sys
@@ -22,13 +27,7 @@ sys.path.insert(0, str(BASE_DIR))
 # --- 2. AHORA SÍ, IMPORTAR LO DE TU APP ---
 from app.db.database import Base
 import app.db.models  # noqa: F401
-from app.core.config import get_database_url
-
-# ... el resto de tu código (config, target_metadata, funciones) se queda igual
-
-# Agregar raíz del proyecto al path ANTES de importar app.*
-BASE_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BASE_DIR))
+from app.core.config import get_database_url, is_sqlite
 
 
 # Configuración de Alembic
@@ -50,6 +49,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        render_as_batch=True,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -65,6 +65,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
+            render_as_batch=True,
         )
         with context.begin_transaction():
             context.run_migrations()

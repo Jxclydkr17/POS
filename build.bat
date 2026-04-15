@@ -57,10 +57,10 @@ REM .env template
 if exist ".env.example" copy /y ".env.example" "dist\ViolettePOS\.env.example" >nul
 
 REM Crear directorio de backups
-mkdir "dist\ViolettePOS\app\backups" 2>nul
+mkdir "dist\ViolettePOS\data\backups" 2>nul
 
 REM Crear directorio de PDFs
-mkdir "dist\ViolettePOS\app\pdfs" 2>nul
+mkdir "dist\ViolettePOS\data\pdfs" 2>nul
 
 REM Crear directorio de certs
 mkdir "dist\ViolettePOS\certs" 2>nul

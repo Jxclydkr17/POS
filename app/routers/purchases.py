@@ -6,6 +6,7 @@ import os
 import shutil
 from datetime import date, timedelta
 from app.utils.dt import today_cr
+from app.utils.db_compat import sql_datediff
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
@@ -341,7 +342,7 @@ def purchases_summary(
     ).filter(Purchase.supplier_id == supplier_id).scalar()
 
     paid_avg_days = db.query(
-        func.avg(func.datediff(Purchase.paid_at, Purchase.entry_date))
+        func.avg(sql_datediff(Purchase.paid_at, Purchase.entry_date))
     ).filter(
         Purchase.supplier_id == supplier_id,
         Purchase.status == PurchaseStatus.pagado,

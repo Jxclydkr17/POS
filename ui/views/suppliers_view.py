@@ -12,6 +12,7 @@ from ui.session_manager import session
 from ui.dialogs.add_supplier_dialog import AddSupplierDialog
 from ui.dialogs.edit_supplier_dialog import EditSupplierDialog
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call, api_request
 
 # Ruta al stylesheet compartido
 _STYLES_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "styles.qss")
@@ -304,33 +305,31 @@ class SuppliersView(QWidget):
     # 🔄 Cargar proveedores desde API
     # --------------------------------------------------------
     def load_suppliers(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = requests.get(API_SUPPLIERS, headers=headers, params={"limit": 500})
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", API_SUPPLIERS,
+            headers=headers,
+            params={"limit": 500},
+            on_success=self._on_suppliers_loaded,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al cargar proveedores:\n{msg}"),
+        )
 
-            if resp.status_code != 200:
-                QMessageBox.warning(self, "Error", f"No se pudieron cargar los proveedores.\n{resp.text}")
-                return
-
-            payload = resp.json()
-            # Soporta respuesta paginada {"items": [...]} y legacy lista directa
-            if isinstance(payload, dict) and "items" in payload:
-                data = payload["items"]
-            elif isinstance(payload, dict) and "data" in payload:
-                data = payload["data"]
-            elif isinstance(payload, list):
-                data = payload
-            else:
-                QMessageBox.warning(self, "Error", "Formato inválido de proveedores")
-                return
-            if not isinstance(data, list):
-                QMessageBox.warning(self, "Error", "Formato inválido de proveedores")
-                return
-            self.all_suppliers = data
-            self.apply_filter()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al cargar proveedores:\n{e}")
+    def _on_suppliers_loaded(self, payload):
+        """Callback cuando los proveedores se cargan exitosamente."""
+        if isinstance(payload, dict) and "items" in payload:
+            data = payload["items"]
+        elif isinstance(payload, dict) and "data" in payload:
+            data = payload["data"]
+        elif isinstance(payload, list):
+            data = payload
+        else:
+            QMessageBox.warning(self, "Error", "Formato inválido de proveedores")
+            return
+        if not isinstance(data, list):
+            QMessageBox.warning(self, "Error", "Formato inválido de proveedores")
+            return
+        self.all_suppliers = data
+        self.apply_filter()
 
     # --------------------------------------------------------
     # 📦 Obtener últimas compras del proveedor (async, #11)
@@ -657,7 +656,7 @@ class SuppliersView(QWidget):
         try:
             url = f"{API_SUPPLIERS}/{supplier['id']}"
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = requests.delete(url, headers=headers)
+            resp = api_request("delete", url, headers=headers)
 
             payload = resp.json()
 
@@ -747,7 +746,7 @@ class SuppliersView(QWidget):
         try:
             url = f"{API_SUPPLIERS}/{supplier['id']}/toggle"
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = requests.patch(url, headers=headers)
+            resp = api_request("patch", url, headers=headers)
 
             if resp.status_code not in (200, 201):
                 QMessageBox.warning(self, "Error", f"No se pudo cambiar el estado.\n{resp.text}")
