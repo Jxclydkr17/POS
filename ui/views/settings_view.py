@@ -2503,6 +2503,33 @@ class SettingsView(QWidget):
                 if update_payload:
                     update_user(user_id, update_payload)
 
+                # ── Fix: si el admin editó su propia cuenta y cambió la contraseña,
+                #    el backend revoca el token actual. Hay que re-autenticarse para
+                #    obtener un token nuevo antes de hacer cualquier otra llamada API.
+                from ui.session_manager import session as _session
+                _is_self_edit = user_data.get("username") == _session.username
+                _new_password = update_payload.get("password")
+                _new_username = update_payload.get("username", user_data.get("username"))
+
+                if _is_self_edit and _new_password:
+                    try:
+                        import requests as _req
+                        from ui.api import BASE_URL as _BASE_URL
+                        from app.core.security import decode_token as _decode_token
+                        _resp = _req.post(
+                            f"{_BASE_URL}/users/login",
+                            data={"username": _new_username, "password": _new_password},
+                            timeout=10,
+                        )
+                        _resp.raise_for_status()
+                        _data = _resp.json()
+                        _new_token = _data.get("access_token")
+                        _payload = _decode_token(_new_token)
+                        _role = _payload.get("role", _session.role)
+                        _session.start_session(_new_username, _role, _new_token)
+                    except Exception as _re_err:
+                        logger.warning(f"Re-login automático falló: {_re_err}")
+
                 # Actualizar permisos (si no es admin)
                 role = dlg.result_data.get("role", user_data.get("role", ""))
                 if role != "admin":
