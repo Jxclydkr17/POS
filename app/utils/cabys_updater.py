@@ -85,7 +85,7 @@ def update_cabys(db: Session) -> int:
 
     # Guardar en DB
     logger.info("🧹 Limpiando tabla CABYS...")
-    db.execute(text("TRUNCATE TABLE cabys;"))
+    db.execute(text("DELETE FROM cabys;"))
 
     logger.info("💾 Insertando registros CABYS...")
     insert_data = [{"code": c, "description": d, "iva": i} for (c, d, i) in data]

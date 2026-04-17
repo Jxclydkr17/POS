@@ -353,7 +353,7 @@ def get_system_info(db: Session = Depends(get_db)):
 
     # Conteos
     # ── FASE 5 — Fix 5.5: Whitelist validada, sin f-string en SQL ──
-    _ALLOWED_TABLES = {"products", "customers", "sales", "suppliers", "cabys_items"}
+    _ALLOWED_TABLES = {"products", "customers", "sales", "suppliers", "cabys"}
     table_counts = {}
     for table in _ALLOWED_TABLES:
         try:
