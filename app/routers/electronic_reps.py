@@ -1,6 +1,9 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func
+
+logger = logging.getLogger(__name__)
 
 from app.db.database import get_db
 from app.core.dependencies import get_current_user
@@ -203,8 +206,13 @@ def create_rep_from_payment(
     rep.xml_signed = xml
     rep.status = "XML_READY"
 
-    db.commit()
-    db.refresh(rep)
+    try:
+        db.commit()
+        db.refresh(rep)
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al guardar REP: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al generar REP.")
 
     return success_response(
         message="REP generado correctamente",

@@ -715,29 +715,31 @@ class ChatPanel(QWidget):
 
     def _load_ai_provider_indicator(self):
         """Carga y muestra qué proveedor de IA está activo."""
-        try:
-            r = requests.get(
-                f"{API_URL}/settings/ai-config",
-                headers={"Authorization": f"Bearer {self._get_token()}"},
-                timeout=5,
-            )
-            if r.status_code == 200:
-                data = r.json().get("data", {})
-                provider = data.get("provider", "none")
-                is_enabled = data.get("is_enabled", False)
-                has_key = data.get("has_api_key", False)
+        from ui.utils.http_worker import api_call
+        api_call(
+            "get", f"{API_URL}/settings/ai-config",
+            headers={"Authorization": f"Bearer {self._get_token()}"},
+            on_success=self._on_ai_config_loaded,
+        )
 
-                if provider != "none" and is_enabled and has_key:
-                    icons = {"anthropic": "🟣", "openai": "🟢", "google": "🔵"}
-                    names = {"anthropic": "Claude", "openai": "ChatGPT", "google": "Gemini"}
-                    icon = icons.get(provider, "🤖")
-                    name = names.get(provider, provider)
-                    self._ai_provider_label.setText(f"{icon} {name}")
-                    self._ai_provider_label.setStyleSheet(
-                        f"font-size: 10px; color: {_C['success']}; padding: 0 4px;"
-                    )
-                else:
-                    self._ai_provider_label.setText("")
+    def _on_ai_config_loaded(self, resp):
+        try:
+            data = resp.get("data", {}) if isinstance(resp, dict) else {}
+            provider = data.get("provider", "none")
+            is_enabled = data.get("is_enabled", False)
+            has_key = data.get("has_api_key", False)
+
+            if provider != "none" and is_enabled and has_key:
+                icons = {"anthropic": "🟣", "openai": "🟢", "google": "🔵"}
+                names = {"anthropic": "Claude", "openai": "ChatGPT", "google": "Gemini"}
+                icon = icons.get(provider, "🤖")
+                name = names.get(provider, provider)
+                self._ai_provider_label.setText(f"{icon} {name}")
+                self._ai_provider_label.setStyleSheet(
+                    f"font-size: 10px; color: {_C['success']}; padding: 0 4px;"
+                )
+            else:
+                self._ai_provider_label.setText("")
         except Exception:
             self._ai_provider_label.setText("")
 

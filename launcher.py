@@ -29,7 +29,6 @@ else:
 
 # ── FASE 4 — Fix 4.3: Logging con rotación desde el inicio ──
 # ── FASE 6 — Fix 6.3: Logs consolidados bajo data/logs/ ──
-import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path as _LogPath
 

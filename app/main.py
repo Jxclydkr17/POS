@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime
 import asyncio
-import traceback
 import app.db.models
 
 from app.routers import (
@@ -69,8 +68,10 @@ async def lifespan(app: FastAPI):
     def _do_expire():
         db = SessionLocal()
         try:
-            from datetime import datetime, timezone
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            from app.utils.dt import utcnow as _utcnow
+            # valid_until se almacena como naive UTC (ver proforma_crud._now_naive),
+            # así que la comparación debe ser naive vs naive.
+            now = _utcnow().replace(tzinfo=None)
             count = (
                 db.query(Proforma)
                 .filter(Proforma.status == "VIGENTE", Proforma.valid_until < now)
@@ -279,13 +280,14 @@ def health_check():
 
     db_ok = False
     db_error = None
+    db = SessionLocal()
     try:
-        db = SessionLocal()
         db.execute(text("SELECT 1"))
         db_ok = True
-        db.close()
     except Exception as e:
         db_error = str(e)
+    finally:
+        db.close()
 
     status = "healthy" if db_ok else "degraded"
     result = {

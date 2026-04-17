@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc
@@ -5,6 +7,8 @@ from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import HTTPException
 from app.utils.dt import utcnow
+
+logger = logging.getLogger(__name__)
 
 from app.db.database import get_db
 from app.core.dependencies import get_current_user, require_role
@@ -187,13 +191,22 @@ def toggle_favorite(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = toggle_pos_favorite(db, product_id, is_pos_favorite)
-    message = (
-        "Producto marcado como favorito POS"
-        if is_pos_favorite
-        else "Producto removido de favoritos POS"
-    )
-    return APIResponse(message=message, data=product)
+    try:
+        product = toggle_pos_favorite(db, product_id, is_pos_favorite)
+        db.commit()
+        message = (
+            "Producto marcado como favorito POS"
+            if is_pos_favorite
+            else "Producto removido de favoritos POS"
+        )
+        return APIResponse(message=message, data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al cambiar favorito: {e}")
+        raise HTTPException(status_code=500, detail="Error interno.")
 
 
 # ==========================================================
@@ -284,8 +297,17 @@ def create(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = create_product(db, data)
-    return APIResponse(message="Producto creado correctamente", data=product)
+    try:
+        product = create_product(db, data)
+        db.commit()
+        return APIResponse(message="Producto creado correctamente", data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al crear producto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al crear producto.")
 
 
 # ==========================================================
@@ -298,8 +320,17 @@ def update(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = update_product(db, product_id, data)
-    return APIResponse(message="Producto actualizado correctamente", data=product)
+    try:
+        product = update_product(db, product_id, data)
+        db.commit()
+        return APIResponse(message="Producto actualizado correctamente", data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar producto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al actualizar producto.")
 
 
 # ==========================================================
@@ -311,8 +342,17 @@ def delete(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    delete_product(db, product_id)
-    return APIResponse(message="Producto eliminado correctamente")
+    try:
+        delete_product(db, product_id)
+        db.commit()
+        return APIResponse(message="Producto eliminado correctamente")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al eliminar producto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al eliminar producto.")
 
 
 # ==========================================================
@@ -324,8 +364,17 @@ def deactivate(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = deactivate_product(db, product_id)
-    return APIResponse(message="Producto desactivado correctamente", data=product)
+    try:
+        product = deactivate_product(db, product_id)
+        db.commit()
+        return APIResponse(message="Producto desactivado correctamente", data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al desactivar producto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al desactivar producto.")
 
 
 # ==========================================================
@@ -337,8 +386,17 @@ def reactivate(
     db: Session = Depends(get_db),
     user: dict = Depends(require_role("admin")),
 ):
-    product = reactivate_product(db, product_id)
-    return APIResponse(message="Producto reactivado correctamente", data=product)
+    try:
+        product = reactivate_product(db, product_id)
+        db.commit()
+        return APIResponse(message="Producto reactivado correctamente", data=product)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al reactivar producto: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al reactivar producto.")
 
 
 # ==========================================================

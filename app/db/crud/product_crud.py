@@ -126,6 +126,127 @@ def log_inventory_movement(
 #  FASE 4 — Cálculo inteligente de rotación y predicción de reposición
 # =====================================================================
 
+def _calc_rotation_data_batch(
+    db: Session,
+    product_ids: list[int],
+    lookback_days: int = 90,
+) -> dict[int, dict]:
+    """
+    Calcula datos de rotación para MÚLTIPLES productos en UNA sola query.
+    Retorna: {product_id: {daily_avg, weekly_avg, monthly_avg, total_sold, ...}}
+
+    Optimización Fase 4 — Fix 4.5: Evita el patrón N+1 en get_reorder_suggestions.
+    Antes: 1 query por producto. Ahora: 1 query para todos.
+    """
+    if not product_ids:
+        return {}
+
+    cutoff = utcnow() - timedelta(days=lookback_days)
+    now = utcnow()
+
+    # UNA query con GROUP BY para todos los productos
+    rows = (
+        db.query(
+            SaleDetail.product_id,
+            func.sum(SaleDetail.quantity).label("total_sold"),
+            func.count(func.distinct(func.date(Sale.created_at))).label("days_with_sales"),
+            func.min(Sale.created_at).label("first_sale"),
+        )
+        .join(Sale, Sale.id == SaleDetail.sale_id)
+        .filter(
+            SaleDetail.product_id.in_(product_ids),
+            Sale.created_at >= cutoff,
+        )
+        .group_by(SaleDetail.product_id)
+        .all()
+    )
+
+    # Mapear resultados
+    sales_data = {}
+    for row in rows:
+        sales_data[row.product_id] = {
+            "total_sold": float(row.total_sold or 0),
+            "days_with_sales": int(row.days_with_sales or 0),
+            "first_sale": row.first_sale,
+        }
+
+    return sales_data
+
+
+def _build_rotation_result(
+    sales_info: dict,
+    stock: float,
+    min_stock_val: float,
+    lookback_days: int = 90,
+) -> dict:
+    """
+    Construye el dict de rotación a partir de los datos de ventas agregados.
+    Separado de la query para reutilizar tanto en batch como individual.
+    """
+    total_sold = sales_info.get("total_sold", 0)
+    first_sale = sales_info.get("first_sale")
+
+    if total_sold == 0:
+        return {
+            "daily_avg": 0.0,
+            "weekly_avg": 0.0,
+            "monthly_avg": 0.0,
+            "total_sold": 0,
+            "days_analyzed": lookback_days,
+            "days_until_stockout": None,
+            "smart_reorder": 0,
+            "reorder_urgency": "bajo",
+        }
+
+    now = utcnow()
+    if first_sale:
+        if first_sale.tzinfo is None:
+            from datetime import timezone
+            first_sale = first_sale.replace(tzinfo=timezone.utc)
+        actual_days = max((now - first_sale).days, 1)
+        effective_days = min(actual_days, lookback_days)
+    else:
+        effective_days = lookback_days
+
+    effective_days = max(effective_days, 1)
+
+    daily_avg = total_sold / effective_days
+    weekly_avg = daily_avg * 7
+    monthly_avg = daily_avg * 30
+
+    days_until_stockout = None
+    if daily_avg > 0:
+        days_until_stockout = round(stock / daily_avg, 1)
+
+    coverage_days = 30
+    safety_days = 7
+    projected_need = daily_avg * (coverage_days + safety_days)
+    smart_reorder = max(0, int(projected_need - stock + 0.5))
+
+    classic_reorder = max(0, 2 * min_stock_val - stock)
+    smart_reorder = max(smart_reorder, classic_reorder)
+
+    if days_until_stockout is not None and days_until_stockout <= 3:
+        urgency = "critico"
+    elif days_until_stockout is not None and days_until_stockout <= 7:
+        urgency = "alto"
+    elif stock <= min_stock_val:
+        urgency = "medio"
+    else:
+        urgency = "bajo"
+
+    return {
+        "daily_avg": round(daily_avg, 2),
+        "weekly_avg": round(weekly_avg, 2),
+        "monthly_avg": round(monthly_avg, 2),
+        "total_sold": total_sold,
+        "days_analyzed": effective_days,
+        "days_until_stockout": days_until_stockout,
+        "smart_reorder": smart_reorder,
+        "reorder_urgency": urgency,
+    }
+
+
 def _calc_rotation_data(db: Session, product_id: int, lookback_days: int = 90) -> dict:
     """
     Calcula datos de rotación reales basados en el historial de ventas.
@@ -250,7 +371,7 @@ def create_product(db: Session, data: ProductCreate):
     product = Product(**data.model_dump())
     db.add(product)
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as e:
         db.rollback()
         error_msg = str(e.orig).lower() if e.orig else ""
@@ -291,11 +412,13 @@ def _build_product_query(
         query = query.filter(Product.category_id == category_id)
 
     if search:
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
         query = query.filter(
             or_(
-                Product.name.ilike(f"%{search}%"),
-                Product.code.ilike(f"%{search}%"),
-                Product.barcode.ilike(f"%{search}%")
+                Product.name.ilike(f"%{safe}%"),
+                Product.code.ilike(f"%{safe}%"),
+                Product.barcode.ilike(f"%{safe}%")
             )
         )
 
@@ -372,7 +495,7 @@ def update_product(db: Session, product_id: int, data: ProductUpdate):
         setattr(product, key, value)
 
     try:
-        db.commit()
+        db.flush()
     except IntegrityError as e:
         db.rollback()
         error_msg = str(e.orig).lower() if e.orig else ""
@@ -392,7 +515,7 @@ def update_product(db: Session, product_id: int, data: ProductUpdate):
 def delete_product(db: Session, product_id: int):
     product = _get_product_orm(db, product_id)
     product.is_active = False
-    db.commit()
+    db.flush()
     db.refresh(product)
     return _product_to_dict(product)
 
@@ -403,7 +526,7 @@ def delete_product(db: Session, product_id: int):
 def deactivate_product(db: Session, product_id: int):
     product = _get_product_any_status(db, product_id)
     product.is_active = False
-    db.commit()
+    db.flush()
     db.refresh(product)
     return _product_to_dict(product)
 
@@ -414,7 +537,7 @@ def deactivate_product(db: Session, product_id: int):
 def reactivate_product(db: Session, product_id: int):
     product = _get_product_any_status(db, product_id)
     product.is_active = True
-    db.commit()
+    db.flush()
     db.refresh(product)
     return _product_to_dict(product)
 
@@ -426,7 +549,7 @@ def reactivate_product(db: Session, product_id: int):
 def toggle_pos_favorite(db: Session, product_id: int, is_pos_favorite: bool):
     product = _get_product_any_status(db, product_id)
     product.is_pos_favorite = is_pos_favorite
-    db.commit()
+    db.flush()
     db.refresh(product)
     return _product_to_dict(product)
 
@@ -443,14 +566,12 @@ def add_stock(db: Session, product_id: int, quantity, reference: str = None, not
 
     # FASE 1 — Fix 1.3: Bloqueo pesimista para evitar race condition
     # cuando dos usuarios agregan stock al mismo tiempo.
-    from app.core.config import is_sqlite
+    from app.utils.db_compat import lock_for_update
     query = db.query(Product).filter(
         Product.id == product_id,
         Product.is_active == True
     )
-    if not is_sqlite():
-        query = query.with_for_update()
-    product = query.first()
+    product = lock_for_update(query).first()
 
     if not product:
         raise HTTPException(status_code=404, detail="Producto no encontrado")
@@ -483,7 +604,10 @@ def get_reorder_suggestions(db: Session):
     Retorna productos activos cuyo stock está por debajo del mínimo,
     ordenados por urgencia (mayor déficit primero).
     Cada item incluye: stock_actual, min_stock, reorder_suggestion,
-    supplier_name, costo estimado de reposición, y datos de rotación (Fase 4).
+    supplier_name, costo estimado de reposición, y datos de rotación.
+
+    FASE 4 — Fix 4.5: Usa _calc_rotation_data_batch para evitar N+1 queries.
+    Antes: 1 query individual por producto. Ahora: 1 query batch para todos.
     """
     products = (
         db.query(Product)
@@ -495,12 +619,23 @@ def get_reorder_suggestions(db: Session):
         .all()
     )
 
+    if not products:
+        return []
+
+    # UNA query batch para todos los datos de rotación
+    product_ids = [p.id for p in products]
+    sales_batch = _calc_rotation_data_batch(db, product_ids, lookback_days=90)
+
     result = []
     for p in products:
         d = _product_to_dict(p)
 
-        # ✅ FASE 4: calcular rotación real
-        rotation = _calc_rotation_data(db, p.id, lookback_days=90)
+        stock = float(p.stock) if p.stock is not None else 0.0
+        min_stock_val = float(p.min_stock) if p.min_stock is not None else 3.0
+
+        # Construir rotación desde datos batch (sin query adicional)
+        sales_info = sales_batch.get(p.id, {})
+        rotation = _build_rotation_result(sales_info, stock, min_stock_val)
 
         # Si hay datos de rotación, usar smart_reorder en lugar del clásico
         if rotation["total_sold"] > 0:

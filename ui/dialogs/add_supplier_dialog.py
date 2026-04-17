@@ -1,4 +1,3 @@
-import requests
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QTextEdit, QPushButton, QMessageBox
@@ -7,6 +6,7 @@ from PySide6.QtCore import Qt
 
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call
 
 API_SUPPLIERS = f"{BASE_URL}/suppliers"
 
@@ -128,17 +128,13 @@ class AddSupplierDialog(QDialog):
             "contact_position": contact_position or None,
         }
 
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = requests.post(API_SUPPLIERS, json=data, headers=headers)
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "post", API_SUPPLIERS, json=data, headers=headers,
+            on_success=self._on_supplier_saved,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al crear proveedor:\n{msg}"),
+        )
 
-            if resp.status_code not in (200, 201):
-
-                QMessageBox.warning(self, "Error", f"No se pudo crear el proveedor.\n{resp.text}")
-                return
-
-            QMessageBox.information(self, "Éxito", "Proveedor creado correctamente.")
-            self.accept()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al crear proveedor:\n{e}")
+    def _on_supplier_saved(self, data):
+        QMessageBox.information(self, "Éxito", "Proveedor creado correctamente.")
+        self.accept()

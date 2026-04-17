@@ -5,8 +5,8 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QSpinBox, QDoubleSpinBox,
 )
 from PySide6.QtCore import Qt, QDate
-import requests
 from ui.session_manager import session
+from ui.utils.http_worker import api_call, api_request
 from ui.api import BASE_URL
 
 API_URL_PURCHASES = f"{BASE_URL}/purchases"
@@ -165,50 +165,49 @@ class AddPurchaseDialog(QDialog):
     # 📦 Cargar proveedores
     # ----------------------------------------------------
     def load_suppliers(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.get(API_URL_SUPPLIERS, headers=headers)
-            payload = res.json()
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", API_URL_SUPPLIERS, headers=headers,
+            on_success=self._on_suppliers_loaded,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudieron cargar proveedores:\n{msg}"),
+        )
 
-            if isinstance(payload, dict):
-                suppliers = payload.get("items", payload.get("data", []))
-            else:
-                suppliers = payload
-
-            self.supplier_combo.clear()
-            for s in suppliers:
-                self.supplier_combo.addItem(s["name"], s["id"])
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar proveedores:\n{e}")
+    def _on_suppliers_loaded(self, payload):
+        if isinstance(payload, dict):
+            suppliers = payload.get("items", payload.get("data", []))
+        else:
+            suppliers = payload
+        self.supplier_combo.clear()
+        for s in suppliers:
+            self.supplier_combo.addItem(s["name"], s["id"])
 
     # ----------------------------------------------------
     # 📦 Cargar productos
     # ----------------------------------------------------
     def load_products(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = requests.get(API_URL_PRODUCTS, headers=headers)
-            payload = res.json()
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", API_URL_PRODUCTS, headers=headers,
+            on_success=self._on_products_loaded,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudieron cargar productos:\n{msg}"),
+        )
 
-            if isinstance(payload, dict):
-                self.products_list = payload.get("data", [])
-                # Si data es un dict con "items", extraer items
-                if isinstance(self.products_list, dict):
-                    self.products_list = self.products_list.get("items", [])
-            else:
-                self.products_list = payload
+    def _on_products_loaded(self, payload):
+        if isinstance(payload, dict):
+            self.products_list = payload.get("data", [])
+            if isinstance(self.products_list, dict):
+                self.products_list = self.products_list.get("items", [])
+        else:
+            self.products_list = payload
 
-            self.product_combo.clear()
-            for p in self.products_list:
-                display = f"{p['name']} (Stock: {p.get('stock', 0)})"
-                self.product_combo.addItem(display, p["id"])
+        self.product_combo.clear()
+        for p in self.products_list:
+            display = f"{p['name']} (Stock: {p.get('stock', 0)})"
+            self.product_combo.addItem(display, p["id"])
 
-                # Pre-llenar costo si existe
-            self.product_combo.currentIndexChanged.connect(self._on_product_changed)
-            if self.products_list:
-                self._on_product_changed(0)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar productos:\n{e}")
+        self.product_combo.currentIndexChanged.connect(self._on_product_changed)
+        if self.products_list:
+            self._on_product_changed(0)
 
     def _on_product_changed(self, index):
         if 0 <= index < len(self.products_list):
@@ -317,31 +316,34 @@ class AddPurchaseDialog(QDialog):
 
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
 
-            # 1. Crear factura
-            res = requests.post(API_URL_PURCHASES, json=data, headers=headers)
-
-            if res.status_code != 200:
-                raise Exception(res.text)
-
-            response_data = res.json()
-
-            if isinstance(response_data, dict) and "data" in response_data:
-                purchase_id = response_data["data"]["id"]
-            else:
-                purchase_id = response_data["id"]
-
-            # 2. Subir PDF si corresponde
-            if self.pdf_file_path:
-                with open(self.pdf_file_path, "rb") as f:
-                    files = {"file": f}
-                    requests.post(
-                        f"{API_URL_PURCHASES}/{purchase_id}/upload-pdf",
-                        files=files,
-                        headers=headers
-                    )
-
-            QMessageBox.information(self, "Éxito", "Factura registrada correctamente.")
-            self.accept()
+            # 1. Crear factura (async)
+            api_call(
+                "post", API_URL_PURCHASES, json=data, headers=headers,
+                on_success=lambda resp: self._on_purchase_saved(resp, headers),
+                on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo guardar la factura:\n{msg}"),
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo guardar la factura:\n{e}")
+
+    def _on_purchase_saved(self, response_data, headers):
+        if isinstance(response_data, dict) and "data" in response_data:
+            purchase_id = response_data["data"]["id"]
+        else:
+            purchase_id = response_data.get("id") if isinstance(response_data, dict) else None
+
+        # 2. Subir PDF si corresponde
+        if self.pdf_file_path and purchase_id:
+            try:
+                with open(self.pdf_file_path, "rb") as f:
+                    files = {"file": f}
+                    api_request(
+                        "post",
+                        f"{API_URL_PURCHASES}/{purchase_id}/upload-pdf",
+                        files=files, headers=headers,
+                    )
+            except Exception:
+                pass  # PDF upload is best-effort
+
+        QMessageBox.information(self, "Éxito", "Factura registrada correctamente.")
+        self.accept()

@@ -12,7 +12,6 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
-import requests
 import logging
 import os
 import subprocess
@@ -20,6 +19,7 @@ import subprocess
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.components.toast_notifier import show_toast
+from ui.utils.http_worker import api_call
 
 logger = logging.getLogger(__name__)
 
@@ -257,17 +257,15 @@ class ProformaDetailDialog(QDialog):
     # CARGAR DATOS
     # ══════════════════════════════════════════════════
     def _load_data(self):
-        try:
-            resp = requests.get(
-                f"{API_PROFORMAS}/{self.proforma_id}",
-                headers=self._auth_headers(),
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                QMessageBox.warning(self, "Error", "No se pudo cargar la proforma.")
-                return
+        api_call(
+            "get", f"{API_PROFORMAS}/{self.proforma_id}",
+            headers=self._auth_headers(),
+            on_success=self._on_data_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudo cargar la proforma: {msg}"),
+        )
 
-            data = resp.json()
+    def _on_data_loaded(self, data):
+        try:
             self.proforma_data = data
 
             number = data.get("number", "")
@@ -348,28 +346,12 @@ class ProformaDetailDialog(QDialog):
         Paso 1: Llama al endpoint de pre-validación para revisar
         stock y precios ANTES de comprometerse.
         """
-        try:
-            resp = requests.get(
-                f"{API_PROFORMAS}/{self.proforma_id}/validate-conversion",
-                headers=self._auth_headers(),
-                timeout=10,
-            )
-
-            if resp.status_code != 200:
-                detail = "Error al validar"
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except Exception:
-                    detail = resp.text
-                QMessageBox.warning(self, "Error de validación", str(detail))
-                return
-
-            validation = resp.json()
-            self._show_validation_results(validation)
-
-        except Exception as e:
-            logger.error(f"Error pre-validando conversión: {e}")
-            QMessageBox.critical(self, "Error", f"Error de conexión:\n{e}")
+        api_call(
+            "get", f"{API_PROFORMAS}/{self.proforma_id}/validate-conversion",
+            headers=self._auth_headers(),
+            on_success=self._show_validation_results,
+            on_error=lambda msg: QMessageBox.warning(self, "Error de validación", msg),
+        )
 
     def _show_validation_results(self, validation):
         """
@@ -518,16 +500,16 @@ class ProformaDetailDialog(QDialog):
             payload["credit_days"] = self.spn_credit_days.value()
             payload["condicion_venta_code"] = "02"
 
-        try:
-            resp = requests.post(
-                f"{API_PROFORMAS}/{self.proforma_id}/convert",
-                json=payload,
-                headers=self._auth_headers(),
-                timeout=15,
-            )
+        api_call(
+            "post", f"{API_PROFORMAS}/{self.proforma_id}/convert",
+            json=payload, headers=self._auth_headers(),
+            on_success=self._on_converted,
+            on_error=lambda msg: QMessageBox.warning(self, "Error al convertir", msg),
+        )
 
-            if resp.status_code == 200:
-                data = resp.json()
+    def _on_converted(self, data):
+        try:
+            if True:
                 sale_info = data.get("sale", {})
                 sale_id = sale_info.get("id", "?")
                 msg = data.get("message", "Convertida exitosamente")
@@ -549,35 +531,40 @@ class ProformaDetailDialog(QDialog):
                 self.validation_frame.hide()
                 self._load_data()  # recargar para mostrar estado CONVERTIDA
 
-            else:
-                detail = "Error"
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except Exception:
-                    detail = resp.text
-                QMessageBox.warning(self, "Error al convertir", str(detail))
-
         except Exception as e:
-            logger.error(f"Error convirtiendo proforma: {e}")
-            QMessageBox.critical(self, "Error", f"Error de conexión:\n{e}")
+            logger.error(f"Error procesando conversión: {e}")
 
     # ══════════════════════════════════════════════════
     # PDF / EMAIL
     # ══════════════════════════════════════════════════
     def _download_pdf(self):
+        from ui.utils.http_worker import run_async
+        run_async(
+            self._fetch_pdf_data,
+            on_success=self._on_pdf_downloaded,
+            on_error=lambda msg: show_toast("Error de conexión", success=False, parent=self),
+        )
+
+    def _fetch_pdf_data(self):
+        import requests as _requests
+        resp = _requests.get(
+            f"{API_PROFORMAS}/{self.proforma_id}/pdf",
+            headers=self._auth_headers(),
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            return resp.content
+        return None
+
+    def _on_pdf_downloaded(self, content):
         try:
-            resp = requests.get(
-                f"{API_PROFORMAS}/{self.proforma_id}/pdf",
-                headers=self._auth_headers(),
-                timeout=15,
-            )
-            if resp.status_code == 200:
+            if content:
                 tmp_path = os.path.join(
                     os.path.expanduser("~"),
                     f"proforma_{self.proforma_id}.pdf",
                 )
                 with open(tmp_path, "wb") as f:
-                    f.write(resp.content)
+                    f.write(content)
 
                 if os.name == "nt":
                     os.startfile(tmp_path)
@@ -599,22 +586,9 @@ class ProformaDetailDialog(QDialog):
         )
         if confirm != QMessageBox.Yes:
             return
-        try:
-            resp = requests.post(
-                f"{API_PROFORMAS}/{self.proforma_id}/send-email",
-                headers=self._auth_headers(),
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                show_toast(data.get("message", "Email enviado"), success=True, parent=self)
-            else:
-                detail = "Error"
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except Exception:
-                    detail = resp.text
-                QMessageBox.warning(self, "Error", str(detail))
-        except Exception as e:
-            logger.error(f"Error email: {e}")
-            show_toast("Error de conexión", success=False, parent=self)
+        api_call(
+            "post", f"{API_PROFORMAS}/{self.proforma_id}/send-email",
+            headers=self._auth_headers(),
+            on_success=lambda data: show_toast(data.get("message", "Email enviado") if isinstance(data, dict) else "Email enviado", success=True, parent=self),
+            on_error=lambda msg: QMessageBox.warning(self, "Error", msg),
+        )

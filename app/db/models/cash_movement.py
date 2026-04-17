@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Numeric
 from sqlalchemy.sql import func
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, validates
 
 from app.db.database import Base
 
@@ -37,3 +37,11 @@ class CashMovement(Base):
 
     # relaciones
     cash_session = relationship("CashSession", back_populates="movements")
+
+    @validates("type")
+    def _normalize_type(self, key, value):
+        """Normaliza el tipo a lowercase ('in'/'out') para evitar
+        inconsistencias si alguien inserta 'IN' o 'Out' directamente."""
+        if value is not None:
+            return value.lower()
+        return value

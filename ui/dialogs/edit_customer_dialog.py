@@ -4,8 +4,8 @@ from PySide6.QtWidgets import (
     QTextEdit, QDateEdit, QCheckBox
 )
 from PySide6.QtCore import Qt, QDate
-import requests
 from ui.session_manager import session
+from ui.utils.http_worker import api_call, run_async
 from ui.api import API
 
 VALID_STYLE = "border: 2px solid #28a745; border-radius: 5px; padding: 3px;"   # Verde
@@ -334,21 +334,21 @@ class EditCustomerDialog(QDialog):
         self.save_btn.setEnabled(False)
         self.save_btn.setText("⏳ Guardando...")
 
-        try:
-            url = f"{API['customers']}/{self.customer_data['id']}"
-            response = requests.put(url, json=payload, headers=headers)
+        url = f"{API['customers']}/{self.customer_data['id']}"
+        api_call(
+            "put", url, json=payload, headers=headers,
+            on_success=self._on_customer_updated,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudo actualizar el cliente.\n\n{msg}"),
+            on_finished=self._on_save_finished,
+        )
 
-            if response.status_code == 200:
-                QMessageBox.information(self, "Éxito", "Cliente actualizado correctamente.")
-                self.accept()
-            else:
-                QMessageBox.warning(self, "Error", f"No se pudo actualizar el cliente.\n\n{response.text}")
+    def _on_customer_updated(self, data):
+        QMessageBox.information(self, "Éxito", "Cliente actualizado correctamente.")
+        self.accept()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error de conexión", str(e))
-        finally:
-            self.save_btn.setEnabled(True)
-            self.save_btn.setText("Guardar cambios")
+    def _on_save_finished(self):
+        self.save_btn.setEnabled(True)
+        self.save_btn.setText("Guardar cambios")
 
     def update_id_mask(self, id_type):
         if id_type == "Física":
@@ -384,15 +384,18 @@ class EditCustomerDialog(QDialog):
     # MÉTODOS PARA UBICACIÓN GEOGRÁFICA
     # ------------------------------------------------------
     def load_provinces(self):
-        try:
-            r = requests.get(API["provinces"], headers=_auth_headers(), timeout=10)
-            data = r.json()  # {"1":"San José"...}
-            self.province_combo.clear()
-            self.province_combo.addItem("— Seleccione —", None)
+        api_call(
+            "get", API["provinces"], headers=_auth_headers(),
+            on_success=self._on_provinces_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar las provincias: {msg}"),
+        )
+
+    def _on_provinces_loaded(self, data):
+        self.province_combo.clear()
+        self.province_combo.addItem("— Seleccione —", None)
+        if isinstance(data, dict):
             for pid, name in data.items():
                 self.province_combo.addItem(name, pid)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar las provincias: {str(e)}")
 
     def on_province_changed(self):
         pid = self.province_combo.currentData()
@@ -402,13 +405,16 @@ class EditCustomerDialog(QDialog):
         self.district_combo.addItem("— Seleccione —", None)
         if not pid:
             return
-        try:
-            r = requests.get(API["cantons"](pid), headers=_auth_headers(), timeout=10)
-            data = r.json()
+        api_call(
+            "get", API["cantons"](pid), headers=_auth_headers(),
+            on_success=self._on_cantons_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar los cantones: {msg}"),
+        )
+
+    def _on_cantons_loaded(self, data):
+        if isinstance(data, dict):
             for cid, name in data.items():
                 self.canton_combo.addItem(name, cid)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar los cantones: {str(e)}")
 
     def on_canton_changed(self):
         pid = self.province_combo.currentData()
@@ -417,17 +423,52 @@ class EditCustomerDialog(QDialog):
         self.district_combo.addItem("— Seleccione —", None)
         if not pid or not cid:
             return
-        try:
-            r = requests.get(API["districts"](pid, cid), headers=_auth_headers(), timeout=10)
-            data = r.json()
+        api_call(
+            "get", API["districts"](pid, cid), headers=_auth_headers(),
+            on_success=self._on_districts_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar los distritos: {msg}"),
+        )
+
+    def _on_districts_loaded(self, data):
+        if isinstance(data, dict):
             for did, name in data.items():
                 self.district_combo.addItem(name, did)
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar los distritos: {str(e)}")
 
     def _load_saved_location(self):
-        """Cargar la ubicación guardada del cliente"""
-        # Bloquear señales temporalmente para evitar recargas innecesarias
+        """Cargar la ubicación guardada del cliente usando run_async."""
+        import requests as _requests
+        run_async(
+            self._fetch_saved_location_data,
+            on_success=self._apply_saved_location,
+        )
+
+    def _fetch_saved_location_data(self):
+        """Ejecuta en background — NO tocar widgets Qt aquí."""
+        import requests as _requests
+        result = {"cantons": {}, "districts": {}}
+        province_id = self.customer_data.get("province_id")
+        canton_id = self.customer_data.get("canton_id")
+
+        if province_id:
+            try:
+                r = _requests.get(API["cantons"](province_id), headers=_auth_headers(), timeout=10)
+                if r.status_code == 200:
+                    result["cantons"] = r.json()
+            except Exception:
+                pass
+
+            if canton_id:
+                try:
+                    r = _requests.get(API["districts"](province_id, canton_id), headers=_auth_headers(), timeout=10)
+                    if r.status_code == 200:
+                        result["districts"] = r.json()
+                except Exception:
+                    pass
+
+        return result
+
+    def _apply_saved_location(self, result):
+        """Aplica los datos de ubicación en el hilo principal."""
         self.province_combo.blockSignals(True)
         self.canton_combo.blockSignals(True)
         self.district_combo.blockSignals(True)
@@ -440,49 +481,36 @@ class EditCustomerDialog(QDialog):
             idx = self.province_combo.findData(province_id)
             if idx >= 0:
                 self.province_combo.setCurrentIndex(idx)
-                # Cargar cantones
-                self._load_cantons_for_province(province_id)
-                
+
+            # Poblar cantones
+            cantons = result.get("cantons", {})
+            if cantons:
+                self.canton_combo.clear()
+                self.canton_combo.addItem("— Seleccione —", None)
+                for cid, name in cantons.items():
+                    self.canton_combo.addItem(name, cid)
+
                 if canton_id:
                     idx = self.canton_combo.findData(canton_id)
                     if idx >= 0:
                         self.canton_combo.setCurrentIndex(idx)
-                        # Cargar distritos
-                        self._load_districts_for_canton(province_id, canton_id)
-                        
-                        if district_id:
-                            idx = self.district_combo.findData(district_id)
-                            if idx >= 0:
-                                self.district_combo.setCurrentIndex(idx)
 
-        # Reactivar señales
+            # Poblar distritos
+            districts = result.get("districts", {})
+            if districts:
+                self.district_combo.clear()
+                self.district_combo.addItem("— Seleccione —", None)
+                for did, name in districts.items():
+                    self.district_combo.addItem(name, did)
+
+                if district_id:
+                    idx = self.district_combo.findData(district_id)
+                    if idx >= 0:
+                        self.district_combo.setCurrentIndex(idx)
+
         self.province_combo.blockSignals(False)
         self.canton_combo.blockSignals(False)
         self.district_combo.blockSignals(False)
-
-    def _load_cantons_for_province(self, province_id):
-        """Helper para cargar cantones sin señales"""
-        try:
-            r = requests.get(API["cantons"](province_id), headers=_auth_headers(), timeout=10)
-            data = r.json()
-            self.canton_combo.clear()
-            self.canton_combo.addItem("— Seleccione —", None)
-            for cid, name in data.items():
-                self.canton_combo.addItem(name, cid)
-        except Exception:
-            pass
-
-    def _load_districts_for_canton(self, province_id, canton_id):
-        """Helper para cargar distritos sin señales"""
-        try:
-            r = requests.get(API["districts"](province_id, canton_id), headers=_auth_headers(), timeout=10)
-            data = r.json()
-            self.district_combo.clear()
-            self.district_combo.addItem("— Seleccione —", None)
-            for did, name in data.items():
-                self.district_combo.addItem(name, did)
-        except Exception:
-            pass
 
     # ------------------------------------------------------
     # MÉTODOS PARA ACTIVIDADES ECONÓMICAS
@@ -492,17 +520,18 @@ class EditCustomerDialog(QDialog):
         if len(q) < 2:
             self.activity_results_combo.clear()
             return
-        try:
-            url = API["economic_activity_search"](q)
-            r = requests.get(url, headers=_auth_headers(), timeout=10)
-            results = r.json()  # [{"code":"...","description":"..."}]
-            self.activity_results_combo.clear()
+        url = API["economic_activity_search"](q)
+        api_call(
+            "get", url, headers=_auth_headers(),
+            on_success=self._on_activities_found,
+        )
+
+    def _on_activities_found(self, results):
+        self.activity_results_combo.clear()
+        if isinstance(results, list):
             for it in results:
                 label = f'{it["code"]} - {it["description"][:60]}'
                 self.activity_results_combo.addItem(label, it["code"])
-        except Exception as e:
-            # Silenciosamente ignorar errores de búsqueda
-            pass
 
     def add_selected_activity(self):
         code = self.activity_results_combo.currentData()
@@ -595,17 +624,6 @@ class EditCustomerDialog(QDialog):
                 self.activities_list.addItem(label)
                 continue
 
-            # si no viene descripción, buscarla por API (como ya hacías)
-            try:
-                url = API["economic_activity_search"](code)
-                r = requests.get(url, headers=_auth_headers(), timeout=5)
-                results = r.json() if r.status_code == 200 else []
-                for it in results:
-                    if it.get("code") == code:
-                        label = f'{it["code"]} - {it["description"][:60]}'
-                        self.activities_list.addItem(label)
-                        break
-                else:
-                    self.activities_list.addItem(code)
-            except Exception:
-                self.activities_list.addItem(code)
+            # si no viene descripción, agregar solo el código
+            # (la descripción se buscará al editar)
+            self.activities_list.addItem(code)

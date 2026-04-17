@@ -4,7 +4,6 @@ import os
 import subprocess
 from datetime import datetime
 
-import requests
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +21,8 @@ from PySide6.QtWidgets import (
 
 from app.utils.print_ticket import print_pdf
 from ui.api import BASE_URL
+from ui.session_manager import session
+from ui.utils.http_worker import api_call, api_request
 
 
 API_URL = BASE_URL
@@ -352,7 +353,8 @@ class DaySalesDialog(QDialog):
                 "end_date": today,
             }
 
-            response = requests.get(f"{API_URL}/reports/sales/history", params=params, timeout=10)
+            from ui.utils.http_worker import api_request
+            response = api_request("get", f"{API_URL}/reports/sales/history", params=params)
             response.raise_for_status()
 
             payload = response.json()
@@ -405,7 +407,7 @@ class DaySalesDialog(QDialog):
             sale_id = int(item.text())
             self.current_sale_id = sale_id
 
-            response = requests.get(f"{API_URL}/reports/sales/{sale_id}", timeout=10)
+            response = api_request("get", f"{API_URL}/reports/sales/{sale_id}")
             response.raise_for_status()
 
             data = response.json()
@@ -469,7 +471,8 @@ class DaySalesDialog(QDialog):
                     return
 
                 try:
-                    resp = requests.post(
+                    resp = api_request(
+                        "post",
                         f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
                         timeout=15,
                     )
@@ -512,7 +515,8 @@ class DaySalesDialog(QDialog):
                     return
 
                 try:
-                    resp = requests.post(
+                    resp = api_request(
+                        "post",
                         f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
                         timeout=15,
                     )

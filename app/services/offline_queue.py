@@ -86,7 +86,7 @@ def enqueue_for_retry(db: Session, einvoice_id: int, error: str = "") -> None:
 
     einv.status = "QUEUED"
     einv.last_error = f"En cola offline: {error}"[:500]
-    db.commit()
+    db.flush()
 
     logger.info(f"Cola offline: einvoice {einvoice_id} encolado | error={error[:100]}")
 

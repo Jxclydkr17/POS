@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 from datetime import date, timedelta
@@ -45,6 +46,8 @@ from app.db.crud.purchase import (
     add_credit_note,
     get_credit_notes,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/purchases",
@@ -392,10 +395,15 @@ def list_purchases(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    items, total = get_purchases(
-        db=db, status_filter=status_filter, supplier_id=supplier_id,
-        search=search, skip=skip, limit=limit,
-    )
+    try:
+        items, total = get_purchases(
+            db=db, status_filter=status_filter, supplier_id=supplier_id,
+            search=search, skip=skip, limit=limit,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return APIResponse(
         message="Compras cargadas correctamente",
         data={"items": items, "total": total, "skip": skip, "limit": limit},
@@ -424,8 +432,17 @@ def create(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = create_purchase(db, payload)
-    return APIResponse(message="Compra registrada correctamente", data=purchase)
+    try:
+        purchase = create_purchase(db, payload)
+        db.commit()
+        return APIResponse(message="Compra registrada correctamente", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al crear compra: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar compra.")
 
 
 # ------------------------------------------------------------
@@ -438,8 +455,17 @@ def update(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = update_purchase(db, purchase_id, payload)
-    return APIResponse(message="Compra actualizada correctamente", data=purchase)
+    try:
+        purchase = update_purchase(db, purchase_id, payload)
+        db.commit()
+        return APIResponse(message="Compra actualizada correctamente", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar compra: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al actualizar compra.")
 
 
 # ------------------------------------------------------------
@@ -451,8 +477,17 @@ def receive(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = receive_purchase(db, purchase_id)
-    return APIResponse(message="Mercadería recibida correctamente", data=purchase)
+    try:
+        purchase = receive_purchase(db, purchase_id)
+        db.commit()
+        return APIResponse(message="Mercadería recibida correctamente", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al recibir mercadería: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al recibir mercadería.")
 
 
 # ------------------------------------------------------------
@@ -465,8 +500,17 @@ def register_payment(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = add_payment(db, purchase_id, payload)
-    return APIResponse(message="Abono registrado correctamente", data=purchase)
+    try:
+        purchase = add_payment(db, purchase_id, payload)
+        db.commit()
+        return APIResponse(message="Abono registrado correctamente", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al registrar abono: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar abono.")
 
 
 # ------------------------------------------------------------
@@ -492,8 +536,17 @@ def register_credit_note(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = add_credit_note(db, purchase_id, payload)
-    return APIResponse(message="Nota de crédito registrada correctamente", data=purchase)
+    try:
+        purchase = add_credit_note(db, purchase_id, payload)
+        db.commit()
+        return APIResponse(message="Nota de crédito registrada correctamente", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al registrar nota de crédito: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al registrar nota de crédito.")
 
 
 # ------------------------------------------------------------
@@ -519,8 +572,17 @@ def pay_purchase(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    purchase = mark_as_paid(db, purchase_id, payment_method=payload.payment_method)
-    return APIResponse(message="Compra marcada como pagada", data=purchase)
+    try:
+        purchase = mark_as_paid(db, purchase_id, payment_method=payload.payment_method)
+        db.commit()
+        return APIResponse(message="Compra marcada como pagada", data=purchase)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al marcar compra como pagada: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al marcar como pagada.")
 
 
 # ------------------------------------------------------------
@@ -545,8 +607,12 @@ async def upload_purchase_pdf(
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
     purchase.pdf_path = dest_path
-    db.commit()
-    db.refresh(purchase)
+    try:
+        db.commit()
+        db.refresh(purchase)
+    except Exception:
+        db.rollback()
+        raise
     return APIResponse(message="PDF subido correctamente", data=purchase)
 
 
@@ -559,5 +625,14 @@ def delete(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user),
 ):
-    delete_purchase(db, purchase_id)
-    return APIResponse(message="Compra eliminada correctamente")
+    try:
+        delete_purchase(db, purchase_id)
+        db.commit()
+        return APIResponse(message="Compra eliminada correctamente")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al eliminar compra: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al eliminar compra.")

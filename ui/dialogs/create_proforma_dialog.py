@@ -13,13 +13,13 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, QStringListModel
 from PySide6.QtGui import QDoubleValidator
-import requests
 import logging
 from decimal import Decimal
 
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.components.toast_notifier import show_toast
+from ui.utils.http_worker import api_call
 
 logger = logging.getLogger(__name__)
 
@@ -222,25 +222,25 @@ class CreateProformaDialog(QDialog):
     # CLIENTES
     # ══════════════════════════════════════════════════
     def _load_customers(self):
-        try:
-            resp = requests.get(API_CUSTOMERS, headers=self._auth_headers(), timeout=8)
-            if resp.status_code == 200:
-                data = resp.json()
-                # El endpoint puede retornar lista directa o dict con "data"
-                customers = data if isinstance(data, list) else data.get("data", [])
-                self.customers = customers
-                self.customer_name_to_id = {}
-                names = []
-                for c in customers:
-                    name = c.get("name", "")
-                    cid = c.get("id")
-                    if name and cid:
-                        self.customer_name_to_id[name] = cid
-                        names.append(name)
-                model = QStringListModel(names)
-                self._customer_completer.setModel(model)
-        except Exception as e:
-            logger.error(f"Error cargando clientes: {e}")
+        api_call(
+            "get", API_CUSTOMERS, headers=self._auth_headers(),
+            on_success=self._on_customers_loaded,
+            on_error=lambda msg: logger.error(f"Error cargando clientes: {msg}"),
+        )
+
+    def _on_customers_loaded(self, data):
+        customers = data if isinstance(data, list) else data.get("data", [])
+        self.customers = customers
+        self.customer_name_to_id = {}
+        names = []
+        for c in customers:
+            name = c.get("name", "")
+            cid = c.get("id")
+            if name and cid:
+                self.customer_name_to_id[name] = cid
+                names.append(name)
+        model = QStringListModel(names)
+        self._customer_completer.setModel(model)
 
     def _on_customer_text_changed(self):
         text = self.txt_customer.text().strip()
@@ -254,37 +254,32 @@ class CreateProformaDialog(QDialog):
         if len(term) < 2:
             self.search_results.hide()
             return
-        try:
-            resp = requests.get(
-                API_PRODUCTS,
-                headers=self._auth_headers(),
-                params={"search": term, "page_size": 10},
-                timeout=8,
-            )
-            if resp.status_code != 200:
-                return
+        api_call(
+            "get", API_PRODUCTS,
+            headers=self._auth_headers(),
+            params={"search": term, "page_size": 10},
+            on_success=self._on_products_searched,
+            on_error=lambda msg: logger.error(f"Error buscando productos: {msg}"),
+        )
 
-            data = resp.json()
-            products = data if isinstance(data, list) else data.get("data", data.get("products", []))
+    def _on_products_searched(self, data):
+        products = data if isinstance(data, list) else data.get("data", data.get("products", []))
 
-            self.search_results.setRowCount(len(products))
-            for row, p in enumerate(products):
-                self.search_results.setItem(row, 0, QTableWidgetItem(p.get("code", "")))
-                self.search_results.setItem(row, 1, QTableWidgetItem(p.get("name", "")))
-                self.search_results.setItem(row, 2, QTableWidgetItem(f"₡{float(p.get('price', 0)):,.2f}"))
-                self.search_results.setItem(row, 3, QTableWidgetItem(str(p.get("stock", 0))))
+        self.search_results.setRowCount(len(products))
+        for row, p in enumerate(products):
+            self.search_results.setItem(row, 0, QTableWidgetItem(p.get("code", "")))
+            self.search_results.setItem(row, 1, QTableWidgetItem(p.get("name", "")))
+            self.search_results.setItem(row, 2, QTableWidgetItem(f"₡{float(p.get('price', 0)):,.2f}"))
+            self.search_results.setItem(row, 3, QTableWidgetItem(str(p.get("stock", 0))))
 
-                btn = QPushButton("➕")
-                btn.setFixedSize(40, 26)
-                btn.setStyleSheet("QPushButton{background:#16a34a;color:white;border-radius:4px;}"
-                                  "QPushButton:hover{background:#15803d;}")
-                btn.clicked.connect(lambda _, product=p: self._add_product_to_cart(product))
-                self.search_results.setCellWidget(row, 4, btn)
+            btn = QPushButton("➕")
+            btn.setFixedSize(40, 26)
+            btn.setStyleSheet("QPushButton{background:#16a34a;color:white;border-radius:4px;}"
+                              "QPushButton:hover{background:#15803d;}")
+            btn.clicked.connect(lambda _, product=p: self._add_product_to_cart(product))
+            self.search_results.setCellWidget(row, 4, btn)
 
-            self.search_results.setVisible(len(products) > 0)
-
-        except Exception as e:
-            logger.error(f"Error buscando productos: {e}")
+        self.search_results.setVisible(len(products) > 0)
 
     def _add_product_to_cart(self, product):
         pid = product.get("id")
@@ -420,17 +415,15 @@ class CreateProformaDialog(QDialog):
     # CARGAR DATOS (modo edición)
     # ══════════════════════════════════════════════════
     def _load_proforma_data(self):
-        try:
-            resp = requests.get(
-                f"{API_PROFORMAS}/{self.proforma_id}",
-                headers=self._auth_headers(),
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                QMessageBox.warning(self, "Error", "No se pudo cargar la proforma.")
-                return
+        api_call(
+            "get", f"{API_PROFORMAS}/{self.proforma_id}",
+            headers=self._auth_headers(),
+            on_success=self._on_proforma_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudo cargar la proforma: {msg}"),
+        )
 
-            data = resp.json()
+    def _on_proforma_loaded(self, data):
+        try:
 
             # Cliente
             cname = data.get("customer_name", "")
@@ -515,34 +508,15 @@ class CreateProformaDialog(QDialog):
             "validity_days": self.spn_validity.value(),
         }
 
-        try:
-            if self.is_edit:
-                resp = requests.put(
-                    f"{API_PROFORMAS}/{self.proforma_id}",
-                    json=payload,
-                    headers=self._auth_headers(),
-                    timeout=10,
-                )
-            else:
-                resp = requests.post(
-                    f"{API_PROFORMAS}/",
-                    json=payload,
-                    headers=self._auth_headers(),
-                    timeout=10,
-                )
+        method = "put" if self.is_edit else "post"
+        url = f"{API_PROFORMAS}/{self.proforma_id}" if self.is_edit else f"{API_PROFORMAS}/"
+        api_call(
+            method, url, json=payload, headers=self._auth_headers(),
+            on_success=self._on_proforma_saved,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", msg),
+        )
 
-            if resp.status_code == 200:
-                msg = resp.json().get("message", "Proforma guardada")
-                show_toast(f"✅ {msg}", success=True, parent=self.parent())
-                self.accept()
-            else:
-                detail = "Error"
-                try:
-                    detail = resp.json().get("detail", resp.text)
-                except Exception:
-                    detail = resp.text
-                QMessageBox.warning(self, "Error", str(detail))
-
-        except Exception as e:
-            logger.error(f"Error guardando proforma: {e}")
-            QMessageBox.critical(self, "Error", f"Error de conexión:\n{e}")
+    def _on_proforma_saved(self, resp):
+        msg = resp.get("message", "Proforma guardada") if isinstance(resp, dict) else "Proforma guardada"
+        show_toast(f"✅ {msg}", success=True, parent=self.parent())
+        self.accept()

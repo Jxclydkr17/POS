@@ -2,8 +2,8 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QLineEdit,
     QPushButton, QMessageBox, QHBoxLayout, QTextEdit,
 )
-import requests
 from ui.session_manager import session
+from ui.utils.http_worker import api_call
 from ui.dialogs.icon_picker_dialog import IconPickerDialog
 from ui.api import BASE_URL
 
@@ -72,16 +72,9 @@ class AddCategoryDialog(QDialog):
         if desc:
             payload["description"] = desc
 
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            r = requests.post(API_URL, json=payload, headers=headers)
-
-            if r.status_code != 200:
-                msg = r.json().get("message", "Error desconocido")
-                QMessageBox.critical(self, "Error", msg)
-                return
-
-            self.accept()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "post", API_URL, json=payload, headers=headers,
+            on_success=lambda data: self.accept(),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )

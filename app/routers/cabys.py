@@ -21,12 +21,14 @@ def search_cabys(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
+    from app.utils.db_compat import escape_like
+    safe = escape_like(q)
     results = (
         db.query(Cabys)
         .filter(
             or_(
-                Cabys.description.ilike(f"%{q}%"),
-                Cabys.code.ilike(f"%{q}%")
+                Cabys.description.ilike(f"%{safe}%"),
+                Cabys.code.ilike(f"%{safe}%")
             )
         )
         .limit(20)

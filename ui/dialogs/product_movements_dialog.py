@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QColor, QFont
-import requests
 from ui.session_manager import session
+from ui.utils.http_worker import api_call
 from ui.api import BASE_URL
 
 API_BASE = f"{BASE_URL}/products"
@@ -208,19 +208,21 @@ class ProductMovementsDialog(QDialog):
     # ── Carga de datos ────────────────────────────────────────
 
     def _load_movements(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(
-                f"{API_BASE}/{self.product_id}/movements?limit=500",
-                headers=headers,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            body = resp.json()
-            self._all_movements = body.get("data", [])
-        except Exception as e:
-            self._all_movements = []
+        headers = {"Authorization": f"Bearer {session.token}"}
+        api_call(
+            "get", f"{API_BASE}/{self.product_id}/movements?limit=500",
+            headers=headers,
+            on_success=self._on_movements_loaded,
+            on_error=self._on_movements_error,
+        )
 
+    def _on_movements_loaded(self, body):
+        self._all_movements = body.get("data", []) if isinstance(body, dict) else []
+        self._compute_stats()
+        self._apply_filter("todos")
+
+    def _on_movements_error(self, msg):
+        self._all_movements = []
         self._compute_stats()
         self._apply_filter("todos")
 

@@ -11,7 +11,7 @@ class Product(Base):
 
     # 🔢 Datos principales
     code = Column(String(50), unique=True, nullable=False, index=True)
-    barcode = Column(String(100), nullable=True, index=True)  
+    barcode = Column(String(100), nullable=True, unique=True, index=True)  
     name = Column(String(150), nullable=False)
     description = Column(String(500), nullable=True)
 

@@ -218,7 +218,7 @@ def get_purchases(
         synchronize_session=False,
     )
 
-    db.commit()
+    db.flush()
 
     q = db.query(Purchase).options(
         subqueryload(Purchase.details),
@@ -298,7 +298,7 @@ def create_purchase(db: Session, data: PurchaseCreate) -> Purchase:
     db.flush()  # asegurar que details estén en session
     _sync_supplier_products(db, purchase)
 
-    db.commit()
+    db.flush()
     db.refresh(purchase)
     return purchase
 
@@ -356,7 +356,7 @@ def update_purchase(
         db.flush()
         _sync_supplier_products(db, purchase)
 
-    db.commit()
+    db.flush()
     db.refresh(purchase)
     return purchase
 
@@ -426,7 +426,7 @@ def receive_purchase(db: Session, purchase_id: int) -> Purchase:
     else:
         purchase.status = PurchaseStatus.recibido
 
-    db.commit()
+    db.flush()
     db.refresh(purchase)
     return purchase
 
@@ -507,7 +507,7 @@ def add_payment(
     # Sincronizar estado de pago
     _sync_payment_status(purchase)
 
-    db.commit()
+    db.flush()
     db.refresh(purchase)
     return purchase
 
@@ -589,7 +589,7 @@ def add_credit_note(
     db.refresh(purchase)
     _sync_payment_status(purchase)
 
-    db.commit()
+    db.flush()
     db.refresh(purchase)
     return purchase
 
@@ -622,7 +622,7 @@ def mark_as_paid(
         # Ya saldada por abonos/NC
         purchase.status = PurchaseStatus.pagado
         purchase.paid_at = today_cr()
-        db.commit()
+        db.flush()
         db.refresh(purchase)
         return purchase
 
@@ -643,4 +643,4 @@ def mark_as_paid(
 def delete_purchase(db: Session, purchase_id: int) -> None:
     purchase = get_purchase(db, purchase_id)
     db.delete(purchase)
-    db.commit()
+    db.flush()

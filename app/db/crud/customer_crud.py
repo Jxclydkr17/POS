@@ -50,7 +50,7 @@ def create_customer(db: Session, data: CustomerCreate):
         new_customer.economic_activities = acts
 
     db.add(new_customer)
-    db.commit()
+    db.flush()
     db.refresh(new_customer)
 
     return new_customer
@@ -69,12 +69,14 @@ def get_customers(
     query = db.query(Customer).filter(Customer.is_active == True)
 
     if search:
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
         query = query.filter(
             or_(
-                Customer.name.ilike(f"%{search}%"),
-                Customer.email.ilike(f"%{search}%"),
-                Customer.phone.ilike(f"%{search}%"),
-                Customer.id_number.ilike(f"%{search}%")
+                Customer.name.ilike(f"%{safe}%"),
+                Customer.email.ilike(f"%{safe}%"),
+                Customer.phone.ilike(f"%{safe}%"),
+                Customer.id_number.ilike(f"%{safe}%")
             )
         )
 
@@ -170,7 +172,7 @@ def update_customer(db: Session, customer_id: int, data: CustomerUpdate):
             )
         customer.economic_activities = acts  # reemplaza lista completa
 
-    db.commit()
+    db.flush()
     db.refresh(customer)
 
     return customer
@@ -180,7 +182,7 @@ def update_customer(db: Session, customer_id: int, data: CustomerUpdate):
 def delete_customer(db: Session, customer_id: int):
     customer = get_customer(db, customer_id)
     customer.is_active = False
-    db.commit()
+    db.flush()
     return {"detail": "Cliente desactivado correctamente."}
 
 
@@ -192,6 +194,6 @@ def reactivate_customer(db: Session, customer_id: int):
     if customer.is_active:
         raise HTTPException(status_code=400, detail="El cliente ya está activo.")
     customer.is_active = True
-    db.commit()
+    db.flush()
     db.refresh(customer)
     return customer

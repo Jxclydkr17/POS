@@ -591,7 +591,9 @@ def list_sales_paginated(
     join_needed = False
 
     if search:
-        base_filter.append(Customer.name.ilike(f"%{search}%"))
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
+        base_filter.append(Customer.name.ilike(f"%{safe}%"))
         join_needed = True
 
     offset = (page - 1) * page_size

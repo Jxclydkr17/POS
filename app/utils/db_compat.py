@@ -72,3 +72,52 @@ def sql_month(col):
     if is_sqlite():
         return cast(func.strftime('%m', col), Integer)
     return func.month(col)
+
+
+# ------------------------------------------------------------------
+# LOCK FOR UPDATE  (bloqueo pesimista portable)
+# ------------------------------------------------------------------
+def lock_for_update(query):
+    """
+    Aplica WITH FOR UPDATE solo si el motor lo soporta (MySQL).
+    SQLite no soporta bloqueos pesimistas — retorna la query sin cambios.
+
+    Uso:
+        from app.utils.db_compat import lock_for_update
+
+        product = lock_for_update(
+            db.query(Product).filter(Product.id == pid)
+        ).first()
+    """
+    if is_sqlite():
+        return query
+    return query.with_for_update()
+
+
+# ------------------------------------------------------------------
+# ESCAPE LIKE  (sanitizar wildcards en búsquedas)
+# ------------------------------------------------------------------
+def escape_like(value: str) -> str:
+    """
+    Escapa los caracteres comodín de SQL LIKE en el input del usuario.
+
+    Sin esto, si alguien busca '%' o '_', SQLAlchemy los interpreta
+    como wildcards y retorna resultados inesperados.
+    No es SQL injection (SQLAlchemy parametriza), pero sí
+    comportamiento inesperado.
+
+    Uso:
+        from app.utils.db_compat import escape_like
+
+        # En vez de  Product.name.ilike(f"%{search}%")
+        safe = escape_like(search)
+        Product.name.ilike(f"%{safe}%")
+    """
+    if not value:
+        return value
+    return (
+        value
+        .replace("\\", "\\\\")  # escape backslash primero
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )

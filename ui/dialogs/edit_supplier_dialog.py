@@ -1,4 +1,3 @@
-import requests
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QTextEdit, QPushButton, QMessageBox
@@ -7,6 +6,7 @@ from PySide6.QtCore import Qt
 
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call
 
 API_SUPPLIERS = f"{BASE_URL}/suppliers"
 
@@ -121,19 +121,14 @@ class EditSupplierDialog(QDialog):
             "contact_position": contact_position or None,
         }
 
-        try:
-            url = f"{API_SUPPLIERS}/{self.supplier['id']}"
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        url = f"{API_SUPPLIERS}/{self.supplier['id']}"
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "put", url, json=data, headers=headers,
+            on_success=self._on_supplier_updated,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al actualizar proveedor:\n{msg}"),
+        )
 
-            resp = requests.put(url, json=data, headers=headers)
-
-            if resp.status_code not in (200, 201):
-
-                QMessageBox.warning(self, "Error", f"No se pudo actualizar el proveedor.\n{resp.text}")
-                return
-
-            QMessageBox.information(self, "Éxito", "Proveedor actualizado correctamente.")
-            self.accept()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al actualizar proveedor:\n{e}")
+    def _on_supplier_updated(self, data):
+        QMessageBox.information(self, "Éxito", "Proveedor actualizado correctamente.")
+        self.accept()

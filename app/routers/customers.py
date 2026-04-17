@@ -1,5 +1,6 @@
 # app/routers/customers.py
 
+import logging
 from fastapi import APIRouter, Depends, UploadFile, File
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
@@ -29,6 +30,8 @@ from app.db.models.sale_detail import SaleDetail
 from app.db.models.credit import Credit
 from app.db.models.credit_sale import CreditSale
 from app.utils.responses import success_response, error_response
+
+logger = logging.getLogger(__name__)
 
 
 router = APIRouter(prefix="/customers", tags=["Customers"])
@@ -87,8 +90,17 @@ def create(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    customer = create_customer(db, data)
-    return APIResponse(message="Cliente creado correctamente", data=customer)
+    try:
+        customer = create_customer(db, data)
+        db.commit()
+        return APIResponse(message="Cliente creado correctamente", data=customer)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al crear cliente: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al crear cliente.")
 
 
 # ----------------------------------------------------------
@@ -101,8 +113,17 @@ def update(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    customer = update_customer(db, customer_id, data)
-    return APIResponse(message="Cliente actualizado", data=customer)
+    try:
+        customer = update_customer(db, customer_id, data)
+        db.commit()
+        return APIResponse(message="Cliente actualizado", data=customer)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar cliente: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al actualizar cliente.")
 
 
 # ----------------------------------------------------------
@@ -161,11 +182,20 @@ def reactivate(
     db: Session = Depends(get_db),
     user: dict = Depends(get_current_user)
 ):
-    customer = reactivate_customer(db, customer_id)
-    customer.economic_activity_codes = [
-        a.code for a in (getattr(customer, "economic_activities", []) or [])
-    ]
-    return APIResponse(message="Cliente reactivado correctamente", data=customer)
+    try:
+        customer = reactivate_customer(db, customer_id)
+        db.commit()
+        customer.economic_activity_codes = [
+            a.code for a in (getattr(customer, "economic_activities", []) or [])
+        ]
+        return APIResponse(message="Cliente reactivado correctamente", data=customer)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al reactivar cliente: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al reactivar cliente.")
 
 
 # ----------------------------------------------------------

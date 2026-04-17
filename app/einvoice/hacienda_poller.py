@@ -109,6 +109,10 @@ def _poll_sent_invoices():
 
     except Exception as e:
         logger.error(f"Poller: error general: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -226,6 +230,10 @@ def _retry_failed_sends():
 
     except Exception as e:
         logger.error(f"Retry: error general: {e}")
+        try:
+            db.rollback()
+        except Exception:
+            pass
     finally:
         db.close()
 

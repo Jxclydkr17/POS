@@ -4,8 +4,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-import requests
 from ui.session_manager import session
+from ui.utils.http_worker import api_call
 
 from ui.api import BASE_URL
 
@@ -274,33 +274,23 @@ class AddStockDialog(QDialog):
             return
 
         headers = {"Authorization": f"Bearer {session.token}"}
+        api_call(
+            "get", f"{API_URL}/barcode/{barcode}", headers=headers,
+            on_success=self._on_product_found,
+            on_error=self._on_product_search_error,
+        )
 
-        try:
-            resp = requests.get(
-                f"{API_URL}/barcode/{barcode}",
-                headers=headers,
-                timeout=5,
-            )
-        except requests.RequestException as e:
-            QMessageBox.critical(self, "Error de conexión", str(e))
-            return
-
-        if resp.status_code != 200:
-            QMessageBox.warning(self, "No encontrado", "Producto no encontrado")
-            self.suggestion_panel.clear()
-            self.apply_suggestion_btn.setEnabled(False)
-            return
-
-        try:
-            product = resp.json()["data"]
-        except Exception:
-            QMessageBox.critical(self, "Error", "Respuesta inválida del servidor.")
-            return
-
+    def _on_product_found(self, payload):
+        product = payload.get("data", payload) if isinstance(payload, dict) else payload
         self.product_id = product.get("id")
         self.info_label.setText(f"Producto: {product.get('name', '—')}")
         self.stock_label.setText(f"Stock actual: {product.get('stock', '—')}")
         self._update_suggestion_ui(product)
+
+    def _on_product_search_error(self, msg):
+        QMessageBox.warning(self, "No encontrado", "Producto no encontrado")
+        self.suggestion_panel.clear()
+        self.apply_suggestion_btn.setEnabled(False)
 
     def confirm(self):
         if not self.product_id:
@@ -309,25 +299,9 @@ class AddStockDialog(QDialog):
 
         qty = self.qty_input.value()
         headers = {"Authorization": f"Bearer {session.token}"}
-
-        try:
-            resp = requests.post(
-                f"{API_URL}/{self.product_id}/add-stock",
-                params={"quantity": qty},
-                headers=headers,
-                timeout=5,
-            )
-        except requests.RequestException as e:
-            QMessageBox.critical(self, "Error de conexión", str(e))
-            return
-
-        if resp.status_code == 200:
-            QMessageBox.information(self, "OK", "Stock agregado correctamente")
-            self.accept()
-        else:
-            error_detail = "Error desconocido"
-            try:
-                error_detail = resp.json().get("detail", resp.text)
-            except Exception:
-                error_detail = resp.text
-            QMessageBox.critical(self, "Error", str(error_detail))
+        api_call(
+            "post", f"{API_URL}/{self.product_id}/add-stock",
+            params={"quantity": qty}, headers=headers,
+            on_success=lambda data: (QMessageBox.information(self, "OK", "Stock agregado correctamente"), self.accept()),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )

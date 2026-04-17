@@ -1,4 +1,3 @@
-import requests
 from decimal import Decimal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -6,6 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QEvent, QTimer
 from ui.session_manager import session
+from ui.utils.http_worker import api_call, api_request
 from ui.dialogs.add_product_dialog import IVA_TYPES, IVA_RATES
 from ui.api import BASE_URL
 
@@ -158,32 +158,34 @@ class EditProductDialog(QDialog):
         layout.addWidget(combo)
 
     def load_categories(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(API_CATEGORIES, headers=headers)
-            data = resp.json()["data"]
+        headers = {"Authorization": f"Bearer {session.token}"}
+        api_call(
+            "get", API_CATEGORIES, headers=headers,
+            on_success=self._on_categories_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{msg}"),
+        )
 
-            self.category_combo.clear()
-            for c in data:
-                self.category_combo.addItem(c["name"], c["id"])
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{e}")
+    def _on_categories_loaded(self, payload):
+        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        self.category_combo.clear()
+        for c in data:
+            self.category_combo.addItem(c["name"], c["id"])
 
     def load_suppliers(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"}
-            resp = requests.get(API_SUPPLIERS, headers=headers)
-            raw = resp.json()
-            data = raw.get("items", raw) if isinstance(raw, dict) else raw
+        headers = {"Authorization": f"Bearer {session.token}"}
+        api_call(
+            "get", API_SUPPLIERS, headers=headers,
+            on_success=self._on_suppliers_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar proveedores:\n{msg}"),
+        )
 
-            self.supplier_combo.clear()
-            for s in data:
-                if not s.get("is_active", True):
-                    continue
-
-                self.supplier_combo.addItem(s["name"], s["id"])
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar proveedores:\n{e}")
+    def _on_suppliers_loaded(self, raw):
+        data = raw.get("items", raw) if isinstance(raw, dict) else raw
+        self.supplier_combo.clear()
+        for s in data:
+            if not s.get("is_active", True):
+                continue
+            self.supplier_combo.addItem(s["name"], s["id"])
 
     def _format_stock_value(self, value):
         """Formatea un valor de stock quitando decimales innecesarios.
@@ -320,7 +322,7 @@ class EditProductDialog(QDialog):
             return
 
         headers = {"Authorization": f"Bearer {session.token}"}
-        resp = requests.get(CABYS_SEARCH_URL, headers=headers, params={"q": keyword})
+        resp = api_request("get", CABYS_SEARCH_URL, headers=headers, params={"q": keyword})
         payload = resp.json()
         data = payload.get("data", [])
 
@@ -411,13 +413,14 @@ class EditProductDialog(QDialog):
             }
 
             url = f"{API_PRODUCTS}/{self.product['id']}"
-            resp = requests.put(url, json=payload, headers=headers)
-
-            if resp.status_code != 200:
-                raise Exception(resp.text)
-
-            QMessageBox.information(self, "OK", "Producto actualizado correctamente.")
-            self.accept()
+            self.btn_save.setEnabled(False)
+            api_call(
+                "put", url, json=payload, headers=headers,
+                on_success=lambda data: (QMessageBox.information(self, "OK", "Producto actualizado correctamente."), self.accept()),
+                on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+                on_finished=lambda: self.btn_save.setEnabled(True),
+            )
+            return
 
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

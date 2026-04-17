@@ -674,10 +674,10 @@ class MainWindow(QMainWindow):
     def _fetch_user_permissions(self) -> list[str]:
         """Obtiene los permisos del usuario actual desde la API."""
         try:
-            import requests
+            from ui.utils.http_worker import api_request
             from ui.api import BASE_URL
             headers = {"Authorization": f"Bearer {session.token}"}
-            r = requests.get(f"{BASE_URL}/users/me", headers=headers, timeout=5)
+            r = api_request("get", f"{BASE_URL}/users/me", headers=headers, timeout=5)
             if r.status_code == 200:
                 return r.json().get("permissions", [])
         except Exception as e:

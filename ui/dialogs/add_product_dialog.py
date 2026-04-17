@@ -3,10 +3,10 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, QEvent, QTimer
-import requests
 from decimal import Decimal
 from ui.session_manager import session
 from ui.api import BASE_URL
+from ui.utils.http_worker import api_call
 
 
 API_URL = f"{BASE_URL}/products"
@@ -259,42 +259,46 @@ class AddProductDialog(QDialog):
         layout.addWidget(combo)
 
     def load_categories(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"}
-            r = requests.get(CATEGORIES_URL, headers=headers)
-            data = r.json()["data"]
+        headers = {"Authorization": f"Bearer {session.token}"}
+        api_call(
+            "get", CATEGORIES_URL, headers=headers,
+            on_success=self._on_categories_loaded,
+            on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{msg}"),
+        )
 
-            self.category_combo.clear()
-            self.categories = data
-
-            for c in data:
-                self.category_combo.addItem(c["name"], c["id"])
-
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{e}")
+    def _on_categories_loaded(self, payload):
+        data = payload.get("data", payload) if isinstance(payload, dict) else payload
+        self.category_combo.clear()
+        self.categories = data
+        for c in data:
+            self.category_combo.addItem(c["name"], c["id"])
+        if self.initial_data:
+            cat_id = self.initial_data.get("category_id")
+            idx = self.category_combo.findData(cat_id)
+            if idx >= 0:
+                self.category_combo.setCurrentIndex(idx)
 
     def load_suppliers(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = requests.get(SUPPLIERS_URL, headers=headers)
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", SUPPLIERS_URL, headers=headers,
+            on_success=self._on_suppliers_loaded,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al cargar proveedores:\n{msg}"),
+        )
 
-            if resp.status_code != 200:
-                QMessageBox.warning(self, "Error", f"No se pudieron cargar los proveedores.\n{resp.text}")
-                return
-
-            data = resp.json()
-            suppliers = data.get("items", data) if isinstance(data, dict) else data
-
-            self.supplier_combo.clear()
-
-            for supplier in suppliers:
-                if not supplier.get("is_active", True):
-                    continue
-
-                self.supplier_combo.addItem(supplier["name"], supplier["id"])
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error al cargar proveedores:\n{e}")
+    def _on_suppliers_loaded(self, payload):
+        data = payload
+        suppliers = data.get("items", data) if isinstance(data, dict) else data
+        self.supplier_combo.clear()
+        for supplier in suppliers:
+            if not supplier.get("is_active", True):
+                continue
+            self.supplier_combo.addItem(supplier["name"], supplier["id"])
+        if self.initial_data:
+            sup_id = self.initial_data.get("supplier_id")
+            idx = self.supplier_combo.findData(sup_id)
+            if idx >= 0:
+                self.supplier_combo.setCurrentIndex(idx)
 
     def save_product(self):
         try:
@@ -356,17 +360,21 @@ class AddProductDialog(QDialog):
                 return
 
             headers = {"Authorization": f"Bearer {session.token}"}
-            r = requests.post(API_URL, json=data, headers=headers)
-            resp = r.json()
-
-            if r.status_code == 200:
-                QMessageBox.information(self, "Éxito", resp["message"])
-                self.accept()
-            else:
-                QMessageBox.critical(self, "Error", str(resp))
+            self.btn_save.setEnabled(False)
+            api_call(
+                "post", API_URL, json=data, headers=headers,
+                on_success=self._on_product_saved,
+                on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+                on_finished=lambda: self.btn_save.setEnabled(True),
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
+
+    def _on_product_saved(self, resp):
+        msg = resp.get("message", "Producto guardado") if isinstance(resp, dict) else "Producto guardado"
+        QMessageBox.information(self, "Éxito", msg)
+        self.accept()
 
     def recalculate_price(self):
         try:
@@ -419,7 +427,8 @@ class AddProductDialog(QDialog):
         params = {"q": keyword}
 
         try:
-            resp = requests.get(CABYS_SEARCH_URL, headers=headers, params=params)
+            from ui.utils.http_worker import api_request
+            resp = api_request("get", CABYS_SEARCH_URL, headers=headers, params=params)
             payload = resp.json()
             data = payload.get("data", [])
 
