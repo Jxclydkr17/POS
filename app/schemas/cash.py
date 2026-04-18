@@ -46,11 +46,11 @@ class CashMovementCreate(BaseModel):
     concept: str = Field(min_length=3, max_length=100)
     amount: float = Field(gt=0)
     source: str = "manual"  # ✅ Campo obligatorio con valor por defecto
-    description: Optional[str] = None
+    description: Optional[str] = Field(None, max_length=500)
     reference_id: Optional[int] = None
     
     create_expense: bool = False
-    expense_category: Optional[str] = None
+    expense_category: Optional[str] = Field(None, max_length=100)
 
     @field_validator("concept")
     def validate_concept(cls, value):

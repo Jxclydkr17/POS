@@ -2303,25 +2303,39 @@ class SettingsView(QWidget):
     # Usuarios: cargar datos
     # ----------------------------------------------------------
     def _load_users(self):
-        """Carga la lista de usuarios y los permisos disponibles."""
-        try:
+        """Carga la lista de usuarios y permisos disponibles (async)."""
+        self.btn_refresh_users.setEnabled(False)
+
+        def _fetch():
             from ui.services.users_service import fetch_users, fetch_available_permissions
-
-            self._users_cache = fetch_users()
-            self._populate_users_table(self._users_cache)
-
-            # Cargar permisos disponibles (solo una vez o refrescar)
+            users = fetch_users()
             try:
-                perms_data = fetch_available_permissions()
-                self._all_permissions = perms_data.get("all_permissions", [])
-                self._default_permissions = perms_data.get("default_permissions", {})
+                perms = fetch_available_permissions()
             except Exception:
-                pass  # Mantener cache previo
+                perms = {}
+            return {"users": users, "perms": perms}
 
-        except Exception as e:
-            logger.error(f"Error cargando usuarios: {e}")
-            from ui.components.toast_notifier import show_toast
-            show_toast(f"Error al cargar usuarios: {e}", success=False, parent=self.main_window)
+        from ui.utils.http_worker import run_async
+        run_async(
+            _fetch,
+            on_success=self._on_users_loaded,
+            on_error=self._on_users_load_error,
+            on_finished=lambda: self.btn_refresh_users.setEnabled(True),
+        )
+
+    def _on_users_loaded(self, data):
+        """Callback: actualiza tabla y cache de permisos."""
+        self._users_cache = data["users"]
+        self._populate_users_table(self._users_cache)
+        perms = data.get("perms", {})
+        if perms:
+            self._all_permissions = perms.get("all_permissions", [])
+            self._default_permissions = perms.get("default_permissions", {})
+
+    def _on_users_load_error(self, msg):
+        """Callback: error al cargar usuarios."""
+        logger.error(f"Error cargando usuarios: {msg}")
+        show_toast(f"Error al cargar usuarios: {msg}", success=False, parent=self.main_window)
 
     def _populate_users_table(self, users: list[dict]):
         """Llena la tabla con los datos de usuarios."""
@@ -2393,17 +2407,10 @@ class SettingsView(QWidget):
     # Usuarios: agregar
     # ----------------------------------------------------------
     def _on_add_user(self):
-        # Asegurar que tenemos los permisos cargados
-        if not self._all_permissions:
-            try:
-                from ui.services.users_service import fetch_available_permissions
-                perms_data = fetch_available_permissions()
-                self._all_permissions = perms_data.get("all_permissions", [])
-                self._default_permissions = perms_data.get("default_permissions", {})
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"No se pudieron cargar los permisos:\n{e}")
-                return
+        self._ensure_permissions_then(self._show_add_user_dialog)
 
+    def _show_add_user_dialog(self):
+        """Abre el diálogo de creación de usuario (main thread)."""
         from ui.dialogs.user_dialog import UserDialog
         dlg = UserDialog(
             user_data=None,
@@ -2413,44 +2420,49 @@ class SettingsView(QWidget):
         )
 
         if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            perms = dlg.result_data.pop("permissions", [])
+            create_data = {
+                "username": dlg.result_data["username"],
+                "password": dlg.result_data["password"],
+                "full_name": dlg.result_data.get("full_name"),
+                "role": dlg.result_data["role"],
+            }
+
+            self._set_users_buttons_enabled(False)
+            from ui.utils.http_worker import run_async
+            run_async(
+                self._do_create_user, create_data, perms,
+                on_success=self._on_user_created,
+                on_error=lambda msg: QMessageBox.critical(self, "Error al crear usuario", msg),
+                on_finished=lambda: self._set_users_buttons_enabled(True),
+            )
+
+    def _do_create_user(self, create_data, perms):
+        """Ejecuta creación de usuario en hilo de background."""
+        from ui.services.users_service import create_user, fetch_users, update_permissions
+        import requests as _req
+        try:
+            create_user(create_data)
+        except _req.HTTPError as e:
+            raise RuntimeError(self._extract_api_error(e)) from None
+
+        if perms and create_data["role"] != "admin":
             try:
-                from ui.services.users_service import create_user, update_permissions
+                users = fetch_users()
+                new_user = next(
+                    (u for u in users if u["username"] == create_data["username"]),
+                    None,
+                )
+                if new_user:
+                    update_permissions(new_user["id"], perms)
+            except _req.HTTPError as e:
+                raise RuntimeError(self._extract_api_error(e)) from None
+        return create_data["username"]
 
-                # Separar permisos del payload de creación
-                perms = dlg.result_data.pop("permissions", [])
-                create_data = {
-                    "username": dlg.result_data["username"],
-                    "password": dlg.result_data["password"],
-                    "full_name": dlg.result_data.get("full_name"),
-                    "role": dlg.result_data["role"],
-                }
-
-                result = create_user(create_data)
-
-                # Si hay permisos personalizados y no es admin, guardarlos
-                if perms and dlg.result_data["role"] != "admin":
-                    # Buscar el ID del usuario recién creado
-                    from ui.services.users_service import fetch_users
-                    users = fetch_users()
-                    new_user = next(
-                        (u for u in users if u["username"] == create_data["username"]),
-                        None,
-                    )
-                    if new_user:
-                        update_permissions(new_user["id"], perms)
-
-                from ui.components.toast_notifier import show_toast
-                show_toast(f"Usuario '{create_data['username']}' creado ✔", success=True, parent=self.main_window)
-                self._load_users()
-
-            except Exception as e:
-                error_msg = str(e)
-                try:
-                    import json as _json
-                    error_msg = _json.loads(e.response.text).get("detail", error_msg)
-                except Exception:
-                    pass
-                QMessageBox.critical(self, "Error al crear usuario", str(error_msg))
+    def _on_user_created(self, username):
+        """Callback: usuario creado exitosamente."""
+        show_toast(f"Usuario '{username}' creado ✔", success=True, parent=self.main_window)
+        self._load_users()
 
     # ----------------------------------------------------------
     # Usuarios: editar
@@ -2462,16 +2474,10 @@ class SettingsView(QWidget):
             QMessageBox.warning(self, "Error", "No se encontró el usuario.")
             return
 
-        if not self._all_permissions:
-            try:
-                from ui.services.users_service import fetch_available_permissions
-                perms_data = fetch_available_permissions()
-                self._all_permissions = perms_data.get("all_permissions", [])
-                self._default_permissions = perms_data.get("default_permissions", {})
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"No se pudieron cargar los permisos:\n{e}")
-                return
+        self._ensure_permissions_then(self._show_edit_user_dialog, user_id, user_data)
 
+    def _show_edit_user_dialog(self, user_id, user_data):
+        """Abre el diálogo de edición de usuario (main thread)."""
         from ui.dialogs.user_dialog import UserDialog
         dlg = UserDialog(
             user_data=user_data,
@@ -2481,72 +2487,81 @@ class SettingsView(QWidget):
         )
 
         if dlg.exec() == QDialog.Accepted and dlg.result_data:
+            perms = dlg.result_data.pop("permissions", [])
+
+            # Solo enviar campos que cambiaron
+            update_payload = {}
+            if dlg.result_data.get("username") != user_data.get("username"):
+                update_payload["username"] = dlg.result_data["username"]
+            if dlg.result_data.get("full_name") != user_data.get("full_name"):
+                update_payload["full_name"] = dlg.result_data["full_name"]
+            if dlg.result_data.get("role") != user_data.get("role"):
+                update_payload["role"] = dlg.result_data["role"]
+            if "is_active" in dlg.result_data:
+                if dlg.result_data["is_active"] != user_data.get("is_active"):
+                    update_payload["is_active"] = dlg.result_data["is_active"]
+            if dlg.result_data.get("password"):
+                update_payload["password"] = dlg.result_data["password"]
+
+            role = dlg.result_data.get("role", user_data.get("role", ""))
+
+            self._set_users_buttons_enabled(False)
+            from ui.utils.http_worker import run_async
+            run_async(
+                self._do_edit_user, user_id, user_data, update_payload, perms, role,
+                on_success=lambda _: self._on_user_updated(),
+                on_error=lambda msg: QMessageBox.critical(self, "Error al actualizar", msg),
+                on_finished=lambda: self._set_users_buttons_enabled(True),
+            )
+
+    def _do_edit_user(self, user_id, user_data, update_payload, perms, role):
+        """Ejecuta actualización de usuario en hilo de background."""
+        from ui.services.users_service import update_user, update_permissions
+        import requests as _req
+
+        if update_payload:
             try:
-                from ui.services.users_service import update_user, update_permissions
+                update_user(user_id, update_payload)
+            except _req.HTTPError as e:
+                raise RuntimeError(self._extract_api_error(e)) from None
 
-                perms = dlg.result_data.pop("permissions", [])
+        # ── Re-login automático si el admin editó su propia cuenta ──
+        from ui.session_manager import session as _session
+        _is_self_edit = user_data.get("username") == _session.username
+        _new_password = update_payload.get("password")
+        _new_username = update_payload.get("username", user_data.get("username"))
 
-                # Solo enviar campos que cambiaron
-                update_payload = {}
-                if dlg.result_data.get("username") != user_data.get("username"):
-                    update_payload["username"] = dlg.result_data["username"]
-                if dlg.result_data.get("full_name") != user_data.get("full_name"):
-                    update_payload["full_name"] = dlg.result_data["full_name"]
-                if dlg.result_data.get("role") != user_data.get("role"):
-                    update_payload["role"] = dlg.result_data["role"]
-                if "is_active" in dlg.result_data:
-                    if dlg.result_data["is_active"] != user_data.get("is_active"):
-                        update_payload["is_active"] = dlg.result_data["is_active"]
-                if dlg.result_data.get("password"):
-                    update_payload["password"] = dlg.result_data["password"]
+        if _is_self_edit and _new_password:
+            try:
+                from ui.api import BASE_URL as _BASE_URL
+                from app.core.security import decode_token as _decode_token
+                _resp = _req.post(
+                    f"{_BASE_URL}/users/login",
+                    data={"username": _new_username, "password": _new_password},
+                    timeout=10,
+                )
+                _resp.raise_for_status()
+                _data = _resp.json()
+                _new_token = _data.get("access_token")
+                _payload = _decode_token(_new_token)
+                _role = _payload.get("role", _session.role)
+                _session.start_session(_new_username, _role, _new_token)
+            except Exception as _re_err:
+                logger.warning(f"Re-login automático falló: {_re_err}")
 
-                if update_payload:
-                    update_user(user_id, update_payload)
+        # Actualizar permisos (si no es admin)
+        if role != "admin":
+            try:
+                update_permissions(user_id, perms)
+            except _req.HTTPError as e:
+                raise RuntimeError(self._extract_api_error(e)) from None
 
-                # ── Fix: si el admin editó su propia cuenta y cambió la contraseña,
-                #    el backend revoca el token actual. Hay que re-autenticarse para
-                #    obtener un token nuevo antes de hacer cualquier otra llamada API.
-                from ui.session_manager import session as _session
-                _is_self_edit = user_data.get("username") == _session.username
-                _new_password = update_payload.get("password")
-                _new_username = update_payload.get("username", user_data.get("username"))
+        return True
 
-                if _is_self_edit and _new_password:
-                    try:
-                        import requests as _req
-                        from ui.api import BASE_URL as _BASE_URL
-                        from app.core.security import decode_token as _decode_token
-                        _resp = _req.post(
-                            f"{_BASE_URL}/users/login",
-                            data={"username": _new_username, "password": _new_password},
-                            timeout=10,
-                        )
-                        _resp.raise_for_status()
-                        _data = _resp.json()
-                        _new_token = _data.get("access_token")
-                        _payload = _decode_token(_new_token)
-                        _role = _payload.get("role", _session.role)
-                        _session.start_session(_new_username, _role, _new_token)
-                    except Exception as _re_err:
-                        logger.warning(f"Re-login automático falló: {_re_err}")
-
-                # Actualizar permisos (si no es admin)
-                role = dlg.result_data.get("role", user_data.get("role", ""))
-                if role != "admin":
-                    update_permissions(user_id, perms)
-
-                from ui.components.toast_notifier import show_toast
-                show_toast("Usuario actualizado ✔", success=True, parent=self.main_window)
-                self._load_users()
-
-            except Exception as e:
-                error_msg = str(e)
-                try:
-                    import json as _json
-                    error_msg = _json.loads(e.response.text).get("detail", error_msg)
-                except Exception:
-                    pass
-                QMessageBox.critical(self, "Error al actualizar", str(error_msg))
+    def _on_user_updated(self):
+        """Callback: usuario actualizado exitosamente."""
+        show_toast("Usuario actualizado ✔", success=True, parent=self.main_window)
+        self._load_users()
 
     # ----------------------------------------------------------
     # Usuarios: eliminar
@@ -2566,22 +2581,70 @@ class SettingsView(QWidget):
         if reply != QMessageBox.Yes:
             return
 
-        try:
+        self._set_users_buttons_enabled(False)
+
+        def _do_delete():
             from ui.services.users_service import delete_user
-            delete_user(user_id)
-
-            from ui.components.toast_notifier import show_toast
-            show_toast(f"Usuario '{username}' eliminado ✔", success=True, parent=self.main_window)
-            self._load_users()
-
-        except Exception as e:
-            error_msg = str(e)
+            import requests as _req
             try:
-                import json as _json
-                error_msg = _json.loads(e.response.text).get("detail", error_msg)
-            except Exception:
-                pass
-            QMessageBox.critical(self, "Error al eliminar", str(error_msg))
+                delete_user(user_id)
+            except _req.HTTPError as e:
+                raise RuntimeError(self._extract_api_error(e)) from None
+            return username
+
+        from ui.utils.http_worker import run_async
+        run_async(
+            _do_delete,
+            on_success=self._on_user_deleted,
+            on_error=lambda msg: QMessageBox.critical(self, "Error al eliminar", msg),
+            on_finished=lambda: self._set_users_buttons_enabled(True),
+        )
+
+    def _on_user_deleted(self, username):
+        """Callback: usuario eliminado exitosamente."""
+        show_toast(f"Usuario '{username}' eliminado ✔", success=True, parent=self.main_window)
+        self._load_users()
+
+    # ----------------------------------------------------------
+    # Usuarios: utilidades async
+    # ----------------------------------------------------------
+    def _ensure_permissions_then(self, callback, *args):
+        """
+        Garantiza que los permisos estén cargados antes de ejecutar callback.
+        Si ya están en cache, llama callback inmediatamente.
+        Si no, los carga async y llama callback al terminar.
+        """
+        if self._all_permissions:
+            callback(*args)
+            return
+
+        def _on_loaded(data):
+            self._all_permissions = data.get("all_permissions", [])
+            self._default_permissions = data.get("default_permissions", {})
+            callback(*args)
+
+        from ui.utils.http_worker import run_async
+        from ui.services.users_service import fetch_available_permissions
+        run_async(
+            fetch_available_permissions,
+            on_success=_on_loaded,
+            on_error=lambda msg: QMessageBox.critical(
+                self, "Error", f"No se pudieron cargar los permisos:\n{msg}"
+            ),
+        )
+
+    def _set_users_buttons_enabled(self, enabled: bool):
+        """Habilita/deshabilita botones de la pestaña usuarios durante operaciones."""
+        self.btn_add_user.setEnabled(enabled)
+        self.btn_refresh_users.setEnabled(enabled)
+
+    @staticmethod
+    def _extract_api_error(exc):
+        """Extrae el detail de un HTTPError de requests (respuesta FastAPI)."""
+        try:
+            return exc.response.json().get("detail", str(exc))
+        except Exception:
+            return str(exc)
 
     def _cleanup_thread(self):
         if self._thread and self._thread.isRunning():

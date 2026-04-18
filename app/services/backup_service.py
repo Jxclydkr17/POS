@@ -224,7 +224,16 @@ def _get_sqlite_db_path() -> Path:
 
 
 def _create_sqlite_backup(timestamp: str, suffix: str) -> str:
-    """Backup de SQLite: copia del archivo .db."""
+    """
+    Backup de SQLite usando la API de backup online (sqlite3.backup).
+
+    FASE B — Fix B.6: shutil.copy2() podía crear backups inconsistentes
+    con WAL mode activo, porque copia el .db sin las transacciones
+    pendientes en el archivo -wal. La API nativa de SQLite garantiza
+    un snapshot consistente incluso con escrituras concurrentes.
+    """
+    import sqlite3
+
     db_path = _get_sqlite_db_path()
     if not db_path.exists():
         raise RuntimeError(f"Archivo SQLite no encontrado: {db_path}")
@@ -233,14 +242,22 @@ def _create_sqlite_backup(timestamp: str, suffix: str) -> str:
     filepath = BACKUP_DIR / filename
 
     try:
-        shutil.copy2(str(db_path), str(filepath))
+        # Conexión de solo lectura al origen
+        src = sqlite3.connect(str(db_path))
+        dst = sqlite3.connect(str(filepath))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+
         size = filepath.stat().st_size
         logger.info(f"Backup SQLite creado: {filename} ({size:,} bytes)")
         _rotate_backups()
         return str(filepath)
-    except OSError as e:
+    except (sqlite3.Error, OSError) as e:
         filepath.unlink(missing_ok=True)
-        raise RuntimeError(f"Error copiando archivo SQLite: {e}")
+        raise RuntimeError(f"Error creando backup SQLite: {e}")
 
 
 def _create_mysql_backup(timestamp: str, suffix: str) -> str:

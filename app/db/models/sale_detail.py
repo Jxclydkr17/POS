@@ -6,7 +6,7 @@ class SaleDetail(Base):
     __tablename__ = "sale_details"
 
     id = Column(Integer, primary_key=True, index=True)
-    sale_id = Column(Integer, ForeignKey("sales.id", ondelete="CASCADE"))
+    sale_id = Column(Integer, ForeignKey("sales.id", ondelete="CASCADE"), index=True)
     product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
 
     # 📏 Cantidad

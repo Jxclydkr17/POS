@@ -134,10 +134,12 @@ class PaginatedProformasResponse(BaseModel):
 class ProformaConvertRequest(BaseModel):
     payment_method: str = Field(
         default="Efectivo",
+        max_length=50,
         description="Método de pago para la venta resultante"
     )
     document_type: str = Field(
         default="04",
+        max_length=2,
         description="Tipo de documento: '04' Tiquete, '01' Factura"
     )
     credit_days: Optional[int] = Field(
@@ -146,5 +148,6 @@ class ProformaConvertRequest(BaseModel):
     )
     condicion_venta_code: Optional[str] = Field(
         None,
+        max_length=2,
         description="Código CondicionVenta (ej: '01' contado, '02' crédito)"
     )

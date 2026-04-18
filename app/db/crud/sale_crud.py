@@ -169,6 +169,20 @@ def _process_sale_lines(
             discount_pct = Decimal(str(item.discount_percent or 0))
             qty_dec = Decimal(str(item.quantity))
 
+            # ── FASE B — Fix B.3: Validar precio y cantidad positivos ──
+            # Productos normales están protegidos por la comparación contra BD,
+            # pero los productos comunes aceptaban valores negativos (fraude).
+            if unit_price_dec <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El precio del producto común debe ser mayor a cero.",
+                )
+            if qty_dec <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="La cantidad del producto común debe ser mayor a cero.",
+                )
+
             # ── FASE 3 — Fix 3.1: Calcular IVA en productos comunes ──
             # Usa la misma función que productos normales para consistencia
             # fiscal. El frontend envía tax_rate (0 si exento, 13 si IVA general).
@@ -553,17 +567,43 @@ def _generate_pdf_and_email_async(sale_data: dict, customer_email: str | None, b
     FASE 4 — Fix 4.3: Lanza PDF + email en un thread de background.
     El cajero recibe la respuesta de la venta inmediatamente sin esperar
     a que ReportLab genere el PDF o que el SMTP responda.
+
+    FASE C — Fix C.3: Actualiza sale.pdf_generated para que el frontend
+    pueda consultar si el PDF se generó correctamente.
     """
     import threading
 
+    sale_id = sale_data.get("id")
+
     def _worker():
         try:
-            _run_pdf_and_email(sale_data, customer_email, business_name)
+            result = _run_pdf_and_email(sale_data, customer_email, business_name)
+            _update_pdf_status(sale_id, result is not None)
         except Exception as e:
-            logger.error(f"Error en background PDF/Email para venta #{sale_data.get('id')}: {e}")
+            logger.error(f"Error en background PDF/Email para venta #{sale_id}: {e}")
+            _update_pdf_status(sale_id, False)
 
-    t = threading.Thread(target=_worker, daemon=True, name=f"pdf-sale-{sale_data.get('id')}")
+    t = threading.Thread(target=_worker, daemon=True, name=f"pdf-sale-{sale_id}")
     t.start()
+
+
+def _update_pdf_status(sale_id: int, success: bool):
+    """Actualiza el campo pdf_generated en la BD (sesión propia para el thread)."""
+    try:
+        from app.db.database import SessionLocal
+        db = SessionLocal()
+        try:
+            db.query(Sale).filter(Sale.id == sale_id).update(
+                {"pdf_generated": success}, synchronize_session=False,
+            )
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"No se pudo actualizar pdf_generated para venta #{sale_id}: {e}")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.warning(f"Error accediendo a BD para pdf_generated: {e}")
 
 
 def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):

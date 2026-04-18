@@ -17,6 +17,12 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
+# ── FASE C — Fix C.2: Hash dummy generado dinámicamente al importar ──
+# Antes era un hash bcrypt literal hardcodeado. Si alguien leía el código
+# fuente, podía identificar que ese hash no pertenecía a ningún usuario.
+# Ahora se genera una vez al startup con la misma función hash_password.
+_DUMMY_HASH = hash_password("__timing_safe_dummy__")
+
 
 # ── Schemas de validación (Fase 8 — Bug 8.2) ─────────────
 class UserRegister(BaseModel):
@@ -124,17 +130,26 @@ def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
         is_active=True,
     )
     db.add(admin)
-    db.commit()
+    try:
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error en setup inicial: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al crear el administrador.")
     logger.info(f"Setup inicial completado — admin '{admin.username}' creado.")
     return {"message": "Administrador creado exitosamente", "username": admin.username}
 
 # ────────────────────────────────────────────────────────────
-#  Rate limiter persistido en archivo JSON (Fase 2 — Fix 2.1)
+#  Rate limiter de login — in-memory con deque
 #
-#  Mejoras sobre la versión anterior (dict en memoria):
-#  - Persiste entre reinicios del servidor
-#  - Compartido entre workers de uvicorn (vía filesystem)
-#  - Thread-safe con lock
+#  Separado del rate limiter general (app/core/rate_limiter.py)
+#  porque el login tiene semántica distinta:
+#    - Cuenta intentos FALLIDOS (no todos los requests)
+#    - Lockout de 10 minutos tras 5 fallos (no solo throttle)
+#    - Limpia intentos tras login exitoso
 # ────────────────────────────────────────────────────────────
 LOGIN_MAX_ATTEMPTS = 5
 LOGIN_WINDOW_SECONDS = 300
@@ -214,8 +229,16 @@ def register_user(
         role=data.role,
     )
     db.add(new_user)
-    db.commit()
-    db.refresh(new_user)
+    try:
+        db.commit()
+        db.refresh(new_user)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al registrar usuario '{data.username}': {e}")
+        raise HTTPException(status_code=500, detail="Error interno al crear el usuario.")
     return {"message": "Usuario creado con éxito", "user": new_user.username}
 
 
@@ -238,7 +261,6 @@ def login(
     # hash dummy para que el tiempo de respuesta sea idéntico al de un
     # usuario válido con contraseña incorrecta. Esto previene enumeración
     # de usuarios por timing.
-    _DUMMY_HASH = "$2b$12$LJ3m4ys3Lg3do11FkN7JpOX5Z5z6ByEpXoMxMKq/MOZV.V8lRS5Dq"
     if not user:
         verify_password(form_data.password, _DUMMY_HASH)
         _record_attempt(client_ip)
@@ -342,7 +364,15 @@ def change_own_password(
     from app.utils.dt import utcnow as _utcnow
     current_user.token_revoked_at = _utcnow()
 
-    db.commit()
+    try:
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al cambiar contraseña de '{current_user.username}': {e}")
+        raise HTTPException(status_code=500, detail="Error interno al cambiar la contraseña.")
     logger.info(f"Usuario '{current_user.username}' cambió su contraseña.")
 
     # Generar nuevo token para que no se cierre la sesión inmediatamente
@@ -438,8 +468,16 @@ def update_user(
         user.token_revoked_at = _utcnow()
         logger.info(f"Tokens revocados para usuario '{user.username}' (cambio de password)")
 
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar usuario ID {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al actualizar el usuario.")
     return UserOut.from_user(user)
 
 
@@ -472,7 +510,15 @@ def delete_user(
             )
 
     db.delete(user)
-    db.commit()
+    try:
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al eliminar usuario '{user.username}': {e}")
+        raise HTTPException(status_code=500, detail="Error interno al eliminar el usuario.")
     return {"message": f"Usuario '{user.username}' eliminado"}
 
 
@@ -518,8 +564,16 @@ def update_user_permissions(
         )
 
     user.set_permissions(data.permissions)
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al actualizar permisos de usuario ID {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al actualizar los permisos.")
     return UserOut.from_user(user)
 
 
@@ -535,6 +589,14 @@ def reset_user_permissions(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     user.permissions = None  # Al ser None, get_permissions() usa los defaults
-    db.commit()
-    db.refresh(user)
+    try:
+        db.commit()
+        db.refresh(user)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error al resetear permisos de usuario ID {user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al restaurar los permisos.")
     return UserOut.from_user(user)

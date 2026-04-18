@@ -1,6 +1,6 @@
 # app/db/models/sale.py
 
-from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric, Index
+from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric, Index, Boolean
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.utils.dt import now_cr
@@ -46,6 +46,10 @@ class Sale(Base):
 
     # FASE 3.2: Detalle para condición de venta código 99
     condicion_venta_otros = Column(String(100), nullable=True)
+
+    # ── FASE C — Fix C.3: Estado de generación de PDF ──
+    # None = no intentado, True = generado OK, False = falló
+    pdf_generated = Column(Boolean, nullable=True, default=None)
 
     # ── FASE 4 — Índices compuestos ──
     __table_args__ = (

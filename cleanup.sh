@@ -1,38 +1,70 @@
 #!/bin/bash
 # ============================================================
-# Violette POS — Limpieza de archivos innecesarios
+# Violette POS — Limpieza de archivos de desarrollo
 # Ejecutar desde la raíz del proyecto: bash cleanup.sh
+#
+# FASE C — Fix C.5: Rutas actualizadas a data/ (antes app/)
+# y limpieza de artefactos de desarrollo (BD, fingerprint, etc.)
 # ============================================================
 
 set -e
 
 echo ""
-echo "🧹 Violette POS — Limpieza de archivos innecesarios"
+echo "🧹 Violette POS — Limpieza de archivos de desarrollo"
 echo "════════════════════════════════════════════════════"
 echo ""
 
-# 7.1 — PDFs de ventas de prueba/producción
-if [ -d "app/pdfs" ]; then
-    count=$(find app/pdfs -name "*.pdf" 2>/dev/null | wc -l)
-    if [ "$count" -gt 0 ]; then
-        rm -f app/pdfs/*.pdf
-        echo "✅ Eliminados $count PDFs de ventas (app/pdfs/)"
-    fi
-    # Crear .gitkeep para mantener la carpeta
-    touch app/pdfs/.gitkeep
+# ── BD de desarrollo ──
+if [ -f "violette_pos.db" ]; then
+    rm -f violette_pos.db violette_pos.db-wal violette_pos.db-shm
+    echo "✅ Eliminada base de datos de desarrollo (violette_pos.db)"
 fi
 
-# 7.2 — Backups SQL con datos reales
-if [ -d "app/backups" ]; then
-    count=$(find app/backups -name "*.sql" 2>/dev/null | wc -l)
-    if [ "$count" -gt 0 ]; then
-        rm -f app/backups/*.sql
-        echo "✅ Eliminados $count backups SQL (app/backups/)"
-    fi
-    touch app/backups/.gitkeep
+# ── Artefactos de desarrollo en data/ ──
+if [ -f "data/.secret_key_fingerprint" ]; then
+    rm -f data/.secret_key_fingerprint
+    echo "✅ Eliminado data/.secret_key_fingerprint (fingerprint de dev)"
 fi
 
-# 7.3 — Cachés de Python compilados
+if [ -f "data/login_attempts.json" ]; then
+    rm -f data/login_attempts.json
+    echo "✅ Eliminado data/login_attempts.json (remanente obsoleto)"
+fi
+
+# ── PDFs de ventas de prueba ──
+if [ -d "data/pdfs" ]; then
+    count=$(find data/pdfs -name "*.pdf" 2>/dev/null | wc -l)
+    if [ "$count" -gt 0 ]; then
+        rm -f data/pdfs/*.pdf
+        echo "✅ Eliminados $count PDFs de ventas (data/pdfs/)"
+    fi
+fi
+
+# ── Backups de desarrollo ──
+if [ -d "data/backups" ]; then
+    count=$(find data/backups -name "backup_*" 2>/dev/null | wc -l)
+    if [ "$count" -gt 0 ]; then
+        rm -f data/backups/backup_*
+        echo "✅ Eliminados $count backups (data/backups/)"
+    fi
+fi
+
+# ── Logs de desarrollo ──
+if [ -d "data/logs" ]; then
+    count=$(find data/logs -name "*.log" -o -name "*.log.*" 2>/dev/null | wc -l)
+    if [ "$count" -gt 0 ]; then
+        rm -f data/logs/*.log data/logs/*.log.*
+        echo "✅ Eliminados $count archivos de log (data/logs/)"
+    fi
+fi
+
+# ── Session de desarrollo ──
+if [ -f "session.json" ]; then
+    rm -f session.json
+    echo "✅ Eliminado session.json (sesión de dev)"
+fi
+
+# ── Cachés de Python compilados ──
 count=$(find . -type d -name "__pycache__" 2>/dev/null | wc -l)
 if [ "$count" -gt 0 ]; then
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -41,16 +73,20 @@ fi
 
 count=$(find . -name "*.pyc" -o -name "*.pyo" 2>/dev/null | wc -l)
 if [ "$count" -gt 0 ]; then
-    find . -name "*.pyc" -delete 2>/dev/null || true
-    find . -name "*.pyo" -delete 2>/dev/null || true
+    find . \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
     echo "✅ Eliminados $count archivos .pyc/.pyo"
 fi
 
-# Crear carpetas de runtime si no existen
-mkdir -p generated_pdfs exports
-touch generated_pdfs/.gitkeep exports/.gitkeep
+# ── Directorios legacy (rutas viejas, ya migradas a data/) ──
+for old_dir in "app/pdfs" "app/backups"; do
+    if [ -d "$old_dir" ]; then
+        rm -rf "$old_dir"
+        echo "✅ Eliminado directorio legacy $old_dir/"
+    fi
+done
 
+# ── Asegurar estructura de directorios ──
+mkdir -p data/pdfs data/backups data/logs
 echo ""
-echo "✅ Limpieza completada."
-echo "   Ejecutá 'git add .gitignore && git commit' para que no vuelvan a entrar."
+echo "✅ Limpieza completada. El sistema creará la BD limpia en el primer arranque."
 echo ""

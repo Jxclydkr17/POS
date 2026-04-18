@@ -7,7 +7,7 @@ FASE 5 — Hardening para producción:
   - Logging estructurado
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from datetime import datetime
@@ -50,6 +50,8 @@ from app.routers.receptor_messages import router as receptor_messages_router
 from app.routers.system import router as system_router
 
 from app.utils.dt import utcnow
+from sqlalchemy.orm import Session
+from app.db.database import get_db
 
 
 # ══════════════════════════════════════════════════════════════
@@ -89,7 +91,12 @@ async def lifespan(app: FastAPI):
 
     async def _periodic_expire():
         while True:
-            await asyncio.sleep(3600)
+            # ── FASE C — Fix C.4: Intervalo reducido a 10 min (era 1h) ──
+            # Si una proforma vence a las 10:30, ahora se marca VENCIDA
+            # a más tardar a las 10:40 (antes podía tardar hasta las 11:30).
+            # El CRUD ya hace verificación on-demand al consultar, pero
+            # esto cubre los casos donde nadie consulta activamente.
+            await asyncio.sleep(600)
             # ── FASE 3 — Fix 3.4: Ejecutar query síncrona en thread separado
             # para no bloquear el event loop de asyncio durante el commit. ──
             await asyncio.to_thread(_do_expire)
@@ -271,27 +278,23 @@ app.include_router(system_router)
 # Endpoints base
 # ══════════════════════════════════════════════════════════════
 @app.get("/health")
-def health_check():
-    # ── FASE 5 — Fix 5.1: Verificar conexión a BD ──
-    # Un health check que no verifica la BD es un falso positivo.
-    # Balanceadores y monitoreo necesitan saber si la app puede operar.
-    from app.db.database import SessionLocal
+def health_check(db: Session = Depends(get_db)):
+    # ── FASE B — Fix B.2: Usa Depends(get_db) en lugar de SessionLocal manual ──
+    # Antes creaba SessionLocal() a mano, sin beneficiarse del cleanup automático
+    # de FastAPI. Ahora sigue el mismo patrón que todos los demás endpoints.
     from sqlalchemy import text
 
     db_ok = False
     db_error = None
-    db = SessionLocal()
     try:
         db.execute(text("SELECT 1"))
         db_ok = True
     except Exception as e:
         db_error = str(e)
-    finally:
-        db.close()
 
-    status = "healthy" if db_ok else "degraded"
+    status_str = "healthy" if db_ok else "degraded"
     result = {
-        "status": status,
+        "status": status_str,
         "app": settings.app_name,
         "version": app.version,
         "env": settings.app_env,

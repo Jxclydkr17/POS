@@ -1,76 +1,79 @@
 # ============================================================
 # Violette POS — .gitignore
+# FASE D — Fix D.3: Actualizado con rutas correctas
 # ============================================================
 
-# --- Python ---
+# ── Python ──
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 *.egg-info/
-dist/
-build/
 *.egg
 
-# --- Entorno ---
-.env
+# ── Entorno virtual ──
 .venv/
 venv/
 env/
+ENV/
 
-# --- IDE ---
+# ── IDE / Editor ──
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# --- Base de datos local ---
-*.db
-*.db-journal
-*.db-wal
-
-# --- Archivos generados en runtime ---
-data/pdfs/
-data/backups/
-app/pdfs/*.pdf
-app/backups/
-generated_pdfs/
-exports/
-
-# --- Runtime state (rate limiter, crypto fingerprint) ---
-login_attempts.json
-.secret_key_fingerprint
-
-# --- Logs ---
-*.log
-logs/
-
-# --- OS ---
+# ── OS ──
 .DS_Store
 Thumbs.db
 desktop.ini
 
-# --- PyInstaller ---
-*.spec
-dist/
-build/
+# ── Variables de entorno (secretos) ──
+.env
+.env.local
+.env.production
 
-# --- Certificados y credenciales ---
-certs/
+# ── Base de datos ──
+violette_pos.db
+violette_pos.db-wal
+violette_pos.db-shm
+*.db-journal
+
+# ── Datos de runtime (se generan automáticamente) ──
+data/logs/
+data/pdfs/
+data/backups/
+data/backup_status.json
+data/.secret_key_fingerprint
+data/login_attempts.json
+
+# ── Sesión de usuario ──
+session.json
+
+# ── Certificados y credenciales ──
+data/certs/
 *.p12
 *.pfx
 *.pem
 *.key
 
-# --- Uploads de usuario ---
+# ── PyInstaller / distribución ──
+dist/
+build/
+*.exe
+*.msi
+Output/
+
+# ── Directorios legacy (ya migrados a data/) ──
+app/pdfs/
+app/backups/
+
+# ── Uploads de usuario ──
 app/uploads/logos/*
 !app/uploads/logos/.gitkeep
 
-# --- Mantener estructura de carpetas vacías ---
+# ── Mantener estructura de carpetas vacías ──
 !data/pdfs/.gitkeep
 !data/backups/.gitkeep
-!app/pdfs/.gitkeep
-!app/backups/.gitkeep
-!generated_pdfs/.gitkeep
-!exports/.gitkeep
+!data/logs/.gitkeep

@@ -27,7 +27,31 @@ from pathlib import Path
 from app.core.security import decode_token
 from app.core.config import APP_DIR
 
-SESSION_FILE = str(APP_DIR / "session.json")
+# ── FASE B — Fix B.1: Session en directorio protegido del usuario ──
+# Antes: session.json quedaba junto al .exe, accesible a cualquiera.
+# Ahora: %APPDATA%/ViolettePOS/ (Windows) o data/ (fallback).
+_OLD_SESSION_FILE = str(APP_DIR / "session.json")
+
+
+def _get_session_dir() -> Path:
+    """Retorna un directorio protegido del usuario para guardar la sesión."""
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            d = Path(appdata) / "ViolettePOS"
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                return d
+            except OSError:
+                pass
+
+    # Fallback (Linux/Mac o si %APPDATA% falla): data/ dentro del proyecto
+    fallback = APP_DIR / "data"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
+SESSION_FILE = str(_get_session_dir() / "session.json")
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +208,17 @@ class SessionManager:
 
     def load_session(self):
         """Carga la sesión guardada, descifrando el token."""
+        # ── FASE B — Fix B.1: Migrar sesión de ubicación vieja si existe ──
+        if not os.path.exists(SESSION_FILE) and os.path.exists(_OLD_SESSION_FILE):
+            try:
+                import shutil
+                os.makedirs(os.path.dirname(SESSION_FILE), exist_ok=True)
+                shutil.move(_OLD_SESSION_FILE, SESSION_FILE)
+                _secure_file_permissions(SESSION_FILE)
+                logger.info(f"Sesión migrada de ubicación vieja a {SESSION_FILE}")
+            except OSError as e:
+                logger.warning(f"No se pudo migrar sesión vieja: {e}")
+
         if not os.path.exists(SESSION_FILE):
             return
 

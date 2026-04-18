@@ -32,13 +32,13 @@ class AIConfigOut(BaseModel):
 
 class AIConfigUpdate(BaseModel):
     """Actualizar config de IA. Todos los campos son opcionales."""
-    provider: Optional[str] = None
-    api_key: Optional[str] = None       # Key en texto plano → se encripta al guardar
-    model: Optional[str] = None
+    provider: Optional[str] = Field(None, max_length=50)
+    api_key: Optional[str] = Field(None, max_length=500)  # Key en texto plano → se encripta al guardar
+    model: Optional[str] = Field(None, max_length=100)
     is_enabled: Optional[bool] = None
     max_tokens: Optional[int] = Field(None, ge=100, le=4096)
     temperature: Optional[float] = Field(None, ge=0.0, le=1.0)
-    custom_prompt: Optional[str] = None
+    custom_prompt: Optional[str] = Field(None, max_length=5000)
 
 
 # ─────────────────────────────────────────────────────
@@ -47,9 +47,9 @@ class AIConfigUpdate(BaseModel):
 
 class AIConfigTestRequest(BaseModel):
     """Probar conexión con un proveedor y API key."""
-    provider: str                        # "anthropic" | "openai" | "google"
-    api_key: str                         # Key en texto plano para probar
-    model: Optional[str] = None          # Modelo específico (usa default si None)
+    provider: str = Field(..., max_length=50)             # "anthropic" | "openai" | "google"
+    api_key: str = Field(..., max_length=500)             # Key en texto plano para probar
+    model: Optional[str] = Field(None, max_length=100)    # Modelo específico (usa default si None)
 
 
 class AIConfigTestResponse(BaseModel):

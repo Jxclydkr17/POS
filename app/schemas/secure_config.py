@@ -4,7 +4,7 @@ Schemas para configuración de Hacienda y Email desde la UI.
 """
 from __future__ import annotations
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ── Hacienda ──────────────────────────────────────────
@@ -23,10 +23,10 @@ class HaciendaConfigOut(BaseModel):
 
 class HaciendaConfigUpdate(BaseModel):
     """PUT: campos opcionales, solo se actualizan los enviados."""
-    hacienda_env: Optional[str] = None
-    hacienda_api: Optional[str] = None
-    hacienda_user: Optional[str] = None
-    hacienda_password: Optional[str] = None
+    hacienda_env: Optional[str] = Field(None, max_length=20)
+    hacienda_api: Optional[str] = Field(None, max_length=500)
+    hacienda_user: Optional[str] = Field(None, max_length=200)
+    hacienda_password: Optional[str] = Field(None, max_length=500)
 
 
 # ── Email ─────────────────────────────────────────────
@@ -40,5 +40,5 @@ class EmailConfigOut(BaseModel):
 
 class EmailConfigUpdate(BaseModel):
     """PUT: campos opcionales."""
-    email_user: Optional[str] = None
-    email_pass: Optional[str] = None
+    email_user: Optional[str] = Field(None, max_length=200)
+    email_pass: Optional[str] = Field(None, max_length=500)
