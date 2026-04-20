@@ -15,5 +15,5 @@ class Expense(Base):
     payment_method = Column(String(50), nullable=True)
 
     # Auditoría: quién registró el gasto
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # FASE 3
     user = relationship("User", foreign_keys=[user_id], lazy="joined")

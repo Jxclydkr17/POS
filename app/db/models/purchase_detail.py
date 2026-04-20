@@ -14,6 +14,7 @@ class PurchaseDetail(Base):
         Integer,
         ForeignKey("purchases.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,  # FASE 3: índice para JOINs de detalle de compra
     )
     product_id = Column(
         Integer,

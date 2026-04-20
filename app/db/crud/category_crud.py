@@ -13,6 +13,8 @@ from app.schemas.category import CategoryCreate, CategoryUpdate
 # LISTAR  (ORM puro, sin vista SQL)
 # ----------------------------------------------------------
 def list_categories(db: Session) -> list[dict]:
+    # FASE 4 — Fix 4.2: límite preventivo (una ferretería tendrá ~20-50,
+    # pero evitamos full table scan si la tabla crece inesperadamente).
     rows = (
         db.query(
             Category.id,
@@ -28,6 +30,7 @@ def list_categories(db: Session) -> list[dict]:
         .outerjoin(Product, Product.category_id == Category.id)
         .group_by(Category.id)
         .order_by(Category.position, Category.name)
+        .limit(500)
         .all()
     )
     return [row._asdict() for row in rows]

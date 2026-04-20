@@ -152,6 +152,7 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
     )
     db.add(record)
     db.flush()
+    record_id = record.id  # FASE 4: capturar antes de posibles rollbacks
 
     # ── Paso 2: Firmar ──
     cert_path = hacienda_cert_path()
@@ -165,15 +166,25 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
         except Exception as e:
             record.last_error = f"Error firmando: {e}"
             record.status = "SIGN_ERROR"
-            db.commit()
+            # FASE 4 — Fix 4.1: commit protegido
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.error("No se pudo persistir estado SIGN_ERROR del MensajeReceptor")
             raise HTTPException(status_code=422, detail=f"Error firmando MensajeReceptor: {e}")
     else:
         record.status = "XML_UNSIGNED"
         record.xml_signed = xml
-        db.commit()
+        # FASE 4 — Fix 4.1: commit protegido
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error("No se pudo persistir estado XML_UNSIGNED del MensajeReceptor")
         return success_response(
             message="MensajeReceptor generado pero sin firma (configurá HACIENDA_CERT_PATH en .env)",
-            data={"id": record.id, "status": "XML_UNSIGNED", "signed": False}
+            data={"id": record_id, "status": "XML_UNSIGNED", "signed": False}
         )
 
     record.xml_signed = xml
@@ -196,13 +207,18 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
 
         record.status = "SENT"
         record.sent_at = utcnow()
-        db.commit()
+        # FASE 4 — Fix 4.1: commit protegido
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error("No se pudo persistir estado SENT del MensajeReceptor")
 
         mensaje_labels = {1: "ACEPTADO", 2: "ACEPTADO PARCIAL", 3: "RECHAZADO"}
         return success_response(
             message=f"MensajeReceptor enviado: {mensaje_labels.get(req.mensaje, '?')}",
             data={
-                "id": record.id,
+                "id": record_id,
                 "status": "SENT",
                 "consecutivo": consecutivo,
                 "mensaje": req.mensaje,
@@ -213,19 +229,29 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
     except HaciendaConfigError as e:
         record.status = "XML_READY"
         record.last_error = f"Sin credenciales Hacienda: {e}"
-        db.commit()
+        # FASE 4 — Fix 4.1: commit protegido
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error("No se pudo persistir estado XML_READY del MensajeReceptor")
         return success_response(
             message=f"MensajeReceptor firmado pero no enviado: {e}",
-            data={"id": record.id, "status": "XML_READY", "signed": True, "sent": False}
+            data={"id": record_id, "status": "XML_READY", "signed": True, "sent": False}
         )
 
     except (HaciendaAuthError, HaciendaSendError) as e:
         record.status = "SEND_ERROR"
         record.last_error = str(e)[:500]
-        db.commit()
+        # FASE 4 — Fix 4.1: commit protegido
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.error("No se pudo persistir estado SEND_ERROR del MensajeReceptor")
         return success_response(
             message=f"Error enviando MensajeReceptor: {e}",
-            data={"id": record.id, "status": "SEND_ERROR", "error": str(e)}
+            data={"id": record_id, "status": "SEND_ERROR", "error": str(e)}
         )
 
 

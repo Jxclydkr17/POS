@@ -1,4 +1,5 @@
 from datetime import datetime, date, time, timedelta
+import logging
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, case
@@ -17,6 +18,8 @@ from app.db.crud.cash import get_cash_report
 from app.utils.responses import success_response
 from app.services.dashboard_snapshot_service import ensure_dashboard_snapshot, get_dashboard_snapshot
 from app.utils.dt import today_cr
+
+logger = logging.getLogger(__name__)
 
 
 # ── FASE 3 — Fix 3.3: Auth a nivel de router ──
@@ -134,8 +137,15 @@ def dashboard_summary(db: Session = Depends(get_db)):
 
     # respaldo: aseguramos snapshot de ayer
     yesterday_snapshot = ensure_dashboard_snapshot(db, yesterday)
-    # FASE 2: Commit explícito porque save_dashboard_snapshot ahora solo hace flush
-    db.commit()
+    # FASE 2 — Fix 2.3: Commit protegido con rollback.
+    # Si falla (BD llena, lock, etc.), el dashboard sigue funcionando
+    # con datos en vivo; solo pierde el snapshot persistido.
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.warning("No se pudo persistir el snapshot del dashboard, continuando con datos en vivo")
+        yesterday_snapshot = get_dashboard_snapshot(db, yesterday)
 
     # hoy normalmente lo dejamos dinámico para mostrar tiempo real,
     # pero también podés guardar snapshot si querés.

@@ -11,14 +11,14 @@ class Sale(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)  # FASE 3
     customer = relationship("Customer", back_populates="sales")
 
     # ── FIX: Especificamos que 'user' usa 'user_id' ──
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)  # FASE 3
     user = relationship("User", foreign_keys=[user_id])
 
-    cash_session_id = Column(Integer, ForeignKey("cash_sessions.id"), nullable=False)
+    cash_session_id = Column(Integer, ForeignKey("cash_sessions.id"), nullable=False, index=True)  # FASE 3
     cash_session = relationship("CashSession")
 
     total = Column(Numeric(18, 5), nullable=False)

@@ -238,10 +238,13 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     total_out = to_dec(agg.total_out)
 
     # Obtener movimientos de caja (solo para la lista de display)
+    # FASE 4 — Fix 4.2: límite preventivo; los totales ya se calculan
+    # vía SQL aggregate arriba, así que esto es solo para la UI.
     movements = (
         db.query(CashMovement)
         .filter(CashMovement.cash_session_id == session.id)
         .order_by(CashMovement.created_at.desc())
+        .limit(500)
         .all()
     )
 

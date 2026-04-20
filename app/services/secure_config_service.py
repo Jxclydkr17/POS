@@ -25,7 +25,13 @@ _ENV_FALLBACK = {
 
 
 def set_secure(db: Session, key: str, value: str) -> None:
-    """Guarda un valor encriptado en la DB."""
+    """
+    Guarda un valor encriptado en la DB.
+
+    FASE 2 — Fix 2.2: flush en vez de commit para respetar Unit of Work.
+    El caller (router) es dueño del commit, así múltiples set_secure()
+    seguidos son atómicos (todo o nada).
+    """
     encrypted = encrypt_value(value)
     row = db.query(SecureConfig).filter(SecureConfig.key == key).first()
     if row:
@@ -33,7 +39,7 @@ def set_secure(db: Session, key: str, value: str) -> None:
     else:
         row = SecureConfig(key=key, value_encrypted=encrypted)
         db.add(row)
-    db.commit()
+    db.flush()
 
 
 def get_secure(db: Session, key: str) -> Optional[str]:
@@ -60,9 +66,13 @@ def get_secure(db: Session, key: str) -> Optional[str]:
 
 
 def delete_secure(db: Session, key: str) -> None:
-    """Elimina un valor de la DB."""
+    """
+    Elimina un valor de la DB.
+
+    FASE 2 — Fix 2.2: flush en vez de commit (misma razón que set_secure).
+    """
     db.query(SecureConfig).filter(SecureConfig.key == key).delete()
-    db.commit()
+    db.flush()
 
 
 def get_all_keys(db: Session) -> list[str]:

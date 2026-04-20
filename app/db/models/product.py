@@ -25,11 +25,11 @@ class Product(Base):
     tax_rate = Column(Numeric(5, 2), nullable=True)
 
     # 🏷️ Categoría (RELACIÓN REAL)
-    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True)
+    category_id = Column(Integer, ForeignKey("categories.id"), nullable=True, index=True)  # FASE 3
     category = relationship("Category", back_populates="products")
 
     # 🚚 Proveedor principal (legacy 1-a-1, se mantiene por compatibilidad)
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True, index=True)  # FASE 3
     supplier = relationship("Supplier", back_populates="products")
 
     # 🚚 Proveedores múltiples (relación M2M vía supplier_products)
