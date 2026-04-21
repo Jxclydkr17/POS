@@ -103,11 +103,15 @@ def log_inventory_movement(
     El stock_after se calcula automáticamente según el tipo de movimiento.
     No hace commit — lo maneja el flujo principal.
     📏 quantity acepta int, float o Decimal (soporta fracciones para kg/m/L).
+
+    Tipos que RESTAN stock: venta, devolucion_proveedor
+    Tipos que SUMAN stock:  entrada, devolucion (cliente), ajuste, anulacion
     """
-    if type in (MovementType.venta,):
+    # Movimientos que sacan producto del inventario
+    if type in (MovementType.venta, MovementType.devolucion_proveedor):
         stock_after = product.stock - quantity
     else:
-        # entrada, devolucion, ajuste → suma
+        # entrada, devolucion (cliente), ajuste, anulacion → suma
         stock_after = product.stock + quantity
 
     movement = InventoryMovement(

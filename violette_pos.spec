@@ -10,8 +10,12 @@ RESULTADO:
 
 NOTAS:
     - Incluye XSD schemas, assets UI, .env template
+    - Incluye economic_activities.csv (catálogo Hacienda CR)
     - PySide6 se incluye automáticamente
     - El .exe busca .env en su propio directorio
+
+AUDITORÍA FIX 1.2: Agregado economic_activities.csv al bundle para
+que seed_db pueda importar las actividades económicas en el .exe.
 """
 
 import os
@@ -97,6 +101,9 @@ datas = [
 
     # Template de configuración
     ('.env.example', '.'),
+
+    # Catálogo de actividades económicas (Hacienda CR)
+    ('economic_activities.csv', '.'),
 ]
 
 # Agregar .env si existe (para desarrollo)

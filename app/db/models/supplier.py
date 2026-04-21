@@ -16,14 +16,16 @@ class Supplier(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Relación con productos (legacy 1-a-1, se mantiene por compatibilidad)
-    products = relationship("Product", back_populates="supplier", lazy="selectin")
+    # AUDITORÍA FIX 3.1: lazy="select" (default) evita cargar todos los
+    # productos de cada proveedor en el listado /suppliers/.
+    products = relationship("Product", back_populates="supplier", lazy="select")
 
     # Relación M2M con productos vía supplier_products
     supplier_products = relationship(
         "SupplierProduct",
         back_populates="supplier",
         cascade="all, delete-orphan",
-        lazy="selectin",
+        lazy="select",
     )
 
     is_active = Column(Boolean, nullable=False, default=True, server_default="1")

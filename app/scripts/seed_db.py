@@ -6,6 +6,7 @@ Crea los datos mínimos para que el POS funcione en una instalación nueva:
   2. Métodos de pago (catálogo oficial Hacienda)
   3. Fila de configuración (settings) vacía
   4. Perfil emisor placeholder
+  5. Actividades económicas (catálogo Hacienda, 203 registros)
 
 USO:
     python -m app.scripts.seed_db          → Ejecutar seed
@@ -15,6 +16,9 @@ SEGURIDAD:
     - El admin se crea con contraseña "admin123" que DEBE cambiarse
       en el primer inicio de sesión.
     - El script es IDEMPOTENTE: si los datos ya existen no los duplica.
+
+AUDITORÍA FIX 1.2: Agregada llamada a import_economic_activities para
+que la tabla economic_activities no quede vacía en instalación nueva.
 """
 
 import sys
@@ -140,6 +144,12 @@ def seed_issuer_profile(db: Session) -> None:
     print("     ⚠  Configure los datos reales desde Configuración > Emisor.")
 
 
+def seed_economic_activities(db: Session) -> None:
+    """Importa las actividades económicas de Hacienda desde el CSV."""
+    from app.scripts.import_economic_activities import run as import_activities
+    import_activities(db=db)
+
+
 def run(force: bool = False) -> None:
     """Ejecuta todos los seeds."""
     print("\n🌱 Violette POS — Seed de datos iniciales\n" + "─" * 45)
@@ -150,6 +160,7 @@ def run(force: bool = False) -> None:
         seed_payment_methods(db)
         seed_settings(db)
         seed_issuer_profile(db)
+        seed_economic_activities(db)
         print("\n✅ Seed completado.\n")
     except Exception as e:
         db.rollback()

@@ -7,11 +7,12 @@ import enum
 
 
 class MovementType(str, enum.Enum):
-    venta      = "venta"
-    devolucion = "devolucion"
-    entrada    = "entrada"
-    ajuste     = "ajuste"
-    anulacion  = "anulacion"       
+    venta                = "venta"
+    devolucion           = "devolucion"            # cliente devuelve → suma stock
+    devolucion_proveedor = "devolucion_proveedor"  # devuelve a proveedor → resta stock
+    entrada              = "entrada"
+    ajuste               = "ajuste"
+    anulacion            = "anulacion"
 
 
 class InventoryMovement(Base):

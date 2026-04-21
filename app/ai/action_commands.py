@@ -18,6 +18,8 @@ from typing import Any, Optional
 
 from sqlalchemy.orm import Session
 
+from app.utils.dt import today_cr
+
 from app.ai.fuzzy import normalize_text, fix_typos, keyword_in_text, any_keyword_in_text
 
 
@@ -238,7 +240,7 @@ def register_expense(db: Session, amount: float, description: str,
             "description": description or "Gasto registrado desde chat",
             "amount": amount,
             "payment_method": payment_method,
-            "date": date.today().strftime("%Y-%m-%d"),
+            "date": today_cr().strftime("%Y-%m-%d"),
         }
 
         new_expense = add_expense_service(expense_data, db)

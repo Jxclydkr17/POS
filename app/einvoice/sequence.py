@@ -6,6 +6,10 @@ con SQLite (standalone .exe) y MySQL.
 
 Antes usaba SQL crudo con ON DUPLICATE KEY UPDATE (MySQL-only)
 y SELECT ... FOR UPDATE (no soportado en SQLite).
+
+AUDITORÍA FIX 1.1: Agregado bloqueo pesimista (lock_for_update) en
+next_sequence_number() para evitar race condition de consecutivos
+duplicados cuando dos cajeros facturan simultáneamente.
 """
 from __future__ import annotations
 
@@ -14,6 +18,7 @@ import random
 from sqlalchemy.orm import Session
 from app.db.models.document_sequence import DocumentSequence
 from app.utils.dt import now_cr, utcnow
+from app.utils.db_compat import lock_for_update
 
 
 def _digits_only(s: str) -> str:
@@ -66,23 +71,28 @@ def build_clave(issuer_id_number: str, consecutivo: str, dt: datetime | None = N
 
 def next_sequence_number(db: Session, branch_code: str, terminal_code: str, document_type: str) -> int:
     """
-    Incremento seguro usando SQLAlchemy ORM.
+    Incremento seguro usando SQLAlchemy ORM + bloqueo pesimista.
     Compatible con SQLite y MySQL.
+
+    En MySQL: aplica SELECT ... FOR UPDATE para evitar que dos cajeros
+    lean el mismo consecutivo simultáneamente.
+    En SQLite: el bloqueo es no-op (SQLite serializa escrituras a nivel
+    de archivo, así que no hay race condition real).
 
     Guarda secuencia por (branch_code, terminal_code, document_type).
     """
     doc = normalize_document_type(document_type)
 
-    # Buscar fila existente
-    seq = (
+    # Buscar fila existente CON bloqueo pesimista
+    # lock_for_update() aplica WITH FOR UPDATE en MySQL, no-op en SQLite
+    seq = lock_for_update(
         db.query(DocumentSequence)
         .filter(
             DocumentSequence.branch_code == branch_code,
             DocumentSequence.terminal_code == terminal_code,
             DocumentSequence.document_type == doc,
         )
-        .first()
-    )
+    ).first()
 
     if seq is None:
         # Crear nueva secuencia

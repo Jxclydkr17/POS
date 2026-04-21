@@ -7,6 +7,7 @@ from typing import List, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
+from app.utils.dt import today_cr
 from app.db.models.sale import Sale
 
 
@@ -62,7 +63,7 @@ def predict_sales_next_7_days_avg(db: Session) -> SalesPrediction | None:
     - forecast = avg_last_7 + (avg_last_7 - avg_prev_7)   (proyección lineal simple)
       (clamp a >= 0)
     """
-    today = date.today()
+    today = today_cr()
 
     # Ventana: [today-14, today-1]
     start_day = today - timedelta(days=14)

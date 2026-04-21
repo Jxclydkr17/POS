@@ -9,7 +9,7 @@ from sqlalchemy import or_
 
 # 🔹 Crear cliente
 def create_customer(db: Session, data: CustomerCreate):
-    payload = data.dict()
+    payload = data.model_dump()
     codes = payload.pop("economic_activity_codes", []) or []
     # last_purchase_date es campo cacheado, no se recibe por API
     payload.pop("last_purchase_date", None)
@@ -124,7 +124,7 @@ def get_customer(db: Session, customer_id: int):
 def update_customer(db: Session, customer_id: int, data: CustomerUpdate):
     customer = get_customer(db, customer_id)
 
-    updated_data = data.dict(exclude_unset=True)
+    updated_data = data.model_dump(exclude_unset=True)
     codes = updated_data.pop("economic_activity_codes", None)
     # last_purchase_date es campo cacheado, no se recibe por API
     updated_data.pop("last_purchase_date", None)

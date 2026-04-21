@@ -19,10 +19,12 @@ API_BASE = f"{BASE_URL}/products"
 
 # ── Colores por tipo de movimiento ──────────────────────────
 MOVEMENT_STYLES = {
-    "entrada":    {"icon": "📥", "label": "Entrada",    "bg": "#1E3A2F", "fg": "#4ADE80"},
-    "venta":      {"icon": "💸", "label": "Venta",      "bg": "#3A1E1E", "fg": "#F87171"},
-    "ajuste":     {"icon": "🔧", "label": "Ajuste",     "bg": "#2A2A1A", "fg": "#FACC15"},
-    "devolucion": {"icon": "↩️", "label": "Devolución", "bg": "#1E2A3A", "fg": "#60A5FA"},
+    "entrada":              {"icon": "📥", "label": "Entrada",    "bg": "#1E3A2F", "fg": "#4ADE80"},
+    "venta":                {"icon": "💸", "label": "Venta",      "bg": "#3A1E1E", "fg": "#F87171"},
+    "ajuste":               {"icon": "🔧", "label": "Ajuste",     "bg": "#2A2A1A", "fg": "#FACC15"},
+    "devolucion":           {"icon": "↩️", "label": "Devolución", "bg": "#1E2A3A", "fg": "#60A5FA"},
+    "devolucion_proveedor": {"icon": "📤", "label": "Dev. Proveedor", "bg": "#2A1E3A", "fg": "#C084FC"},
+    "anulacion":            {"icon": "🚫", "label": "Anulación",  "bg": "#3A2A1E", "fg": "#FB923C"},
 }
 
 COL_DATE  = 0
@@ -265,6 +267,11 @@ class ProductMovementsDialog(QDialog):
 
     # ── Filtrado y render de tabla ────────────────────────────
 
+    # Tipos agrupados para filtrado (Dev. muestra ambas devoluciones)
+    _FILTER_GROUPS = {
+        "devolucion": {"devolucion", "devolucion_proveedor"},
+    }
+
     def _apply_filter(self, key: str):
         self._active_filter = key
 
@@ -276,10 +283,11 @@ class ProductMovementsDialog(QDialog):
         ]:
             btn.setChecked(k == key)
 
-        filtered = (
-            self._all_movements if key == "todos"
-            else [m for m in self._all_movements if m.get("tipo") == key]
-        )
+        if key == "todos":
+            filtered = self._all_movements
+        else:
+            filter_set = self._FILTER_GROUPS.get(key, {key})
+            filtered = [m for m in self._all_movements if m.get("tipo") in filter_set]
 
         self._render_table(filtered)
 

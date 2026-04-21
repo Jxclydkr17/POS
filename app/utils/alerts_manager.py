@@ -40,6 +40,6 @@ def check_sales_performance(parent):
             show_toast("📉 No hay ventas registradas aún.", success=False, parent=parent)
 
     except requests.HTTPError as e:
-        print(f"❌ Error revisando desempeño de ventas: {e}")
+        logger.error(f"Error revisando desempeño de ventas: {e}")
     except Exception as e:
-        print(f"⚠️ Error general revisando desempeño de ventas: {e}")
+        logger.warning(f"Error general revisando desempeño de ventas: {e}")

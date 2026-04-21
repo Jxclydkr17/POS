@@ -13,6 +13,7 @@ import re
 from datetime import date, timedelta
 from typing import Optional, Tuple
 
+from app.utils.dt import today_cr
 from app.ai.fuzzy import normalize_text
 
 
@@ -110,7 +111,7 @@ def _parse_relative_date(text: str) -> Optional[Tuple[date, date]]:
     - "anteayer"
     """
     t = normalize_text(text)
-    today = date.today()
+    today = today_cr()
 
     # "anteayer" / "antier"
     if re.search(r"\b(anteayer|antier)\b", t):
@@ -171,7 +172,7 @@ def _parse_specific_date(text: str) -> Optional[Tuple[date, date]]:
     - "el lunes" (el más reciente)
     """
     t = normalize_text(text)
-    today = date.today()
+    today = today_cr()
 
     # "DD de MONTH" o "DD MONTH"
     for month_name, month_num in _MONTH_NAMES.items():
@@ -252,7 +253,7 @@ def _parse_date_range(text: str) -> Optional[Tuple[date, date]]:
     - "entre el 5 y el 20"
     """
     t = normalize_text(text)
-    today = date.today()
+    today = today_cr()
 
     # "del DD al DD (de MONTH)"
     m = re.search(
@@ -331,7 +332,7 @@ def extract_date_range(text: str) -> Optional[Tuple[date, date]]:
 
 def period_to_range(period: str) -> Tuple[date, date]:
     """Convierte un periodo nombrado a (start, end)."""
-    today = date.today()
+    today = today_cr()
 
     if period == "today":
         return today, today

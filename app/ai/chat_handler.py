@@ -7,6 +7,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from datetime import date, timedelta
+from app.utils.dt import today_cr
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
@@ -1047,7 +1048,7 @@ def _sales_reports_intent_action(text_norm: str) -> dict | None:
         return None
 
     kind = (m.group(1) or "").lower()
-    today = date.today()
+    today = today_cr()
 
     if kind == "hoy":
         return {"type": "navigate", "module": "daily_report"}

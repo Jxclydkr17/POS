@@ -570,10 +570,10 @@ def add_credit_note(
                        f"(stock actual: {stock_before}).",
             )
 
-        # Movimiento de inventario tipo devolución (resta stock)
+        # Movimiento de inventario tipo devolución a proveedor (resta stock)
         movement = InventoryMovement(
             product_id=product.id,
-            type=MovementType.devolucion,
+            type=MovementType.devolucion_proveedor,
             quantity=data.quantity_returned,
             stock_before=stock_before,
             stock_after=stock_before - data.quantity_returned,

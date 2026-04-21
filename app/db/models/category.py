@@ -24,4 +24,7 @@ class Category(Base):
     )
 
     # Relación inversa
-    products = relationship("Product", back_populates="category", lazy="selectin")
+    # AUDITORÍA FIX 3.2: lazy="select" (default) evita cargar todos los
+    # productos de cada categoría al listar categorías.
+    # category_crud.py ya hace su propio count(Product.id) con query explícita.
+    products = relationship("Product", back_populates="category", lazy="select")
