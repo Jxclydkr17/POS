@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt, QSize, QTimer, QEvent
 from PySide6.QtGui import QDoubleValidator, QPixmap
 from PySide6.QtWidgets import QApplication
 
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call, api_request, run_async
 import copy
 import time
 
@@ -710,63 +710,68 @@ class SalesView(QWidget):
                 w.deleteLater()
 
     def load_products_page(self, reset=False):
-        """Carga una página de productos desde la API (lazy loading paginado)."""
+        """Carga una página de productos desde la API (lazy loading paginado, async)."""
         if self.is_loading_products:
             return
 
         if not reset and not self.has_more_products:
             return
 
-        try:
-            self.is_loading_products = True
+        self.is_loading_products = True
 
-            if reset:
-                self.reset_products_view()
+        if reset:
+            self.reset_products_view()
 
-            params = {
-                "skip": self.current_offset,
-                "limit": self.page_size,
-            }
+        params = {
+            "skip": self.current_offset,
+            "limit": self.page_size,
+        }
 
-            search_text = (self.search_input.text() or "").strip()
-            selected_category = self.category_combo.currentText()
+        search_text = (self.search_input.text() or "").strip()
+        selected_category = self.category_combo.currentText()
 
-            if search_text:
-                params["search"] = search_text
+        if search_text:
+            params["search"] = search_text
 
-            # ✅ Filtro de categoría en backend (antes era frontend)
-            if selected_category != "Todas las categorías":
-                cat_id = self._category_name_to_id.get(selected_category)
-                if cat_id is not None:
-                    params["category_id"] = cat_id
+        # ✅ Filtro de categoría en backend (antes era frontend)
+        if selected_category != "Todas las categorías":
+            cat_id = self._category_name_to_id.get(selected_category)
+            if cat_id is not None:
+                params["category_id"] = cat_id
 
-            resp = api_request("get",
-                PRODUCTS_URL,
-                headers=self._auth_headers(),
-                params=params,
-                timeout=10
-            )
+        # Guardar contexto para el callback (evita lambdas en signals cross-thread)
+        self._pending_products_reset = reset
 
-            if resp.status_code != 200:
-                show_toast(f"Error al cargar productos ({resp.status_code})", success=False, parent=self)
-                return
+        api_call("get",
+            PRODUCTS_URL,
+            headers=self._auth_headers(),
+            params=params,
+            timeout=10,
+            on_success=self._on_products_loaded,
+            on_error=self._on_products_error,
+            on_finished=self._on_products_finished,
+        )
 
-            json_data = resp.json()
-            new_products = json_data.get("data", [])
+    def _on_products_loaded(self, json_data):
+        """Callback: procesa productos recibidos del servidor."""
+        reset = self._pending_products_reset
+        new_products = json_data.get("data", [])
+        self.products.extend(new_products)
+        # ✅ El backend ya aplicó search y category_id — mostramos directo
+        self.build_cards_from_products(new_products, append=not reset)
 
-            self.products.extend(new_products)
-            # ✅ El backend ya aplicó search y category_id — mostramos directo
-            self.build_cards_from_products(new_products, append=not reset)
+        if len(new_products) < self.page_size:
+            self.has_more_products = False
+        else:
+            self.current_offset += self.page_size
 
-            if len(json_data.get("data", [])) < self.page_size:
-                self.has_more_products = False
-            else:
-                self.current_offset += self.page_size
+    def _on_products_error(self, msg):
+        """Callback: error al cargar productos."""
+        show_toast(f"Error cargando productos: {msg}", success=False, parent=self)
 
-        except Exception as e:
-            show_toast(f"Error cargando productos: {e}", success=False, parent=self)
-        finally:
-            self.is_loading_products = False
+    def _on_products_finished(self):
+        """Callback: siempre se ejecuta al terminar la carga de productos."""
+        self.is_loading_products = False
 
     def build_cards_from_products(self, products, append=False):
         """
@@ -839,56 +844,53 @@ class SalesView(QWidget):
 
     # PASO 12 — Cargar categorías desde su endpoint propio
     def load_categories(self):
-        """Llena el combo de categorías desde /categories/ (no depende de productos cargados)."""
-        try:
-            resp = api_request("get",
-                CATEGORIES_URL,
-                headers=self._auth_headers(),
-                timeout=10
-            )
-            if resp.status_code != 200:
-                show_toast(f"Error al cargar categorías ({resp.status_code})", success=False, parent=self)
-                return
+        """Llena el combo de categorías desde /categories/ (async, no bloquea UI)."""
+        api_call("get",
+            CATEGORIES_URL,
+            headers=self._auth_headers(),
+            timeout=10,
+            on_success=self._on_categories_loaded,
+            on_error=self._on_categories_error,
+        )
 
-            json_data = resp.json()
-            cats = json_data.get("data", [])
+    def _on_categories_error(self, msg):
+        show_toast(f"Error cargando categorías: {msg}", success=False, parent=self)
 
-            self.categories = set()
-            self._category_name_to_id = {}
-            for c in cats:
-                name = (c.get("name") or "").strip()
-                is_active = c.get("is_active", True)
-                if name and name != "-" and is_active:
-                    self.categories.add(name)
-                    cat_id = c.get("id")
-                    if cat_id is not None:
-                        self._category_name_to_id[name] = cat_id
+    def _on_categories_loaded(self, json_data):
+        """Callback: procesa categorías recibidas del servidor."""
+        cats = json_data.get("data", [])
 
-            self._reload_category_combo()
+        self.categories = set()
+        self._category_name_to_id = {}
+        for c in cats:
+            name = (c.get("name") or "").strip()
+            is_active = c.get("is_active", True)
+            if name and name != "-" and is_active:
+                self.categories.add(name)
+                cat_id = c.get("id")
+                if cat_id is not None:
+                    self._category_name_to_id[name] = cat_id
 
-        except Exception as e:
-            show_toast(f"Error cargando categorías: {e}", success=False, parent=self)
+        self._reload_category_combo()
 
     def load_favorite_products(self):
-        """Carga productos rápidos basados en los más vendidos."""
-        try:
-            resp = api_request("get",
-                FAVORITES_URL,
-                headers=self._auth_headers(),
-                params={"limit": 6, "days": 30},
-                timeout=10
-            )
+        """Carga productos rápidos basados en los más vendidos (async, no bloquea UI)."""
+        api_call("get",
+            FAVORITES_URL,
+            headers=self._auth_headers(),
+            params={"limit": 6, "days": 30},
+            timeout=10,
+            on_success=self._on_favorites_loaded,
+            on_error=self._on_favorites_error,
+        )
 
-            if resp.status_code != 200:
-                show_toast(f"Error al cargar productos rápidos ({resp.status_code})", success=False, parent=self)
-                return
+    def _on_favorites_error(self, msg):
+        show_toast(f"Error cargando productos rápidos: {msg}", success=False, parent=self)
 
-            json_data = resp.json()
-            self.favorite_products = json_data.get("data", [])
-            self.render_favorite_products()
-
-        except Exception as e:
-            show_toast(f"Error cargando productos rápidos: {e}", success=False, parent=self)
+    def _on_favorites_loaded(self, json_data):
+        """Callback: procesa productos favoritos recibidos del servidor."""
+        self.favorite_products = json_data.get("data", [])
+        self.render_favorite_products()
 
     def render_favorite_products(self):
         """Renderiza botones rápidos de productos favoritos."""
@@ -944,98 +946,102 @@ class SalesView(QWidget):
         self.add_to_cart_from_card(product, quantity=1)
 
     def load_customers(self):
-        """Carga clientes para el combo de cliente."""
+        """Carga clientes para el combo de cliente (async, no bloquea UI)."""
+        # ✅ Preservar selección actual (si venimos del chat / navegación)
+        self._pending_customer_prev_id = getattr(self, "selected_customer_id", None)
+        self._pending_customer_prev_text = ""
         try:
-            # ✅ Preservar selección actual (si venimos del chat / navegación)
-            prev_id = getattr(self, "selected_customer_id", None)
-            prev_text = ""
+            self._pending_customer_prev_text = (self.customer_search.text() or "").strip()
+        except Exception:
+            self._pending_customer_prev_text = ""
+
+        api_call("get", CUSTOMERS_URL,
+            headers=self._auth_headers(),
+            timeout=10,
+            on_success=self._on_customers_loaded,
+            on_error=self._on_customers_error,
+        )
+
+    def _on_customers_error(self, msg):
+        show_toast(f"Error cargando clientes: {msg}", success=False, parent=self)
+
+    def _on_customers_loaded(self, json_data):
+        """Callback: procesa clientes recibidos del servidor."""
+        prev_id = self._pending_customer_prev_id
+        prev_text = self._pending_customer_prev_text
+        self.customers = json_data.get("data", [])
+
+        # Buscar Cliente General
+        general = next(
+            (c for c in self.customers if "general" in (c.get("name", "").lower())),
+            None
+        )
+        self.general_customer_id = general["id"] if general else None
+
+        # Mapa nombre -> id (y también una lista para completer)
+        self.customer_name_to_id = {}
+        names = []
+
+        for c in self.customers:
+            name = c.get("name", "Sin nombre").strip()
+            cid = c.get("id")
+            if not cid:
+                continue
+            self.customer_name_to_id[name] = cid
+            names.append(name)
+
+        # Configurar completer
+        model = QStringListModel(sorted(names))
+        self.customer_completer.setModel(model)
+
+        # -----------------------------------------
+        # ✅ Restaurar selección (NO limpiar al recargar)
+        # -----------------------------------------
+        restored_id = None
+
+        # 1) Intentar por ID anterior
+        if prev_id is not None:
             try:
-                prev_text = (self.customer_search.text() or "").strip()
+                prev_id_int = int(prev_id)
             except Exception:
-                prev_text = ""
+                prev_id_int = None
+            if prev_id_int is not None and any(int(c.get("id") or 0) == prev_id_int for c in self.customers):
+                restored_id = prev_id_int
 
-            resp = api_request("get", CUSTOMERS_URL, headers=self._auth_headers(), timeout=10)
-            if resp.status_code != 200:
-                show_toast(f"Error al cargar clientes ({resp.status_code})", success=False, parent=self)
-                return
+        # 2) Fallback por texto anterior
+        if restored_id is None and prev_text:
+            prev_text_l = prev_text.lower()
+            for cname, cid in self.customer_name_to_id.items():
+                if (cname or "").lower() == prev_text_l:
+                    restored_id = cid
+                    prev_text = cname  # normalizar a nombre exacto
+                    break
 
-            json_data = resp.json()
-            self.customers = json_data.get("data", [])
-
-            # Buscar Cliente General
-            general = next(
-                (c for c in self.customers if "general" in (c.get("name", "").lower())),
-                None
-            )
-            self.general_customer_id = general["id"] if general else None
-
-            # Mapa nombre -> id (y también una lista para completer)
-            self.customer_name_to_id = {}
-            names = []
-
-            for c in self.customers:
-                name = c.get("name", "Sin nombre").strip()
-                cid = c.get("id")
-                if not cid:
-                    continue
-                self.customer_name_to_id[name] = cid
-                names.append(name)
-
-            # Configurar completer
-            model = QStringListModel(sorted(names))
-            self.customer_completer.setModel(model)
-
-            # -----------------------------------------
-            # ✅ Restaurar selección (NO limpiar al recargar)
-            # -----------------------------------------
-            restored_id = None
-
-            # 1) Intentar por ID anterior
-            if prev_id is not None:
+        # 3) Aplicar restauración
+        if restored_id is not None:
+            self.selected_customer_id = restored_id
+            if hasattr(self, "customer_search"):
                 try:
-                    prev_id_int = int(prev_id)
+                    # Si no tenemos texto (por ID), resolver nombre por ID
+                    if not prev_text:
+                        for cname, cid in self.customer_name_to_id.items():
+                            if int(cid) == int(restored_id):
+                                prev_text = cname
+                                break
+                    self.customer_search.setText(prev_text)
                 except Exception:
-                    prev_id_int = None
-                if prev_id_int is not None and any(int(c.get("id") or 0) == prev_id_int for c in self.customers):
-                    restored_id = prev_id_int
+                    pass
+        else:
+            # Si no hay selección válida, mantener vacío
+            self.selected_customer_id = None
+            if hasattr(self, "customer_search"):
+                try:
+                    self.customer_search.clear()
+                except Exception:
+                    pass
 
-            # 2) Fallback por texto anterior
-            if restored_id is None and prev_text:
-                prev_text_l = prev_text.lower()
-                for cname, cid in self.customer_name_to_id.items():
-                    if (cname or "").lower() == prev_text_l:
-                        restored_id = cid
-                        prev_text = cname  # normalizar a nombre exacto
-                        break
-
-            # 3) Aplicar restauración
-            if restored_id is not None:
-                self.selected_customer_id = restored_id
-                if hasattr(self, "customer_search"):
-                    try:
-                        # Si no tenemos texto (por ID), resolver nombre por ID
-                        if not prev_text:
-                            for cname, cid in self.customer_name_to_id.items():
-                                if int(cid) == int(restored_id):
-                                    prev_text = cname
-                                    break
-                        self.customer_search.setText(prev_text)
-                    except Exception:
-                        pass
-            else:
-                # Si no hay selección válida, mantener vacío
-                self.selected_customer_id = None
-                if hasattr(self, "customer_search"):
-                    try:
-                        self.customer_search.clear()
-                    except Exception:
-                        pass
-
-            # Actualizar info box
-            self.update_customer_info_box()
-
-        except Exception as e:
-            show_toast(f"Error cargando clientes: {e}", success=False, parent=self)            
+        # Actualizar info box
+        self.update_customer_info_box()            
             
     def _parse_quick_quantity_input(self, text: str):
         """
@@ -1073,7 +1079,7 @@ class SalesView(QWidget):
         5*cemento
         3*7501234567890
 
-        Primero intenta búsqueda exacta en backend por barcode/código,
+        Primero intenta búsqueda exacta en backend por barcode/código (async),
         luego cae en productos cargados en memoria como fallback.
         """
         raw_input = self.search_input.text().strip()
@@ -1082,47 +1088,74 @@ class SalesView(QWidget):
         if not barcode:
             return
 
-        # ------------------------------------------------------------------
-        # 1) Búsqueda directa en el backend (barcode o código exacto)
-        # ------------------------------------------------------------------
-        product_found = None
+        # Guardar contexto para los callbacks (evita lambdas en signals cross-thread)
+        self._pending_barcode = barcode
+        self._pending_barcode_qty = quantity
+        self._pending_barcode_category = self.category_combo.currentText()
+
+        # Lanzar búsqueda backend en hilo separado
+        run_async(
+            self._search_barcode_backend, barcode,
+            on_success=self._on_barcode_success,
+            on_error=self._on_barcode_error,
+        )
+
+    def _on_barcode_success(self, product):
+        """Callback: resultado exitoso de búsqueda por barcode."""
+        self._on_barcode_result(product, self._pending_barcode,
+                                self._pending_barcode_qty,
+                                self._pending_barcode_category)
+
+    def _on_barcode_error(self, msg):
+        """Callback: error en búsqueda por barcode, intentar fallback local."""
+        self._on_barcode_result(None, self._pending_barcode,
+                                self._pending_barcode_qty,
+                                self._pending_barcode_category)
+
+    def _search_barcode_backend(self, barcode):
+        """Búsqueda de producto por barcode/código en el backend (ejecuta en hilo)."""
+        import requests as _req
+
+        headers = self._auth_headers()
+        timeout = (5, 5)
 
         # Intentar endpoint /products/barcode/{barcode}
         try:
-            resp = api_request("get",
+            resp = _req.get(
                 f"{API_BASE_URL}/products/barcode/{barcode}",
-                headers=self._auth_headers(),
-                timeout=5
+                headers=headers, timeout=timeout
             )
             if resp.status_code == 200:
                 data = resp.json().get("data")
                 if data:
-                    product_found = data
+                    return data
         except Exception:
             pass
 
-        # Si el endpoint de barcode no devolvió nada, intentar búsqueda por código exacto
-        if not product_found:
-            try:
-                resp = api_request("get",
-                    PRODUCTS_URL,
-                    headers=self._auth_headers(),
-                    params={"search": barcode, "limit": 5, "skip": 0},
-                    timeout=5
-                )
-                if resp.status_code == 200:
-                    results = resp.json().get("data", [])
-                    # Coincidencia exacta por código o barcode
-                    exact = [
-                        p for p in results
-                        if (p.get("code") or "").lower() == barcode.lower()
-                        or (p.get("barcode") or "").lower() == barcode.lower()
-                    ]
-                    if len(exact) == 1:
-                        product_found = exact[0]
-            except Exception:
-                pass
+        # Fallback: búsqueda por código exacto
+        try:
+            resp = _req.get(
+                PRODUCTS_URL,
+                headers=headers,
+                params={"search": barcode, "limit": 5, "skip": 0},
+                timeout=timeout
+            )
+            if resp.status_code == 200:
+                results = resp.json().get("data", [])
+                exact = [
+                    p for p in results
+                    if (p.get("code") or "").lower() == barcode.lower()
+                    or (p.get("barcode") or "").lower() == barcode.lower()
+                ]
+                if len(exact) == 1:
+                    return exact[0]
+        except Exception:
+            pass
 
+        return None
+
+    def _on_barcode_result(self, product_found, barcode, quantity, selected_category):
+        """Callback: procesa resultado de búsqueda por barcode (hilo principal)."""
         if product_found:
             self.add_to_cart_from_card(product_found, quantity=quantity)
             self.search_input.clear()
@@ -1130,10 +1163,9 @@ class SalesView(QWidget):
             return
 
         # ------------------------------------------------------------------
-        # 2) Fallback: buscar en los productos ya cargados en memoria
+        # Fallback: buscar en los productos ya cargados en memoria
         # ------------------------------------------------------------------
         search_text = barcode.lower().strip()
-        selected_category = self.category_combo.currentText()
 
         filtered = []
         for p in self.products:
@@ -2430,33 +2462,36 @@ class SalesView(QWidget):
         return super().eventFilter(obj, event)
 
     def check_cash_session(self):
-        try:
-            resp = api_request("get",
-                f"{API_BASE_URL}/cash/current",
-                headers=self._auth_headers(),
-                timeout=5
-            )
-            data = resp.json().get("data", {})
+        api_call("get",
+            f"{API_BASE_URL}/cash/current",
+            headers=self._auth_headers(),
+            timeout=5,
+            on_success=self._on_cash_session_checked,
+            on_error=self._on_cash_session_error,
+        )
 
-            if not data.get("is_open"):
-                self.cash_session_open = False
-                self._apply_focus_policy()
-                self.ask_open_cash()
-            else:
-                self.cash_session_open = True
-                self._apply_focus_policy()
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error de caja",
-                f"No se pudo verificar la caja:\n{e}"
-            )
-
+    def _on_cash_session_checked(self, json_data):
+        """Callback: procesa estado de sesión de caja."""
+        data = json_data.get("data", {})
+        if not data.get("is_open"):
             self.cash_session_open = False
-            self.set_cash_buttons_enabled(False)
             self._apply_focus_policy()
-            self.setDisabled(True)
+            self.ask_open_cash()
+        else:
+            self.cash_session_open = True
+            self._apply_focus_policy()
+
+    def _on_cash_session_error(self, msg):
+        """Callback: error al verificar sesión de caja."""
+        QMessageBox.critical(
+            self,
+            "Error de caja",
+            f"No se pudo verificar la caja:\n{msg}"
+        )
+        self.cash_session_open = False
+        self.set_cash_buttons_enabled(False)
+        self._apply_focus_policy()
+        self.setDisabled(True)
 
             
     def ask_open_cash(self):
@@ -2595,26 +2630,25 @@ class SalesView(QWidget):
         self.btn_cash_out.setEnabled(enabled)
 
     def open_close_cash_dialog(self):
+        api_call("get",
+            f"{API_BASE_URL}/cash/report/today",
+            headers=self._auth_headers(),
+            timeout=5,
+            on_success=self._on_cash_report_loaded,
+            on_error=self._on_cash_report_error,
+        )
+
+    def _on_cash_report_error(self, msg):
+        QMessageBox.critical(self, "Error", f"No se pudo obtener el reporte:\n{msg}")
+
+    def _on_cash_report_loaded(self, json_data):
+        """Callback: construye el diálogo de cierre de caja con los datos del reporte."""
         from PySide6.QtWidgets import (
             QDialog, QVBoxLayout, QLabel, QLineEdit,
             QPushButton, QMessageBox, QGridLayout
         )
 
-        try:
-            resp = api_request("get",
-                f"{API_BASE_URL}/cash/report/today",
-                headers=self._auth_headers(),
-                timeout=5
-            )
-
-            if resp.status_code != 200:
-                raise Exception(resp.text)
-
-            data = resp.json()["data"]
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo obtener el reporte:\n{e}")
-            return
+        data = json_data["data"]
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Cierre de caja")

@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from datetime import datetime, date, timedelta
 from decimal import Decimal
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, TZ_CR
 
 from app.db.models.credit import Credit
 from app.db.models.credit_sale import CreditSale
@@ -183,7 +183,7 @@ def get_credit_info(
                 func.sum(case(
                     (
                         (Credit.type == "payment") &
-                        (Credit.created_at >= datetime.combine(first_of_month, datetime.min.time())),
+                        (Credit.created_at >= datetime.combine(first_of_month, datetime.min.time()).replace(tzinfo=TZ_CR)),
                         Credit.amount,
                     ),
                     else_=0,
@@ -237,14 +237,14 @@ def get_credit_info(
 
     if date_from:
         try:
-            dt_from = datetime.strptime(date_from, "%Y-%m-%d")
+            dt_from = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=TZ_CR)
             movements_query = movements_query.filter(Credit.created_at >= dt_from)
         except ValueError:
             pass
     if date_to:
         try:
             dt_to = datetime.strptime(date_to, "%Y-%m-%d")
-            dt_to = dt_to.replace(hour=23, minute=59, second=59)
+            dt_to = dt_to.replace(hour=23, minute=59, second=59, tzinfo=TZ_CR)
             movements_query = movements_query.filter(Credit.created_at <= dt_to)
         except ValueError:
             pass
@@ -379,7 +379,7 @@ def get_credit_info(
         # 👇 movimientos paginados CON sale_id
         "movements": {
             "items": movement_items,
-            "total": mov_skip + len(movements) + (1 if movements_has_more else 0),
+            "total_estimate": mov_skip + len(movements) + (1 if movements_has_more else 0),
             "has_more": movements_has_more,
         },
 
@@ -394,7 +394,7 @@ def get_credit_info(
                 }
                 for cs in credit_sales
             ],
-            "total": sales_skip + len(credit_sales) + (1 if credit_sales_has_more else 0),
+            "total_estimate": sales_skip + len(credit_sales) + (1 if credit_sales_has_more else 0),
             "has_more": credit_sales_has_more,
         }
     }

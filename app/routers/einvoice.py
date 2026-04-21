@@ -119,6 +119,19 @@ def check_status(einvoice_id: int, db: Session = Depends(get_db)):
 # no capturados, y sigue el mismo patrón que todos los demás endpoints.
 @router.post("/callback")
 async def hacienda_callback(request: Request, db: Session = Depends(get_db)):
+    """
+    Recibe notificaciones asíncronas de Hacienda sobre el estado de comprobantes.
+
+    ⚠️ LIMITACIÓN DE SEGURIDAD:
+    Este endpoint no tiene autenticación ni valida el origen de la petición.
+    Actualmente es seguro porque la app corre en localhost (inaccesible desde
+    internet). Si en el futuro se despliega en un servidor público, se DEBE:
+      1. Validar que el request provenga de IPs de Hacienda, o
+      2. Verificar la firma digital del XML de respuesta, o
+      3. Proteger con un token secreto en la URL (webhook secret).
+    Sin esto, cualquiera podría enviar callbacks falsos marcando facturas
+    como "aceptadas" sin que Hacienda las haya procesado.
+    """
     from app.db.models.electronic_rep import ElectronicRep
     try:
         body = await request.json()
@@ -507,6 +520,6 @@ def full_einvoice_flow(einvoice_id: int, db: Session = Depends(get_db)):
         "pdf_path": pdf_path,
         "pdf_generated": pdf_path is not None,
         # Agregamos paréntesis aquí:
-        **(build_send_result.body.get("data", {}) if hasattr(build_send_result, 'body') else {}),
+        **(build_send_result.get("data", {}) or {}),
     }
 )

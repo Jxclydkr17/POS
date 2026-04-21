@@ -56,11 +56,15 @@ _file_handler.setFormatter(_log_formatter)
 _console_handler = logging.StreamHandler()
 _console_handler.setFormatter(_log_formatter)
 
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[_file_handler, _console_handler],
-)
+# ── FASE 4 — Fix 4.8: Logger nombrado en vez de basicConfig ──
+# basicConfig() modifica el root logger, lo que causa mensajes duplicados
+# cuando app/core/logger.py agrega sus propios handlers de consola.
+# Solución: configurar solo el logger "launcher" con sus propios handlers.
 logger = logging.getLogger("launcher")
+logger.setLevel(logging.INFO)
+logger.addHandler(_file_handler)
+logger.addHandler(_console_handler)
+logger.propagate = False  # evitar que suba al root logger
 
 # ── Puerto y host del backend ──
 BACKEND_HOST = "127.0.0.1"
@@ -353,7 +357,7 @@ def _start_ui():
 
     if session.is_logged_in():
         from ui.main_ui import MainWindow
-        window = MainWindow()
+        window = MainWindow(session.username)
         window.showMaximized()
     else:
         from ui.login_view import LoginWindow

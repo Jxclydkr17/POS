@@ -602,7 +602,7 @@ async def upload_purchase_pdf(
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Solo se permiten archivos PDF.")
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-    safe_name = f"purchase_{purchase_id}_{file.filename}"
+    safe_name = f"purchase_{purchase_id}_{os.path.basename(file.filename)}"
     dest_path = os.path.join(UPLOAD_DIR, safe_name)
     with open(dest_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)

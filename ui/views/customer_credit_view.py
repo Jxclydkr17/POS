@@ -271,7 +271,7 @@ class CustomerCreditView(QDialog):
 
         mov_data = data.get("movements", {})
         movements = mov_data.get("items", [])
-        mov_total = mov_data.get("total", 0)
+        mov_has_more = mov_data.get("has_more", False)
 
         self.table.setRowCount(len(movements))
         for row, m in enumerate(movements):
@@ -292,13 +292,11 @@ class CustomerCreditView(QDialog):
             self.table.setItem(row, 3, amount_item)
             self.table.setItem(row, 4, QTableWidgetItem(m.get("created_at", "")))
 
-        max_page = max(0, (mov_total - 1) // self._mov_page_size) if mov_total > 0 else 0
-        if self._mov_page > max_page: self._mov_page = max_page
         self.btn_mov_prev.setEnabled(self._mov_page > 0)
-        self.btn_mov_next.setEnabled(self._mov_page < max_page)
-        start = self._mov_page * self._mov_page_size + 1 if mov_total > 0 else 0
-        end = min(start + self._mov_page_size - 1, mov_total)
-        self.lbl_mov_page.setText(f"{start}–{end} de {mov_total}")
+        self.btn_mov_next.setEnabled(mov_has_more)
+        start = self._mov_page * self._mov_page_size + 1 if movements else 0
+        end = start + len(movements) - 1 if movements else 0
+        self.lbl_mov_page.setText(f"{start}–{end}")
 
         self.load_pending_docs()
 
