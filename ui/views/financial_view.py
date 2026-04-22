@@ -950,5 +950,5 @@ class FinancialView(QWidget):
             w.quit(); w.wait(2000)
         if self._chart_path and os.path.exists(self._chart_path):
             try: os.remove(self._chart_path)
-            except Exception: pass
+            except Exception: logging.debug("No se pudo eliminar chart temporal: %s", self._chart_path)
         super().closeEvent(event)

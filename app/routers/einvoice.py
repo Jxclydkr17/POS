@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -74,6 +74,55 @@ def get_einvoice_by_sale(sale_id: int, db: Session = Depends(get_db)):
         "status": einv.status, "clave": einv.clave, "consecutivo": einv.consecutivo,
         "tries": einv.tries, "last_error": einv.last_error, "hacienda_status": einv.hacienda_status,
     }
+
+
+# -- GET batch por múltiples ventas (Fix 1.2) --
+@router.post("/by-sales", dependencies=[Depends(get_current_user)])
+def get_einvoices_by_sales(payload: dict, db: Session = Depends(get_db)):
+    """
+    Recibe {"sale_ids": [1, 2, 3, ...]} y retorna un dict {sale_id: einvoice_data}
+    en UNA sola query. Reemplaza N requests individuales a /by-sale/{id}.
+    """
+    sale_ids = payload.get("sale_ids", [])
+    if not sale_ids or not isinstance(sale_ids, list):
+        return {}
+
+    # Limitar a 500 IDs máx para evitar queries gigantes
+    sale_ids = [int(sid) for sid in sale_ids[:500] if isinstance(sid, (int, float, str))]
+    if not sale_ids:
+        return {}
+
+    # Sub-query: para cada sale_id, tomar el einvoice con id más alto
+    from sqlalchemy import func as sa_func
+
+    subq = (
+        db.query(
+            ElectronicInvoice.sale_id,
+            sa_func.max(ElectronicInvoice.id).label("max_id"),
+        )
+        .filter(ElectronicInvoice.sale_id.in_(sale_ids))
+        .group_by(ElectronicInvoice.sale_id)
+        .subquery()
+    )
+
+    einvoices = (
+        db.query(ElectronicInvoice)
+        .join(subq, ElectronicInvoice.id == subq.c.max_id)
+        .all()
+    )
+
+    result = {}
+    for einv in einvoices:
+        result[einv.sale_id] = {
+            "id": einv.id, "sale_id": einv.sale_id,
+            "document_type": einv.document_type,
+            "status": einv.status, "clave": einv.clave,
+            "consecutivo": einv.consecutivo, "tries": einv.tries,
+            "last_error": einv.last_error,
+            "hacienda_status": einv.hacienda_status,
+        }
+
+    return result
 
 
 # -- SEND (Fase 3) --

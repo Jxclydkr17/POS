@@ -125,11 +125,25 @@ class MainWindow(QMainWindow):
         self.user_label = None
         self.menu_buttons = []
         
-        # Referencias a vistas (para evitar eliminación prematura)
+        # Referencias a vistas (cache para evitar recreación innecesaria)
         self.current_view = None
         self.sales_history_view = None
         self.sales_view = None
         self.dashboard_view = None
+        self._products_view = None
+        self._customers_view = None
+        self._expenses_view = None
+        self._financial_view = None
+        self._daily_report_view = None
+        self._suppliers_view = None
+        self._categories_view = None
+        self._purchases_view = None
+        self._settings_view = None
+        self._analytics_view = None
+        self._purchases_analytics_view = None
+        self._proformas_view = None
+        self._no_rotation_view = None
+        self._einvoice_view = None
         
         self.root_widget = None
         self.stacked = None
@@ -737,18 +751,31 @@ class MainWindow(QMainWindow):
     # CAMBIO DE VISTA - MEJORADO
     # ==========================================================
     def show_section(self, section):
-        """Método unificado para navegar entre secciones"""
+        """Método unificado para navegar entre secciones.
+        
+        Fix 2.1: Todas las vistas se cachean en la primera visita y se
+        reutilizan en visitas posteriores, llamando a su método de recarga
+        para refrescar datos sin reconstruir la UI completa.
+        """
         try:
             if section == "dashboard":
                 self._show_dashboard()
                 
             elif section == "productos":
                 from ui.views.products_view import ProductsView
-                self.set_view(ProductsView())
+                if self._products_view is None:
+                    self._products_view = ProductsView()
+                else:
+                    self._products_view.load_products()
+                self.set_view(self._products_view)
 
             elif section == "clientes":
                 from ui.views.customers_view import CustomersView
-                self.set_view(CustomersView())
+                if self._customers_view is None:
+                    self._customers_view = CustomersView()
+                else:
+                    self._customers_view.load_customers()
+                self.set_view(self._customers_view)
 
             elif section == "ventas":
                 from ui.views.sales_view import SalesView
@@ -768,52 +795,100 @@ class MainWindow(QMainWindow):
 
             elif section == "gastos":
                 from ui.views.expenses_view import ExpensesView
-                self.set_view(ExpensesView())
+                if self._expenses_view is None:
+                    self._expenses_view = ExpensesView()
+                else:
+                    self._expenses_view.load_expenses()
+                self.set_view(self._expenses_view)
 
             elif section == "financiero":
                 from ui.views.financial_view import FinancialView
-                self.set_view(FinancialView())
+                if self._financial_view is None:
+                    self._financial_view = FinancialView()
+                else:
+                    self._financial_view.load_data()
+                self.set_view(self._financial_view)
 
             elif section == "reporte_diario":
                 from ui.views.daily_report_view import DailyReportView
-                self.set_view(DailyReportView())
+                if self._daily_report_view is None:
+                    self._daily_report_view = DailyReportView()
+                else:
+                    self._daily_report_view.load_report()
+                self.set_view(self._daily_report_view)
 
             elif section == "proveedores":
                 from ui.views.suppliers_view import SuppliersView
-                self.set_view(SuppliersView(self))
+                if self._suppliers_view is None:
+                    self._suppliers_view = SuppliersView(self)
+                else:
+                    self._suppliers_view.load_suppliers()
+                self.set_view(self._suppliers_view)
 
             elif section == "categorias":
                 from ui.views.categories_view import CategoriesView
-                self.set_view(CategoriesView())
+                if self._categories_view is None:
+                    self._categories_view = CategoriesView()
+                else:
+                    self._categories_view.load_categories()
+                self.set_view(self._categories_view)
 
             elif section == "compras/facturas":
                 from ui.views.purchases_view import PurchasesView
-                self.set_view(PurchasesView())
+                if self._purchases_view is None:
+                    self._purchases_view = PurchasesView()
+                else:
+                    self._purchases_view.load_purchases()
+                self.set_view(self._purchases_view)
 
             elif section == "configuración":
                 from ui.views.settings_view import SettingsView
-                self.set_view(SettingsView(self))
+                if self._settings_view is None:
+                    self._settings_view = SettingsView(self)
+                else:
+                    self._settings_view._start_load()
+                self.set_view(self._settings_view)
 
             elif section == "analytics":
                 from ui.views.sales_analytics_view import SalesAnalyticsView
-                self.set_view(SalesAnalyticsView())
+                if self._analytics_view is None:
+                    self._analytics_view = SalesAnalyticsView()
+                else:
+                    self._analytics_view.refresh_all()
+                self.set_view(self._analytics_view)
 
             elif section == "purchases_analytics":
                 from ui.views.purchases_analytics_view import PurchasesAnalyticsView
-                self.set_view(PurchasesAnalyticsView())
-
+                if self._purchases_analytics_view is None:
+                    self._purchases_analytics_view = PurchasesAnalyticsView()
+                else:
+                    self._purchases_analytics_view.refresh_all()
+                self.set_view(self._purchases_analytics_view)
 
             elif section == "proformas":
                 from ui.views.proformas_view import ProformasView
-                self.set_view(ProformasView())
+                if self._proformas_view is None:
+                    self._proformas_view = ProformasView()
+                else:
+                    self._proformas_view.load_proformas()
+                self.set_view(self._proformas_view)
 
             elif section == "sin_rotacion":
                 from ui.views.no_rotation_view import NoRotationView
-                self.set_view(NoRotationView())
+                if self._no_rotation_view is None:
+                    self._no_rotation_view = NoRotationView()
+                else:
+                    self._no_rotation_view._load_data()
+                self.set_view(self._no_rotation_view)
 
             elif section == "facturacion_electronica":
                 from ui.views.einvoice_monitor_view import EinvoiceMonitorView
-                self.set_view(EinvoiceMonitorView(self))
+                if self._einvoice_view is None:
+                    self._einvoice_view = EinvoiceMonitorView(self)
+                else:
+                    self._einvoice_view._load_all()
+                self.set_view(self._einvoice_view)
+
             # Emitir señal de cambio de vista
             self.view_changed.emit(section)
 

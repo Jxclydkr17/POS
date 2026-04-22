@@ -269,7 +269,9 @@ def list_proformas(
         query = query.filter(Proforma.status == status_filter.upper())
 
     if search:
-        search_term = f"%{search}%"
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
+        search_term = f"%{safe}%"
         query = query.outerjoin(Customer, Proforma.customer_id == Customer.id).filter(
             (Proforma.number.ilike(search_term)) |
             (Customer.name.ilike(search_term))

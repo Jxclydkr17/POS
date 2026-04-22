@@ -130,8 +130,10 @@ async def lifespan(app: FastAPI):
         from app.core.crypto import check_encrypted_keys_on_startup
         from app.db.database import SessionLocal
         _db = SessionLocal()
-        check_encrypted_keys_on_startup(_db)
-        _db.close()
+        try:
+            check_encrypted_keys_on_startup(_db)
+        finally:
+            _db.close()
     except Exception as e:
         logger.warning(f"No se pudo verificar API keys: {e}")
 

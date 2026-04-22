@@ -33,7 +33,8 @@ typing_extensions==4.15.0
 
 # ── Seguridad / Auth ──
 PyJWT==2.9.0
-passlib==1.7.4
+# Fix 3.3: passlib eliminado (abandonado, DeprecationWarning en Python 3.12+).
+# Se usa bcrypt directamente — compatible con hashes existentes ($2b$).
 bcrypt==4.0.1
 cryptography==44.0.0
 

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QSizePolicy,
     QDialog, QDialogButtonBox
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QThread, Signal, QObject
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush
 import requests
 import sys
@@ -174,6 +174,33 @@ class IconLineEdit(QFrame):
         return self.line_edit.text()
 
 
+# ── Fix 4.3: Worker para login asíncrono ─────────────────────────────
+class _LoginWorker(QObject):
+    """Ejecuta el POST de login en un hilo separado para no congelar la UI."""
+    success = Signal(dict)   # emite la respuesta JSON completa
+    failed = Signal(str)     # emite el mensaje de error
+
+    def __init__(self, url, username, password):
+        super().__init__()
+        self._url = url
+        self._username = username
+        self._password = password
+
+    def run(self):
+        try:
+            response = requests.post(
+                self._url,
+                data={"username": self._username, "password": self._password},
+                timeout=(5, 15),
+            )
+            if response.status_code == 200:
+                self.success.emit(response.json())
+            else:
+                self.failed.emit("Credenciales inválidas.")
+        except Exception as e:
+            self.failed.emit(f"No se pudo conectar con el servidor:\n{e}")
+
+
 # ── Ventana principal ────────────────────────────────────────────────
 class LoginWindow(QWidget):
     def __init__(self):
@@ -272,15 +299,22 @@ class LoginWindow(QWidget):
 
         root.addWidget(form_panel)
 
-    # ── FASE 3 — Fix 3.4: Setup inicial si no hay usuarios ────────
+    # ── FASE 3 — Fix 3.4 + Fix 4.3: Setup inicial (asíncrono) ──────
     def _check_needs_setup(self):
-        """Consulta al backend si la BD tiene cero usuarios."""
-        try:
-            resp = requests.get(f"{BASE_URL}/users/needs-setup", timeout=5)
-            if resp.status_code == 200 and resp.json().get("needs_setup"):
-                self._show_setup_dialog()
-        except Exception:
-            pass  # Si el backend no responde, mostrar login normal
+        """Consulta al backend si la BD tiene cero usuarios (sin bloquear UI)."""
+        import threading
+
+        def _check():
+            try:
+                resp = requests.get(f"{BASE_URL}/users/needs-setup", timeout=5)
+                if resp.status_code == 200 and resp.json().get("needs_setup"):
+                    # Volver al hilo principal de Qt para mostrar el diálogo
+                    from PySide6.QtCore import QTimer
+                    QTimer.singleShot(0, self._show_setup_dialog)
+            except Exception:
+                pass  # Si el backend no responde, mostrar login normal
+
+        threading.Thread(target=_check, daemon=True).start()
 
     def _show_setup_dialog(self):
         """Diálogo para crear el primer administrador cuando la BD está vacía."""
@@ -500,7 +534,12 @@ class LoginWindow(QWidget):
         dlg.exec()
         return result["changed"]
 
-    # ── Lógica de login ──────────────────────────────────────────
+    # ── Lógica de login (Fix 4.3: asíncrono con spinner) ────────
+    def _set_login_loading(self, loading: bool):
+        """Alterna el estado de carga del botón de login."""
+        self.login_button.setEnabled(not loading)
+        self.login_button.setText("  ⏳ Verificando...  " if loading else "  Ingresar  →")
+
     def _handle_login(self):
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
@@ -509,42 +548,58 @@ class LoginWindow(QWidget):
             QMessageBox.warning(self, "Campos vacíos", "Por favor ingrese usuario y contraseña.")
             return
 
-        try:
-            response = requests.post(
-                API_URL,
-                data={"username": username, "password": password},
-                timeout=(5, 15),
-            )
+        # Guardar password para posible cambio de contraseña obligatorio
+        self._pending_password = password
 
-            if response.status_code == 200:
-                data = response.json()
-                token = data.get("access_token")
+        self._set_login_loading(True)
 
-                payload = decode_token(token)
-                role = payload.get("role")
-                session.start_session(username, role, token)
+        worker = _LoginWorker(API_URL, username, password)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.success.connect(self._on_login_success)
+        worker.success.connect(thread.quit)
+        worker.failed.connect(self._on_login_failed)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
 
-                logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
+        # Mantener referencia para evitar GC prematuro
+        self._login_thread = thread
+        self._login_worker = worker
 
-                # ── FASE 6 — Fix 6.1: Forzar cambio de contraseña ──
-                if data.get("must_change_password"):
-                    changed = self._show_change_password_dialog(password)
-                    if not changed:
-                        session.end_session()
-                        return
+    def _on_login_success(self, data: dict):
+        """Callback en hilo principal tras login exitoso."""
+        self._set_login_loading(False)
 
-                QMessageBox.information(self, "Bienvenido", f"Acceso concedido, {username}.")
+        username = self.username_input.text().strip()
+        token = data.get("access_token")
 
-                from ui.main_ui import MainWindow
-                self.main_window = MainWindow(username)
-                self.main_window.show()
-                self.close()
+        payload = decode_token(token)
+        role = payload.get("role")
+        session.start_session(username, role, token)
 
-            else:
-                QMessageBox.critical(self, "Error", "Credenciales inválidas.")
+        logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo conectar con el servidor:\n{e}")
+        # ── FASE 6 — Fix 6.1: Forzar cambio de contraseña ──
+        if data.get("must_change_password"):
+            changed = self._show_change_password_dialog(self._pending_password)
+            if not changed:
+                session.end_session()
+                return
+
+        QMessageBox.information(self, "Bienvenido", f"Acceso concedido, {username}.")
+
+        from ui.main_ui import MainWindow
+        self.main_window = MainWindow(username)
+        self.main_window.show()
+        self.close()
+
+    def _on_login_failed(self, error_msg: str):
+        """Callback en hilo principal tras login fallido."""
+        self._set_login_loading(False)
+        QMessageBox.critical(self, "Error", error_msg)
 
 
 # ── Entrypoint ───────────────────────────────────────────────────────

@@ -58,25 +58,36 @@ class _LoadInvoicesWorker(QObject):
                 self.failed.emit(f"HTTP {r.status_code}")
                 return
 
-            sales = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+            # Fix 1.3: parsear JSON una sola vez
+            data = r.json()
+            sales = data if isinstance(data, list) else data.get("data", [])
 
-            # Para cada venta, obtener su einvoice
+            # Fix 1.2: obtener einvoices en UN solo request batch
+            sale_ids = [s.get("id") for s in sales[:200] if s.get("id")]
+            if not sale_ids:
+                self.finished.emit([])
+                return
+
+            # Construir mapa sale_id → sale para enriquecer después
+            sales_map = {s["id"]: s for s in sales[:200] if s.get("id")}
+
+            br = requests.post(
+                f"{API}/einvoices/by-sales",
+                json={"sale_ids": sale_ids},
+                headers=_headers(),
+                timeout=15,
+            )
+
             results = []
-            for sale in sales[:200]:
-                sale_id = sale.get("id")
-                if not sale_id:
-                    continue
-                try:
-                    er = requests.get(f"{API}/einvoices/by-sale/{sale_id}",
-                                     headers=_headers(), timeout=5)
-                    if er.status_code == 200:
-                        einv = er.json()
-                        einv["sale_total"] = sale.get("total", 0)
-                        einv["sale_customer"] = sale.get("customer", "")
-                        einv["sale_date"] = sale.get("created_at", "")
-                        results.append(einv)
-                except Exception:
-                    pass
+            if br.status_code == 200:
+                einvoices_map = br.json()  # {sale_id: einvoice_data}
+                for sid_str, einv in einvoices_map.items():
+                    sid = int(sid_str)
+                    sale = sales_map.get(sid, {})
+                    einv["sale_total"] = sale.get("total", 0)
+                    einv["sale_customer"] = sale.get("customer", "")
+                    einv["sale_date"] = sale.get("created_at", "")
+                    results.append(einv)
 
             self.finished.emit(results)
         except Exception as e:
@@ -161,6 +172,29 @@ class EinvoiceMonitorView(QWidget):
         self._threads = []
         self._init_ui()
         QTimer.singleShot(300, self._load_all)
+
+    # Fix 2.2: Limpieza de threads terminados para evitar memory leak
+    def _cleanup_finished_threads(self):
+        """Elimina de la lista los threads que ya terminaron."""
+        alive = []
+        for thread, worker in self._threads:
+            if thread.isRunning():
+                alive.append((thread, worker))
+            else:
+                worker.deleteLater()
+                thread.deleteLater()
+        self._threads = alive
+
+    def closeEvent(self, event):
+        """Detiene todos los threads pendientes al cerrar la vista."""
+        for thread, worker in self._threads:
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(2000)
+            worker.deleteLater()
+            thread.deleteLater()
+        self._threads.clear()
+        super().closeEvent(event)
 
     def _init_ui(self):
         root = QVBoxLayout(self)
@@ -405,6 +439,7 @@ class EinvoiceMonitorView(QWidget):
         self._load_invoices()
 
     def _load_summary(self):
+        self._cleanup_finished_threads()
         worker = _SummaryWorker()
         thread = QThread()
         worker.moveToThread(thread)
@@ -435,6 +470,7 @@ class EinvoiceMonitorView(QWidget):
             )
 
     def _load_invoices(self):
+        self._cleanup_finished_threads()
         status = self.cmb_status.currentText()
         worker = _LoadInvoicesWorker(status)
         thread = QThread()
@@ -532,6 +568,7 @@ class EinvoiceMonitorView(QWidget):
     # ════════════════════════════════════════════════════════
 
     def _run_action(self, url, msg_ok, msg_err, method="post"):
+        self._cleanup_finished_threads()
         self.detail_lbl.setText("⏳ Procesando...")
         worker = _ActionWorker(url, method)
         thread = QThread()
@@ -612,6 +649,7 @@ class EinvoiceMonitorView(QWidget):
     # ════════════════════════════════════════════════════════
 
     def _test_connection(self):
+        self._cleanup_finished_threads()
         self.lbl_connection_status.setText("⏳ Conectando...")
         self.lbl_connection_status.setStyleSheet("color: #7f8c8d;")
 
@@ -648,6 +686,7 @@ class EinvoiceMonitorView(QWidget):
         self.lbl_connection_status.setStyleSheet("color: #e74c3c;")
 
     def _check_cert(self):
+        self._cleanup_finished_threads()
         self.lbl_cert_status.setText("⏳ Verificando...")
         worker = _ActionWorker(f"{API}/einvoices/signing-status", method="get")
         thread = QThread()

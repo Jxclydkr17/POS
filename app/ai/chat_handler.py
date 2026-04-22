@@ -270,10 +270,13 @@ def _find_customer_best_match(db: Session, query: str):
     if not q:
         return None, 0
 
+    from app.utils.db_compat import escape_like
+
     # 1) ILIKE normal
+    safe_q = escape_like(q)
     rows = (
         db.query(Customer)
-        .filter(Customer.name.ilike(f"%{q}%"))
+        .filter(Customer.name.ilike(f"%{safe_q}%"))
         .order_by(Customer.name.asc())
         .limit(10)
         .all()
@@ -291,9 +294,10 @@ def _find_customer_best_match(db: Session, query: str):
     # Corregir typos y reintentar ILIKE
     q_fixed = fix_typos(q.lower())
     if q_fixed != q.lower():
+        safe_fixed = escape_like(q_fixed)
         rows = (
             db.query(Customer)
-            .filter(Customer.name.ilike(f"%{q_fixed}%"))
+            .filter(Customer.name.ilike(f"%{safe_fixed}%"))
             .order_by(Customer.name.asc())
             .limit(10)
             .all()
@@ -635,7 +639,9 @@ def search_products(db: "Session", query: str, limit: int = 8) -> List[Any]:
         return exact
 
     # 2) LIKE on name/code/barcode (case-insensitive)
-    like = f"%{q}%"
+    from app.utils.db_compat import escape_like
+    safe_q = escape_like(q)
+    like = f"%{safe_q}%"
     return (
         db.query(ProductModel)
         .filter(

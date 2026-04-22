@@ -7,13 +7,18 @@
 ;   1. Compilar el .exe con: build.bat
 ;   2. Compilar el instalador con:
 ;      "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+;      (build.bat lo hace automáticamente pasando la versión)
 ;
 ; RESULTADO:
-;   Output/ViolettePOS_Setup_1.0.0.exe
+;   Output/ViolettePOS_Setup_X.Y.Z.exe
 ; ============================================================
 
 #define MyAppName "Violette POS"
-#define MyAppVersion "1.0.0"
+; Fix 3.2: La versión se recibe desde build.bat via /DMyAppVersion=X.Y.Z
+; Si no se pasa, usa el fallback hardcodeado (solo para compilación manual).
+#ifndef MyAppVersion
+  #define MyAppVersion "1.0.0"
+#endif
 #define MyAppPublisher "Violette"
 #define MyAppExeName "ViolettePOS.exe"
 

@@ -3,9 +3,17 @@ REM ============================================================
 REM  Violette POS — Build Script
 REM  Compila el .exe con PyInstaller
 REM ============================================================
+
+REM Fix 3.2: Leer versión desde archivo VERSION (fuente única de verdad)
+set APP_VER=1.0.0
+if exist "VERSION" (
+    set /p APP_VER=<VERSION
+)
+
 echo.
 echo  ========================================
 echo   Violette POS - Compilacion .exe
+echo   Version: %APP_VER%
 echo  ========================================
 echo.
 
@@ -70,9 +78,10 @@ echo.
 echo  ========================================
 echo   Resultado: dist\ViolettePOS\
 echo   Ejecutable: dist\ViolettePOS\ViolettePOS.exe
+echo   Version: %APP_VER%
 echo  ========================================
 echo.
 echo  Para crear el instalador, ejecute:
-echo    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+echo    "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion=%APP_VER% installer.iss
 echo.
 pause

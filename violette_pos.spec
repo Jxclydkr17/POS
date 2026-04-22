@@ -55,7 +55,6 @@ hidden_imports = [
     'pydantic.deprecated.decorator',
 
     # Auth
-    'passlib.handlers.bcrypt',
     'bcrypt',
 
     # XML
@@ -104,6 +103,13 @@ datas = [
 
     # Catálogo de actividades económicas (Hacienda CR)
     ('economic_activities.csv', '.'),
+
+    # Fix 3.1: Alembic — migraciones de BD para actualizaciones de esquema
+    ('alembic', 'alembic'),
+    ('alembic.ini', '.'),
+
+    # Fix 3.2: Archivo de versión (fuente única de verdad)
+    ('VERSION', '.'),
 ]
 
 # Agregar .env si existe (para desarrollo)

@@ -275,7 +275,9 @@ def list_suppliers(
 
     # --- #8  Búsqueda multi-campo ---
     if search:
-        term = f"%{search}%"
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
+        term = f"%{safe}%"
         base_q = base_q.filter(
             or_(
                 Supplier.name.ilike(term),

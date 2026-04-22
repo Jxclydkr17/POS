@@ -13,6 +13,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from datetime import date, datetime
 from ui.session_manager import session
+import logging
 
 from ui.dialogs.add_customer_dialog import AddCustomerDialog
 from ui.dialogs.edit_customer_dialog import EditCustomerDialog
@@ -243,7 +244,8 @@ class CustomersView(QWidget):
                 try:
                     lp_date = datetime.fromisoformat(str(lp_raw).replace("Z", "")).date()
                     days_inactive = (date.today() - lp_date).days
-                except Exception: pass
+                except Exception:
+                    logging.debug("No se pudo parsear last_purchase_date: %s", lp_raw)
 
             if balance > 0 and days_inactive is not None and days_inactive > 60:
                 badges.append("⚠️")

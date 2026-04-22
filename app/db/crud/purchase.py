@@ -233,8 +233,9 @@ def get_purchases(
         q = q.filter(Purchase.supplier_id == supplier_id)
 
     if search:
-        like = f"%{search}%"
-        q = q.filter(Purchase.invoice_number.ilike(like))
+        from app.utils.db_compat import escape_like
+        safe = escape_like(search)
+        q = q.filter(Purchase.invoice_number.ilike(f"%{safe}%"))
 
     total = q.count()
 

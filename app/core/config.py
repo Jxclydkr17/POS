@@ -187,9 +187,18 @@ def is_sqlite() -> bool:
     return settings.db_engine == "sqlite"
 
 
-# ── FASE 5 — Fix 5.4: Versión centralizada ──────────────────
-# Fuente única de verdad. main.py y updater.py referencian esto.
-APP_VERSION = "1.0.0"
+# ── FASE 5 — Fix 5.4 + Fix 3.2: Versión centralizada ──────
+# Fuente única de verdad: archivo VERSION en la raíz del proyecto.
+# config.py, installer.iss y build.bat leen de este mismo archivo.
+def _read_version() -> str:
+    version_file = APP_DIR / "VERSION"
+    try:
+        return version_file.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, OSError):
+        logger.warning("Archivo VERSION no encontrado, usando fallback '1.0.0'")
+        return "1.0.0"
+
+APP_VERSION = _read_version()
 
 
 # ── FASE 5 — Fix 5.2: Directorio de datos externo ───────────

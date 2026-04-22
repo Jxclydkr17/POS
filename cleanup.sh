@@ -85,6 +85,14 @@ for old_dir in "app/pdfs" "app/backups"; do
     fi
 done
 
+# ── Fix 4.1: Archivos vacíos no utilizados ──
+for empty_file in "app/utils/xml_utils.py" "ui/views/inventory_view.py" "ui/views/reports_view.py"; do
+    if [ -f "$empty_file" ]; then
+        rm -f "$empty_file"
+        echo "✅ Eliminado archivo vacío no utilizado: $empty_file"
+    fi
+done
+
 # ── Asegurar estructura de directorios ──
 mkdir -p data/pdfs data/backups data/logs
 echo ""

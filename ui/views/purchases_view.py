@@ -12,6 +12,7 @@ from ui.session_manager import session
 from PySide6 import QtGui
 from PySide6.QtWidgets import QAbstractItemView
 from ui.components.toast_notifier import show_toast
+import logging
 
 from ui.api import BASE_URL
 
@@ -816,7 +817,7 @@ class AddPaymentDialog(QDialog):
             else:
                 err = res.text
                 try: err = res.json().get("detail", err)
-                except Exception: pass
+                except Exception: logging.debug("No se pudo parsear JSON de error en abono: %s", err)
                 QMessageBox.critical(self, "Error", str(err))
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))
@@ -886,7 +887,7 @@ class AddCreditNoteDialog(QDialog):
             else:
                 err = res.text
                 try: err = res.json().get("detail", err)
-                except Exception: pass
+                except Exception: logging.debug("No se pudo parsear JSON de error en NC: %s", err)
                 QMessageBox.critical(self, "Error", str(err))
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

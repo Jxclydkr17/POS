@@ -15,9 +15,9 @@ from app.utils.dt import utcnow
 
 import jwt
 
-# Configuración de encriptación
-from passlib.context import CryptContext
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Fix 3.3: bcrypt directo (passlib está abandonado y genera DeprecationWarning
+# en Python 3.12+). Los hashes existentes ($2b$) son 100% compatibles.
+import bcrypt as _bcrypt
 
 SECRET_KEY = settings.secret_key
 
@@ -26,13 +26,22 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 120  # 2 horas
 
 
 def hash_password(password: str) -> str:
-    """Genera el hash de una contraseña"""
-    return pwd_context.hash(password)
+    """Genera el hash bcrypt de una contraseña."""
+    return _bcrypt.hashpw(
+        password.encode("utf-8"), _bcrypt.gensalt()
+    ).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifica si la contraseña es correcta"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verifica si la contraseña es correcta contra el hash bcrypt."""
+    try:
+        return _bcrypt.checkpw(
+            plain_password.encode("utf-8"),
+            hashed_password.encode("utf-8"),
+        )
+    except (ValueError, TypeError):
+        # Hash corrupto o formato incompatible
+        return False
 
 
 def create_access_token(data: dict):
