@@ -124,7 +124,7 @@ def check_update(url: str = DEFAULT_UPDATE_URL) -> dict:
                 f"Actualización disponible: {CURRENT_VERSION} → {latest}"
             )
         else:
-            logger.debug(f"Sin actualizaciones. Versión actual: {CURRENT_VERSION}")
+            logger.debug("Sin actualizaciones. Versión actual: %s", CURRENT_VERSION)
 
     except requests.ConnectionError:
         result["error"] = "Sin conexión al servidor de actualizaciones"

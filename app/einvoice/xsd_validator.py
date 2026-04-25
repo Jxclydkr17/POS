@@ -126,7 +126,7 @@ def validate_xml(xml_string: str, doc_type: str) -> list[str]:
         is_valid = schema.validate(xml_doc)
 
         if is_valid:
-            logger.debug(f"XML {doc_type} pasó validación XSD ✓")
+            logger.debug("XML %s pasó validación XSD ✓", doc_type)
             return []
 
         errors = []

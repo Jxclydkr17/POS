@@ -29,6 +29,7 @@ from app.db.models.supplier import Supplier
 from app.db.models.supplier_product import SupplierProduct
 
 from app.utils.unit_helpers import format_quantity
+from app.constants.status_enums import SaleStatus
 
 
 # ─────────────────────────────────────────────────────
@@ -112,7 +113,7 @@ def query_sales_summary(db: Session, period: str = "today") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .first()
     )
@@ -129,7 +130,7 @@ def query_sales_summary(db: Session, period: str = "today") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(Sale.payment_method)
         .all()
@@ -152,7 +153,7 @@ def query_sales_summary(db: Session, period: str = "today") -> dict:
             .filter(
                 Sale.created_at >= y_start,
                 Sale.created_at <= y_end,
-                Sale.status != "ANULADA",
+                Sale.status != SaleStatus.ANULADA,
             )
             .scalar()
         )
@@ -206,7 +207,7 @@ def query_top_products_sold(db: Session, period: str = "today", limit: int = 5) 
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(Product.id, Product.name, Product.unit_type)
         .order_by(desc("revenue"))
@@ -533,7 +534,7 @@ def query_top_customers_by_sales(db: Session, period: str = "month", limit: int 
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(Customer.id, Customer.name)
         .order_by(desc("total"))
@@ -663,7 +664,7 @@ def query_profit_summary(db: Session, period: str = "month") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .all()
     )
@@ -755,7 +756,7 @@ def query_daily_overview(db: Session) -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .first()
     )
@@ -841,7 +842,7 @@ def query_period_overview(db: Session, period: str = "week") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .first()
     )
@@ -874,7 +875,7 @@ def query_period_overview(db: Session, period: str = "week") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(Product.id, Product.name, Product.unit_type)
         .order_by(desc("revenue"))
@@ -892,7 +893,7 @@ def query_period_overview(db: Session, period: str = "week") -> dict:
         .filter(
             Sale.created_at >= start_dt,
             Sale.created_at <= end_dt,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(Sale.payment_method)
         .all()

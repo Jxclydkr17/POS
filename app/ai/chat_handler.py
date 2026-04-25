@@ -66,9 +66,14 @@ _MEMORY: Dict[str, Dict[str, Any]] = {}
 # Sesión expira tras 30 minutos de inactividad
 _SESSION_TTL_SECONDS: int = 30 * 60
 
+# Límite máximo de sesiones en memoria (prevención de memory leak)
+_MAX_SESSIONS: int = 100
+
 
 def _purge_expired() -> None:
     """Elimina sesiones que no fueron usadas en los últimos TTL segundos.
+    Si tras la purga aún hay más de MAX_SESSIONS, elimina las más antiguas
+    por timestamp para prevenir crecimiento ilimitado de memoria.
 
     Se llama una vez por request, así que no hace falta ni un cron ni un
     background-task separado. El costo es un solo recorrido lineal del dict,
@@ -81,6 +86,16 @@ def _purge_expired() -> None:
     ]
     for sid in expired:
         del _MEMORY[sid]
+
+    # Si aún excede el límite, descartar las sesiones más antiguas
+    if len(_MEMORY) > _MAX_SESSIONS:
+        sorted_sessions = sorted(
+            _MEMORY.items(),
+            key=lambda x: x[1].get("ts", 0),
+        )
+        excess = len(_MEMORY) - _MAX_SESSIONS
+        for sid, _ in sorted_sessions[:excess]:
+            del _MEMORY[sid]
 
 
 class MemoryMessage(BaseModel):
@@ -115,7 +130,8 @@ def _parse_qty(text: str) -> Optional[int]:
         return None
     try:
         return max(1, min(999, int(m.group(2))))
-    except Exception:
+    except Exception as e:
+        logger.debug("_parse_qty conversion failed: %s", e)
         return None
 
 
@@ -379,7 +395,8 @@ def _format_choice_line(i: int, c: dict, suggested: bool = False) -> str:
 def _format_price_crc(v: Any) -> str:
     try:
         return f"₡{float(v):.2f}"
-    except Exception:
+    except Exception as e:
+        logger.debug("_format_price_crc conversion failed: %s", e)
         return "—"
 
 
@@ -863,7 +880,8 @@ def _extract_multi_sell_items(text_raw: str) -> list[dict]:
         name = re.sub(r"^\bde\b\s+", "", name, flags=re.I).strip()
         try:
             qty = max(1, min(999, int(qty_s)))
-        except Exception:
+        except Exception as e:
+            logger.debug("_parse_multi_item qty conversion failed for '%s': %s", qty_s, e)
             qty = 1
         if name:
             items.append({"qty": qty, "name": name})
@@ -895,7 +913,8 @@ def _extract_qty_generic(text: str) -> Optional[int]:
         return None
     try:
         return max(1, min(999, int(m.group(1))))
-    except Exception:
+    except Exception as e:
+        logger.debug("_extract_qty_generic conversion failed: %s", e)
         return None
 
 
@@ -909,7 +928,8 @@ def _extract_qty_sell(text: str) -> Optional[int]:
         return None
     try:
         return max(1, min(999, int(m.group(2))))
-    except Exception:
+    except Exception as e:
+        logger.debug("_extract_qty_sell conversion failed: %s", e)
         return None
 
 
@@ -1205,8 +1225,8 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
     if req.context:
         try:
             ui_ctx = UIContext(**req.context)
-        except Exception:
-            pass  # Si el contexto viene mal, seguir sin él
+        except Exception as e:
+            logger.debug("Failed to parse UI context, using defaults: %s", e)
 
     # Guardar contexto en memoria de sesión para referencia futura
     _remember(session_id, "ui_context", {
@@ -1262,7 +1282,7 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
                         memory=out_mem,
                     )
         except Exception as e:
-            logger.debug(f"LLM interpreter fallthrough: {e}")
+            logger.debug("LLM interpreter fallthrough: %s", e)
             # Silencioso — caer al flujo legacy
 
     # -----------------------------------------
@@ -1366,7 +1386,8 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
                 stock_val = chosen.get("stock")
                 try:
                     s_val = float(stock_val) if stock_val is not None else 0
-                except Exception:
+                except Exception as e:
+                    logger.debug("Stock conversion failed for product '%s': %s", chosen.get("name"), e)
                     s_val = 0
 
                 if s_val <= 0:
@@ -1649,8 +1670,8 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
                 try:
                     dt = last_sale.created_at.strftime("%Y-%m-%d %H:%M")
                     last_txt = f"\n🧾 Última compra: {dt} — {_format_price_crc(getattr(last_sale, 'total', 0) or 0)}"
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Failed to format last_sale date: %s", e)
 
             if balance > 0:
                 reply = f"⚠️ **{customer.name}** tiene **{_format_price_crc(balance)}** pendientes.{last_txt}"
@@ -2341,8 +2362,8 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
             try:
                 dt = last_sale.created_at.strftime("%Y-%m-%d %H:%M")
                 last_txt = f"\n🧾 Última compra: {dt} — {_format_price_crc(getattr(last_sale, 'total', 0) or 0)}"
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to format last_sale date: %s", e)
 
         if balance > 0:
             reply = f"⚠️ **{customer.name}** tiene **{_format_price_crc(balance)}** pendientes.{last_txt}"
@@ -2601,7 +2622,8 @@ def proactive_alerts(db: "Session" = Depends(get_db)) -> ProactiveAlertsResponse
             message=message,
             suggestions=["Ventas hoy", "Resumen del día", "¿Quién me debe?", "Stock bajo"],
         )
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to generate proactive alerts: %s", e)
         return ProactiveAlertsResponse(
             alerts=[],
             message="👋 ¿En qué te puedo ayudar?",

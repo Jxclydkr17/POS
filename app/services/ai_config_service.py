@@ -27,7 +27,7 @@ def get_ai_config(db: Session) -> AIConfig:
     if not config:
         config = AIConfig(id=1, provider="none", is_enabled=False)
         db.add(config)
-        db.commit()
+        db.flush()
         db.refresh(config)
     return config
 
@@ -86,7 +86,7 @@ def update_ai_config(db: Session, data: AIConfigUpdate) -> AIConfigOut:
         if hasattr(config, key):
             setattr(config, key, value)
 
-    db.commit()
+    db.flush()
     db.refresh(config)
 
     return get_ai_config_out(db)
@@ -107,4 +107,4 @@ def clear_api_key(db: Session) -> None:
     """Borra la API key guardada."""
     config = get_ai_config(db)
     config.api_key_encrypted = None
-    db.commit()
+    db.flush()

@@ -89,7 +89,7 @@ def _save_backup_status() -> None:
             encoding="utf-8",
         )
     except Exception as e:
-        logger.debug(f"No se pudo guardar estado de backup: {e}")
+        logger.debug("No se pudo guardar estado de backup: %s", e)
 
 
 def _record_success(path: str) -> None:

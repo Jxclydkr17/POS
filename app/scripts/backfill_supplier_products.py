@@ -23,6 +23,7 @@ Es idempotente: si el registro ya existe, lo actualiza (upsert lógico).
 """
 
 import sys
+import logging
 from pathlib import Path
 from decimal import Decimal
 
@@ -163,29 +164,33 @@ def backfill(db: Session) -> dict:
     return stats
 
 
+logger = logging.getLogger(__name__)
+
+
 def main():
-    print("=" * 60)
-    print("  Backfill: supplier_products")
-    print("  Fuente: purchase_details + purchases")
-    print("=" * 60)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    logger.info("=" * 60)
+    logger.info("  Backfill: supplier_products")
+    logger.info("  Fuente: purchase_details + purchases")
+    logger.info("=" * 60)
 
     db = SessionLocal()
     try:
         stats = backfill(db)
-        print(f"\n✅ Backfill completado:")
-        print(f"   Creados:      {stats['created']}")
-        print(f"   Actualizados: {stats['updated']}")
-        print(f"   Sin cambio:   {stats['skipped']}")
+        logger.info("\n✅ Backfill completado:")
+        logger.info("   Creados:      %d", stats['created'])
+        logger.info("   Actualizados: %d", stats['updated'])
+        logger.info("   Sin cambio:   %d", stats['skipped'])
         total = stats["created"] + stats["updated"] + stats["skipped"]
-        print(f"   Total pares:  {total}")
+        logger.info("   Total pares:  %d", total)
     except Exception as e:
         db.rollback()
-        print(f"\n❌ Error durante el backfill: {e}")
+        logger.error("\n❌ Error durante el backfill: %s", e)
         raise
     finally:
         db.close()
 
-    print("\n" + "=" * 60)
+    logger.info("\n" + "=" * 60)
 
 
 if __name__ == "__main__":

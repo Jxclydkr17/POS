@@ -47,7 +47,7 @@ def get_credential(key: str) -> Optional[str]:
         finally:
             db.close()
     except Exception as e:
-        logger.debug(f"No se pudo leer '{key}' de secure_config: {e}")
+        logger.debug("No se pudo leer '%s' de secure_config: %s", key, e)
 
     if db_value:
         _cache[key] = db_value

@@ -22,6 +22,7 @@ from app.einvoice.xml_signer import sign_xml, is_signing_available
 from app.core.config import settings
 # FASE 3
 from app.utils.hacienda_api import send_einvoice_to_hacienda, check_einvoice_status
+from app.constants.status_enums import InvoiceStatus
 from app.einvoice.hacienda_client import (
     get_connection_status as _get_connection_status,
     HaciendaConfigError,
@@ -151,7 +152,7 @@ def check_status(einvoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Registro electrónico no encontrado.")
     if not einv.clave:
         raise HTTPException(status_code=400, detail="No hay clave para consultar.")
-    if einv.status not in ("SENT", "ACCEPTED", "REJECTED"):
+    if einv.status not in (InvoiceStatus.SENT, InvoiceStatus.ACCEPTED, InvoiceStatus.REJECTED):
         raise HTTPException(status_code=400, detail=f"Solo se puede consultar comprobantes enviados. Status: {einv.status}")
     try:
         result = check_einvoice_status(db, einvoice_id)
@@ -217,10 +218,10 @@ async def hacienda_callback(request: Request, db: Session = Depends(get_db)):
 def _apply_callback_status(record, ind_estado: str, resp_xml: str):
     ind = (ind_estado or "").upper().strip()
     if ind in ("ACEPTADO", "1"):
-        record.status = "ACCEPTED"
+        record.status = InvoiceStatus.ACCEPTED
         record.hacienda_status = "ACEPTADO"
     elif ind in ("RECHAZADO", "3"):
-        record.status = "REJECTED"
+        record.status = InvoiceStatus.REJECTED
         record.hacienda_status = "RECHAZADO"
         record.last_error = "Rechazado por Hacienda"
     elif ind in ("PROCESANDO", "RECIBIDO"):
@@ -229,9 +230,9 @@ def _apply_callback_status(record, ind_estado: str, resp_xml: str):
         record.hacienda_status = ind_estado or "DESCONOCIDO"
     if resp_xml:
         record.hacienda_response = resp_xml
-    if record.status in ("ACCEPTED", "REJECTED"):
+    if record.status in (InvoiceStatus.ACCEPTED, InvoiceStatus.REJECTED):
         record.resolved_at = utcnow()
-        if resp_xml and record.status == "REJECTED":
+        if resp_xml and record.status == InvoiceStatus.REJECTED:
             parsed = parse_hacienda_response(resp_xml)
             if parsed.get("detalle_mensaje"):
                 record.last_error = f"Rechazado: {parsed['detalle_mensaje'][:400]}"

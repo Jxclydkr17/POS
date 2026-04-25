@@ -25,6 +25,7 @@ from app.einvoice.sequence import next_sequence_number, build_consecutivo, build
 from app.einvoice.xml_builder import build_xml_for_rep
 
 from app.utils.responses import success_response
+from app.constants.status_enums import InvoiceStatus
 
 
 router = APIRouter(prefix="/ereps", tags=["Recibo Electrónico de Pago"])
@@ -79,7 +80,7 @@ def create_rep_from_payment(
         credit_payment_id=payment.id,
         customer_id=customer.id,
         document_type="10",
-        status="PENDING",
+        status=InvoiceStatus.PENDING,
     )
     db.add(rep)
     db.flush()
@@ -111,7 +112,7 @@ def create_rep_from_payment(
         )
         .join(ElectronicRep, ElectronicRep.id == ElectronicRepReference.rep_id)
         .filter(ElectronicRepReference.electronic_invoice_id.in_(ref_ids))
-        .filter(ElectronicRep.status != "REJECTED")
+        .filter(ElectronicRep.status != InvoiceStatus.REJECTED)
         .group_by(ElectronicRepReference.electronic_invoice_id)
         .all()
     )
@@ -271,7 +272,7 @@ def get_pending_docs_by_customer(
         )
         .join(ElectronicRep, ElectronicRep.id == ElectronicRepReference.rep_id)
         .filter(ElectronicRepReference.electronic_invoice_id.in_(einv_ids))
-        .filter(ElectronicRep.status != "REJECTED")
+        .filter(ElectronicRep.status != InvoiceStatus.REJECTED)
         .group_by(ElectronicRepReference.electronic_invoice_id)
         .all()
     )
@@ -365,7 +366,7 @@ def suggest_allocations(
         )
         .join(ElectronicRep, ElectronicRep.id == ElectronicRepReference.rep_id)
         .filter(ElectronicRepReference.electronic_invoice_id.in_(einv_ids))
-        .filter(ElectronicRep.status != "REJECTED")
+        .filter(ElectronicRep.status != InvoiceStatus.REJECTED)
         .group_by(ElectronicRepReference.electronic_invoice_id)
         .all()
     )

@@ -4,6 +4,7 @@ from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship
 from app.db.database import Base
+from app.constants.status_enums import InvoiceStatus
 
 class ElectronicInvoice(Base):
     __tablename__ = "electronic_invoices"
@@ -19,7 +20,7 @@ class ElectronicInvoice(Base):
     clave = Column(String(50), nullable=True, unique=True, index=True)
     consecutivo = Column(String(20), nullable=True, unique=True, index=True)
 
-    status = Column(String(20), nullable=False, default="PENDING")  # PENDING/SENT/ACCEPTED/REJECTED/ERROR
+    status = Column(String(20), nullable=False, default=InvoiceStatus.PENDING)
 
     xml_signed = Column(Text, nullable=True)
     hacienda_response = Column(Text, nullable=True)

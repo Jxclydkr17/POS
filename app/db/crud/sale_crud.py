@@ -34,6 +34,7 @@ from app.services.cash_movement_service import register_cash_movement
 from app.core.logger import logger
 from app.einvoice.sequence import next_sequence_number, build_consecutivo, build_clave
 from app.utils.dt import today_cr, utcnow
+from app.constants.status_enums import SaleStatus, InvoiceStatus
 
 # 📏 Helper de unidades de medida
 from app.utils.unit_helpers import is_unit_based
@@ -169,6 +170,13 @@ def _process_sale_lines(
             discount_pct = Decimal(str(item.discount_percent or 0))
             qty_dec = Decimal(str(item.quantity))
 
+            # ── FASE 4 — Fix 4.2: Validar descuento entre 0-100 ──
+            if discount_pct < 0 or discount_pct > 100:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El descuento debe estar entre 0% y 100%.",
+                )
+
             # ── FASE B — Fix B.3: Validar precio y cantidad positivos ──
             # Productos normales están protegidos por la comparación contra BD,
             # pero los productos comunes aceptaban valores negativos (fraude).
@@ -257,6 +265,13 @@ def _process_sale_lines(
         tax_rate_pct = normalize_tax_rate(product.tax_rate)
         unit_price_dec = Decimal(str(item.unit_price))
         discount_pct = Decimal(str(item.discount_percent or 0))
+
+        # ── FASE 4 — Fix 4.2: Validar descuento entre 0-100 ──
+        if discount_pct < 0 or discount_pct > 100:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El descuento para '{product.name}' debe estar entre 0% y 100%.",
+            )
 
         # 📏 quantity ya es Decimal — no necesita int()
         subtotal_base, tax_amount, total_linea = calc_line_tax(
@@ -393,7 +408,7 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         total=Decimal("0"),
         payment_method=payment_method,
         document_type=document_type,
-        status="ACTIVA",
+        status=SaleStatus.ACTIVA,
     )
 
     # CondicionVenta
@@ -436,7 +451,7 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         add_credit_sale(db, customer_id, new_sale.id)
 
     # Factura electrónica
-    einv = ElectronicInvoice(sale_id=new_sale.id, document_type=document_type, status="PENDING")
+    einv = ElectronicInvoice(sale_id=new_sale.id, document_type=document_type, status=InvoiceStatus.PENDING)
     db.add(einv)
     db.flush()
 
@@ -627,7 +642,7 @@ def list_sales_paginated(
     # En vez de SELECT COUNT(*) + SELECT datos (2 queries), hacemos
     # una sola query pidiendo page_size + 1 filas. Si llegan más de
     # page_size, sabemos que hay página siguiente (has_next=True).
-    base_filter = [Sale.status != "ANULADA"]
+    base_filter = [Sale.status != SaleStatus.ANULADA]
     join_needed = False
 
     if search:
@@ -676,7 +691,7 @@ def get_sales_by_range(
     query = (
         db.query(Sale)
         .options(joinedload(Sale.customer))
-        .filter(Sale.created_at >= start, Sale.created_at <= end, Sale.status != "ANULADA")
+        .filter(Sale.created_at >= start, Sale.created_at <= end, Sale.status != SaleStatus.ANULADA)
     )
 
     if last_id is not None:
@@ -730,11 +745,11 @@ def update_sale(db: Session, sale_id: int, sale_in: SaleUpdate, current_user: Us
     sale = db.query(Sale).filter(Sale.id == sale_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada.")
-    if sale.status == "ANULADA":
+    if sale.status == SaleStatus.ANULADA:
         raise HTTPException(status_code=400, detail="No se puede editar una venta anulada.")
 
     einv = db.query(ElectronicInvoice).filter(ElectronicInvoice.sale_id == sale_id).first()
-    if not einv or einv.status != "PENDING":
+    if not einv or einv.status != InvoiceStatus.PENDING:
         raise HTTPException(status_code=400, detail="Solo se pueden editar ventas con FE en estado PENDING.")
 
     if not sale_in.details:
@@ -847,7 +862,7 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     sale = db.query(Sale).filter(Sale.id == sale_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada.")
-    if sale.status == "ANULADA":
+    if sale.status == SaleStatus.ANULADA:
         raise HTTPException(status_code=400, detail="Ya fue anulada.")
 
     original_einv = (
@@ -857,7 +872,7 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     )
     if not original_einv:
         raise HTTPException(status_code=400, detail="No hay factura electrónica para esta venta.")
-    if original_einv.status != "ACCEPTED":
+    if original_einv.status != InvoiceStatus.ACCEPTED:
         raise HTTPException(
             status_code=400,
             detail=f"Solo se puede emitir NC sobre facturas ACEPTADAS. Estado: {original_einv.status}",
@@ -877,19 +892,19 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     clave = build_clave(issuer.id_number, consecutivo, situation="1")
 
     nc_einv = ElectronicInvoice(
-        sale_id=sale.id, document_type="03", status="PENDING",
+        sale_id=sale.id, document_type="03", status=InvoiceStatus.PENDING,
         consecutivo=consecutivo, clave=clave,
     )
     db.add(nc_einv)
 
-    sale.status = "ANULADA"
+    sale.status = SaleStatus.ANULADA
     # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
     db.flush()
 
     return {
         "message": f"Nota de Crédito generada para Venta #{sale_id}.",
-        "sale_id": sale_id, "status": "ANULADA",
-        "nc": {"document_type": "03", "clave": clave, "consecutivo": consecutivo, "status": "PENDING"},
+        "sale_id": sale_id, "status": SaleStatus.ANULADA,
+        "nc": {"document_type": "03", "clave": clave, "consecutivo": consecutivo, "status": InvoiceStatus.PENDING},
     }
 
 
@@ -898,7 +913,7 @@ def void_sale_simple(db: Session, sale_id: int) -> dict:
     sale = db.query(Sale).filter(Sale.id == sale_id).first()
     if not sale:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
-    if sale.status == "ANULADA":
+    if sale.status == SaleStatus.ANULADA:
         raise HTTPException(status_code=400, detail="Ya fue anulada.")
 
     einv = (
@@ -906,7 +921,7 @@ def void_sale_simple(db: Session, sale_id: int) -> dict:
         .filter(ElectronicInvoice.sale_id == sale_id, ElectronicInvoice.document_type.in_(["01", "04"]))
         .first()
     )
-    if einv and einv.status == "ACCEPTED":
+    if einv and einv.status == InvoiceStatus.ACCEPTED:
         raise HTTPException(
             status_code=400,
             detail="Factura aceptada por Hacienda. Use POST /sales/{id}/cancel para NC.",
@@ -916,11 +931,11 @@ def void_sale_simple(db: Session, sale_id: int) -> dict:
     _revert_cash_movement(db, sale, "Anulación de venta en efectivo", "SALE_VOID")
     _revert_credit(db, sale, "Anulación")
 
-    sale.status = "ANULADA"
+    sale.status = SaleStatus.ANULADA
     # ── FASE 5 — Fix 5.1: flush only; router owns commit ──
     db.flush()
 
-    return {"message": f"Venta #{sale_id} anulada.", "sale_id": sale_id, "status": "ANULADA"}
+    return {"message": f"Venta #{sale_id} anulada.", "sale_id": sale_id, "status": SaleStatus.ANULADA}
 
 
 # ═══════════════════════════════════════════════════

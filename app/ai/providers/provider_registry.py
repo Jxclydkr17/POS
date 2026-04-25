@@ -68,8 +68,8 @@ def _resolve_api_key_from_env(provider_name: str) -> Optional[str]:
             val = getattr(_settings, attr, None)
             if val and val.strip():
                 return val.strip()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Could not read API key from app settings for '%s': %s", provider_name, e)
 
     env_var_map = {
         "anthropic": "ANTHROPIC_API_KEY",
@@ -132,7 +132,7 @@ def _resolve_from_db(db) -> Optional[Tuple[str, str, dict]]:
         return config.provider, api_key, extras
 
     except Exception as e:
-        logger.debug(f"No se pudo leer ai_config de BD (normal en primera ejecución): {e}")
+        logger.debug("No se pudo leer ai_config de BD (normal en primera ejecución): %s", e)
         return None
 
 
@@ -205,8 +205,8 @@ def is_any_provider_available(db=None) -> bool:
         for provider_name in _PROVIDER_CLASSES:
             if _resolve_api_key_from_env(provider_name):
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Error checking env var API keys: %s", e)
 
     return False
 

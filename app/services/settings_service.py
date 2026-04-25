@@ -40,7 +40,7 @@ def get_settings(db: Session) -> Settings:
     if not settings:
         settings = Settings(id=1)
         db.add(settings)
-        db.commit()
+        db.flush()
         db.refresh(settings)
     return settings
 
@@ -74,7 +74,7 @@ def update_settings(db: Session, data: SettingsUpdate, user_id: int = None, user
     for key, value in update_data.items():
         setattr(settings, key, value)
 
-    db.commit()
+    db.flush()
     db.refresh(settings)
 
     if changes:
@@ -140,10 +140,9 @@ def log_audit(db: Session, action: str, changes: dict = None,
             changes=json.dumps(changes, ensure_ascii=False, default=str) if changes else None,
         )
         db.add(entry)
-        db.commit()
+        db.flush()
     except Exception as e:
         logger.error(f"Error registrando auditoría: {e}")
-        db.rollback()
 
 
 def get_audit_log(db: Session, limit: int = 50) -> list:

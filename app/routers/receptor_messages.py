@@ -36,6 +36,7 @@ from app.einvoice.hacienda_client import (
     HaciendaSendError,
 )
 from app.core.credentials import hacienda_cert_path, hacienda_cert_pass
+from app.constants.status_enums import InvoiceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,7 @@ class ReceptorMessage(Base):
     detalle = Column(String(160), nullable=True)
     condicion_impuesto = Column(String(2), nullable=True)
     total_factura = Column(String(20), nullable=True)
-    status = Column(String(20), nullable=False, default="PENDING")  # PENDING/SENT/ACCEPTED/REJECTED/ERROR
+    status = Column(String(20), nullable=False, default=InvoiceStatus.PENDING)
     xml_signed = Column(Text, nullable=True)
     hacienda_response = Column(Text, nullable=True)
     last_error = Column(Text, nullable=True)
@@ -148,7 +149,7 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
         detalle=req.detalle_mensaje[:160] if req.detalle_mensaje else None,
         condicion_impuesto=req.condicion_impuesto,
         total_factura=str(req.total_factura),
-        status="PENDING",
+        status=InvoiceStatus.PENDING,
     )
     db.add(record)
     db.flush()
@@ -205,7 +206,7 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
             xml_base64=xml_b64,
         )
 
-        record.status = "SENT"
+        record.status = InvoiceStatus.SENT
         record.sent_at = utcnow()
         # FASE 4 — Fix 4.1: commit protegido
         try:
@@ -219,7 +220,7 @@ def send_receptor_message(req: SendMessageRequest, db: Session = Depends(get_db)
             message=f"MensajeReceptor enviado: {mensaje_labels.get(req.mensaje, '?')}",
             data={
                 "id": record_id,
-                "status": "SENT",
+                "status": InvoiceStatus.SENT,
                 "consecutivo": consecutivo,
                 "mensaje": req.mensaje,
                 "signed": was_signed,

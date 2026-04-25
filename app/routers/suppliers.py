@@ -74,6 +74,7 @@ def export_excel(
 def create_supplier(data: SupplierCreate, db: Session = Depends(get_db)):
     try:
         supplier = svc.create_supplier(db, **data.model_dump())
+        db.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return supplier
@@ -101,6 +102,7 @@ def update_supplier(supplier_id: int, data: SupplierUpdate, db: Session = Depend
         raise HTTPException(status_code=400, detail=str(e))
     if supplier is None:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+    db.commit()
     return supplier
 
 
@@ -112,6 +114,7 @@ def toggle_supplier(supplier_id: int, db: Session = Depends(get_db)):
     supplier = svc.toggle_supplier(db, supplier_id)
     if supplier is None:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+    db.commit()
     return supplier
 
 
@@ -126,4 +129,5 @@ def delete_supplier(supplier_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     if result is None:
         raise HTTPException(status_code=404, detail="Proveedor no encontrado")
+    db.commit()
     return {"message": "Proveedor eliminado correctamente"}

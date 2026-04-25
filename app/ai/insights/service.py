@@ -1,4 +1,5 @@
 from datetime import date, datetime, timedelta
+import logging
 from app.utils.dt import today_cr
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -33,6 +34,8 @@ from .rules import (
     stock_coverage_days,
     stock_break_risk_level,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def get_today_insights(db: Session) -> InsightsResponse:
@@ -446,7 +449,8 @@ def get_today_insights(db: Session) -> InsightsResponse:
                 part = message.split("₡")[1]
                 number = part.split()[0].replace(",", "")
                 impact = float(number)
-        except Exception:
+        except Exception as e:
+            logger.debug("Could not extract impact amount from alert message: %s", e)
             impact = 0.0
 
         alert_type_score = TYPE_WEIGHT.get(alert.type, 0)
@@ -464,8 +468,8 @@ def get_today_insights(db: Session) -> InsightsResponse:
                         operational_bonus += 3
                     elif stock_now <= 2:
                         operational_bonus += 2
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Stock conversion failed in alert scoring: %s", e)
 
         if alert.type == "credit":
             usage_percent = meta.get("usage_percent")
@@ -476,8 +480,8 @@ def get_today_insights(db: Session) -> InsightsResponse:
                         operational_bonus += 3
                     elif usage_percent >= 85:
                         operational_bonus += 2
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Credit usage_percent conversion failed in alert scoring: %s", e)
 
         if alert.type == "supplier":
             critical_count = meta.get("critical_count")
@@ -485,8 +489,8 @@ def get_today_insights(db: Session) -> InsightsResponse:
                 try:
                     critical_count = int(critical_count)
                     operational_bonus += min(critical_count, 3)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Supplier critical_count conversion failed in alert scoring: %s", e)
 
         return (
             -alert_type_score,

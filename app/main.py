@@ -50,6 +50,7 @@ from app.routers.receptor_messages import router as receptor_messages_router
 from app.routers.system import router as system_router
 
 from app.utils.dt import utcnow
+from app.constants.status_enums import ProformaStatus
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 
@@ -76,8 +77,8 @@ async def lifespan(app: FastAPI):
             now = _utcnow().replace(tzinfo=None)
             count = (
                 db.query(Proforma)
-                .filter(Proforma.status == "VIGENTE", Proforma.valid_until < now)
-                .update({"status": "VENCIDA"}, synchronize_session="fetch")
+                .filter(Proforma.status == ProformaStatus.VIGENTE, Proforma.valid_until < now)
+                .update({"status": ProformaStatus.VENCIDA}, synchronize_session="fetch")
             )
             if count:
                 db.commit()

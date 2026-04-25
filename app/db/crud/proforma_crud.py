@@ -30,6 +30,7 @@ from app.schemas.proforma import (
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.core.logger import logger
 from app.utils.dt import utcnow
+from app.constants.status_enums import ProformaStatus
 
 
 # ─── Helpers ────────────────────────────────────────────────────
@@ -202,7 +203,7 @@ def create_proforma(db: Session, data: ProformaCreate, current_user: User) -> di
         customer_id=data.customer_id,
         user_id=current_user.id,
         number=number,
-        status="VIGENTE",
+        status=ProformaStatus.VIGENTE,
         total=Decimal("0"),
         notes=(data.notes or "").strip() or None,
         validity_days=data.validity_days,
@@ -258,9 +259,9 @@ def list_proformas(
     # Auto-vencimiento: marcar como VENCIDA las que pasaron su valid_until
     now = _now_naive()
     db.query(Proforma).filter(
-        Proforma.status == "VIGENTE",
+        Proforma.status == ProformaStatus.VIGENTE,
         Proforma.valid_until < now,
-    ).update({"status": "VENCIDA"}, synchronize_session="fetch")
+    ).update({"status": ProformaStatus.VENCIDA}, synchronize_session="fetch")
     db.flush()
 
     query = db.query(Proforma)
@@ -299,8 +300,8 @@ def get_proforma_detail(db: Session, proforma_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Proforma no encontrada.")
 
     # Auto-vencimiento individual
-    if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
-        proforma.status = "VENCIDA"
+    if proforma.status == ProformaStatus.VIGENTE and proforma.valid_until < _now_naive():
+        proforma.status = ProformaStatus.VENCIDA
         # FASE 1 — Fix 1.2: flush only; router owns commit
         db.flush()
         db.refresh(proforma)
@@ -378,7 +379,7 @@ def update_proforma(db: Session, proforma_id: int, data: ProformaUpdate) -> dict
     if not proforma:
         raise HTTPException(status_code=404, detail="Proforma no encontrada.")
 
-    if proforma.status in ("CONVERTIDA", "ANULADA"):
+    if proforma.status in (ProformaStatus.CONVERTIDA, ProformaStatus.ANULADA):
         raise HTTPException(
             status_code=400,
             detail=f"No se puede editar una proforma {proforma.status}.",
@@ -415,8 +416,8 @@ def update_proforma(db: Session, proforma_id: int, data: ProformaUpdate) -> dict
         proforma.valid_until = _now_naive() + timedelta(days=data.validity_days)
 
     # Reactivar si estaba vencida
-    if proforma.status == "VENCIDA":
-        proforma.status = "VIGENTE"
+    if proforma.status == ProformaStatus.VENCIDA:
+        proforma.status = ProformaStatus.VIGENTE
 
     # FASE 1 — Fix 1.2: flush only; router owns commit
     db.flush()
@@ -437,16 +438,16 @@ def void_proforma(db: Session, proforma_id: int) -> dict:
     if not proforma:
         raise HTTPException(status_code=404, detail="Proforma no encontrada.")
 
-    if proforma.status == "ANULADA":
+    if proforma.status == ProformaStatus.ANULADA:
         raise HTTPException(status_code=400, detail="La proforma ya está anulada.")
 
-    if proforma.status == "CONVERTIDA":
+    if proforma.status == ProformaStatus.CONVERTIDA:
         raise HTTPException(
             status_code=400,
             detail="No se puede anular una proforma ya convertida a venta.",
         )
 
-    proforma.status = "ANULADA"
+    proforma.status = ProformaStatus.ANULADA
     # FASE 1 — Fix 1.2: flush only; router owns commit
     db.flush()
 
@@ -454,7 +455,7 @@ def void_proforma(db: Session, proforma_id: int) -> dict:
         "message": f"Proforma {proforma.number} anulada.",
         "proforma_id": proforma.id,
         "number": proforma.number,
-        "status": "ANULADA",
+        "status": ProformaStatus.ANULADA,
     }
 
 
@@ -477,12 +478,12 @@ def convert_to_sale(
         raise HTTPException(status_code=404, detail="Proforma no encontrada.")
 
     # Auto-vencimiento
-    if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
-        proforma.status = "VENCIDA"
+    if proforma.status == ProformaStatus.VIGENTE and proforma.valid_until < _now_naive():
+        proforma.status = ProformaStatus.VENCIDA
         # FASE 1 — Fix 1.2: flush only; router owns commit
         db.flush()
 
-    if proforma.status != "VIGENTE":
+    if proforma.status != ProformaStatus.VIGENTE:
         raise HTTPException(
             status_code=400,
             detail=f"Solo se pueden convertir proformas VIGENTES. Estado actual: {proforma.status}",
@@ -573,7 +574,7 @@ def convert_to_sale(
     sale_result = create_sale_fn(db, sale_create, current_user)
 
     # Marcar proforma como convertida
-    proforma.status = "CONVERTIDA"
+    proforma.status = ProformaStatus.CONVERTIDA
     proforma.converted_sale_id = sale_result["sale"]["id"]
     # FASE 1 — Fix 1.2: flush only; router owns commit
     db.flush()
@@ -634,13 +635,13 @@ def validate_conversion(db: Session, proforma_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Proforma no encontrada.")
 
     # Auto-vencimiento
-    if proforma.status == "VIGENTE" and proforma.valid_until < _now_naive():
-        proforma.status = "VENCIDA"
+    if proforma.status == ProformaStatus.VIGENTE and proforma.valid_until < _now_naive():
+        proforma.status = ProformaStatus.VENCIDA
         # FASE 1 — Fix 1.2: flush only; router owns commit
         db.flush()
         db.refresh(proforma)
 
-    if proforma.status != "VIGENTE":
+    if proforma.status != ProformaStatus.VIGENTE:
         return {
             "can_convert": False,
             "proforma_number": proforma.number,

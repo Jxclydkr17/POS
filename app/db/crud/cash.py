@@ -12,6 +12,7 @@ from app.db.models.customer import Customer
 from app.constants.payment_methods import ALL_PAYMENT_METHODS
 from app.utils.dt import utcnow, today_cr
 from app.services.settings_service import get_business_name
+from app.constants.status_enums import SaleStatus
 
 # FASE 2 — Fix 2.3: Helper compartido (antes duplicado aquí y en cash_close_service)
 from app.utils.decimal_utils import to_dec
@@ -198,7 +199,7 @@ def get_cash_report(db: Session, report_date: date) -> dict:
         .filter(
             Sale.created_at >= start,
             Sale.created_at < end,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .all()
     )

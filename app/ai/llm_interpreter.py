@@ -184,7 +184,7 @@ def interpret(
     )
 
     if not result["success"]:
-        logger.debug(f"Interpreter LLM call failed: {result.get('error_message')}")
+        logger.debug("Interpreter LLM call failed: %s", result.get('error_message'))
         return None
 
     # Extraer texto y parsear JSON
@@ -249,7 +249,7 @@ def _parse_intent_json(text: str) -> Optional[dict]:
         except json.JSONDecodeError:
             pass
 
-    logger.debug(f"Could not parse intent JSON from: {text[:200]}")
+    logger.debug("Could not parse intent JSON from: %s", text[:200])
     return None
 
 

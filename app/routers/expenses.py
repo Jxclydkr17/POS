@@ -20,6 +20,7 @@ from app.db.models.user import User
 from app.utils.responses import success_response, error_response
 from app.constants.expense_categories import CAT_GASTOS_CAJA
 from app.core.dependencies import get_current_user
+from app.utils.decimal_utils import to_dec
 
 router = APIRouter(prefix="/expenses", tags=["Gastos"])
 
@@ -108,7 +109,8 @@ def get_expenses(
     category: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if limit > 100:
         limit = 100
@@ -159,7 +161,7 @@ def update_expense(
                 .first()
             )
             if cash_movement:
-                cash_movement.amount = float(updated.amount)
+                cash_movement.amount = to_dec(updated.amount)
 
         db.commit()
 
@@ -184,7 +186,11 @@ def update_expense(
 # 🟥 Eliminar gasto por ID (con reversión de movimiento de caja)
 # ============================================================
 @router.delete("/{expense_id}")
-def delete_expense(expense_id: int, db: Session = Depends(get_db)):
+def delete_expense(
+    expense_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     try:
         # -------------------------------------------------
         # 1️⃣ Buscar el gasto antes de eliminar

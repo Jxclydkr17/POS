@@ -89,7 +89,7 @@ def _evict_oldest_ips(group: str):
     for ip, _ in sorted_ips[:keep_from]:
         del group_data[ip]
 
-    logger.debug(f"Rate limiter ({group}): evicted {keep_from} IPs (memory limit)")
+    logger.debug("Rate limiter (%s): evicted %s IPs (memory limit)", group, keep_from)
 
 
 # ═══════════════════════════════════════════════════════════════

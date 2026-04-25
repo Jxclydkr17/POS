@@ -89,7 +89,7 @@ def kpis(
 
     payment_breakdown = {
         row.payment_method: float(row.total)
-        for row in payment_query.all()
+        for row in payment_query.limit(1000).all()
     }
 
     return api_response({
@@ -126,7 +126,7 @@ def daily_sales(
 
     data = [
         {"date": str(row.sale_date), "total": float(row.total)}
-        for row in q.all()
+        for row in q.limit(1000).all()
     ]
     return api_response(data)
 
@@ -156,7 +156,7 @@ def payment_methods(
 
     data = [
         {"method": row.method, "total": float(row.total)}
-        for row in q.all()
+        for row in q.limit(1000).all()
     ]
     return api_response(data)
 
@@ -232,7 +232,7 @@ def sales_by_category(
     if end:
         q = q.filter(Sale.created_at < end + timedelta(days=1))
 
-    rows = q.group_by(Category.name).order_by(func.sum(SaleDetail.subtotal).desc()).all()
+    rows = q.group_by(Category.name).order_by(func.sum(SaleDetail.subtotal).desc()).limit(1000).all()
 
     data = [
         {"category": row.category_name, "total": float(row.total)}
@@ -379,6 +379,7 @@ def products_no_rotation(
             ).asc(),
             last_sale_sub.c.last_sale_at.asc()
         )
+        .limit(1000)
         .all()
     )
 
@@ -590,6 +591,7 @@ def purchases_avg_payment_days(
         .filter(*base_filter)
         .group_by(Supplier.id, Supplier.name)
         .order_by(func.avg(sql_datediff(Purchase.paid_at, Purchase.entry_date)).asc())
+        .limit(1000)
         .all()
     )
 
@@ -881,6 +883,7 @@ def multi_supplier_products(
         .group_by(PurchaseDetail.product_id, Product.name, Product.code)
         .having(func.count(func.distinct(Purchase.supplier_id)) >= min_suppliers)
         .order_by(func.count(func.distinct(Purchase.supplier_id)).desc())
+        .limit(1000)
         .all()
     )
 

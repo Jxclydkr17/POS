@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+from app.constants.status_enums import InvoiceStatus
+
 # ═══════════════════════════════════════════════════════════════
 # Configuración
 # ═══════════════════════════════════════════════════════════════
@@ -62,7 +64,7 @@ def _poll_sent_invoices():
         # ── Invoices (FE, TE, NC, ND) ──
         pending = (
             db.query(ElectronicInvoice)
-            .filter(ElectronicInvoice.status == "SENT")
+            .filter(ElectronicInvoice.status == InvoiceStatus.SENT)
             .order_by(ElectronicInvoice.sent_at.asc())
             .limit(BATCH_SIZE)
             .all()
@@ -93,7 +95,7 @@ def _poll_sent_invoices():
         # ── REPs ──
         pending_reps = (
             db.query(ElectronicRep)
-            .filter(ElectronicRep.status == "SENT")
+            .filter(ElectronicRep.status == InvoiceStatus.SENT)
             .order_by(ElectronicRep.sent_at.asc())
             .limit(BATCH_SIZE)
             .all()
@@ -327,32 +329,32 @@ def get_pending_summary() -> dict:
 
         return {
             "invoices": {
-                "pending": inv_counts.get("PENDING", 0),
-                "xml_ready": inv_counts.get("XML_READY", 0),
-                "xml_unsigned": inv_counts.get("XML_UNSIGNED", 0),
-                "sign_error": inv_counts.get("SIGN_ERROR", 0),
-                "xsd_error": inv_counts.get("XSD_ERROR", 0),
-                "sent": inv_counts.get("SENT", 0),
-                "send_error": inv_counts.get("SEND_ERROR", 0),
-                "accepted": inv_counts.get("ACCEPTED", 0),
-                "rejected": inv_counts.get("REJECTED", 0),
-                "failed": inv_counts.get("FAILED", 0),
+                "pending": inv_counts.get(InvoiceStatus.PENDING, 0),
+                "xml_ready": inv_counts.get(InvoiceStatus.XML_READY, 0),
+                "xml_unsigned": inv_counts.get(InvoiceStatus.XML_UNSIGNED, 0),
+                "sign_error": inv_counts.get(InvoiceStatus.SIGN_ERROR, 0),
+                "xsd_error": inv_counts.get(InvoiceStatus.XSD_ERROR, 0),
+                "sent": inv_counts.get(InvoiceStatus.SENT, 0),
+                "send_error": inv_counts.get(InvoiceStatus.SEND_ERROR, 0),
+                "accepted": inv_counts.get(InvoiceStatus.ACCEPTED, 0),
+                "rejected": inv_counts.get(InvoiceStatus.REJECTED, 0),
+                "failed": inv_counts.get(InvoiceStatus.FAILED, 0),
                 "total": sum(inv_counts.values()),
             },
             "reps": {
-                "sent": rep_counts.get("SENT", 0),
-                "send_error": rep_counts.get("SEND_ERROR", 0),
-                "accepted": rep_counts.get("ACCEPTED", 0),
-                "rejected": rep_counts.get("REJECTED", 0),
-                "failed": rep_counts.get("FAILED", 0),
+                "sent": rep_counts.get(InvoiceStatus.SENT, 0),
+                "send_error": rep_counts.get(InvoiceStatus.SEND_ERROR, 0),
+                "accepted": rep_counts.get(InvoiceStatus.ACCEPTED, 0),
+                "rejected": rep_counts.get(InvoiceStatus.REJECTED, 0),
+                "failed": rep_counts.get(InvoiceStatus.FAILED, 0),
                 "total": sum(rep_counts.values()),
             },
             "needs_attention": (
-                inv_counts.get("REJECTED", 0)
-                + inv_counts.get("FAILED", 0)
-                + inv_counts.get("SEND_ERROR", 0)
-                + rep_counts.get("REJECTED", 0)
-                + rep_counts.get("FAILED", 0)
+                inv_counts.get(InvoiceStatus.REJECTED, 0)
+                + inv_counts.get(InvoiceStatus.FAILED, 0)
+                + inv_counts.get(InvoiceStatus.SEND_ERROR, 0)
+                + rep_counts.get(InvoiceStatus.REJECTED, 0)
+                + rep_counts.get(InvoiceStatus.FAILED, 0)
             ),
         }
     except Exception as e:

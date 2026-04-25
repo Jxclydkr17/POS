@@ -124,7 +124,7 @@ class HaciendaClient:
             "password": self._password,
         }
 
-        logger.debug(f"Solicitando token OAuth2 a {self._urls['idp']}")
+        logger.debug("Solicitando token OAuth2 a %s", self._urls['idp'])
 
         try:
             resp = requests.post(
@@ -322,7 +322,7 @@ class HaciendaClient:
         """
         url = f"{self._urls['api']}/recepcion/{clave}"
 
-        logger.debug(f"Consultando estado en Hacienda | clave={clave}")
+        logger.debug("Consultando estado en Hacienda | clave=%s", clave)
 
         headers = self._auth_header()
 

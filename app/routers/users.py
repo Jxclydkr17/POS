@@ -172,6 +172,11 @@ def _check_rate_limit(client_ip: str):
         while timestamps and timestamps[0] < (now - LOGIN_LOCKOUT_SECONDS):
             timestamps.popleft()
 
+        # Si el deque quedó vacío, limpiar la entrada del dict
+        if not timestamps:
+            _login_attempts.pop(client_ip, None)
+            return
+
         recent = [ts for ts in timestamps if ts > window_start]
 
         if len(recent) >= LOGIN_MAX_ATTEMPTS:

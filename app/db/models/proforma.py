@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Text, Nume
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.utils.dt import utcnow
+from app.constants.status_enums import ProformaStatus
 
 
 class Proforma(Base):
@@ -21,7 +22,7 @@ class Proforma(Base):
     number = Column(String(20), unique=True, nullable=False, index=True)
 
     # VIGENTE | CONVERTIDA | VENCIDA | ANULADA
-    status = Column(String(20), nullable=False, default="VIGENTE")
+    status = Column(String(20), nullable=False, default=ProformaStatus.VIGENTE)
 
     # ── FASE 3 — Fix 3.5: Numeric(18, 5) para consistencia con Sale.total ──
     # Sale.total y SaleDetail.subtotal usan (18, 5) para mantener precisión

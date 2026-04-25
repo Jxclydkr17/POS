@@ -29,6 +29,7 @@ from reportlab.pdfgen import canvas
 from app.utils.dt import now_cr, to_cr
 from app.utils.unit_helpers import format_quantity
 from app.core.config import get_pdf_dir
+from app.constants.status_enums import ProformaStatus
 
 # ---------------------------------------------------------
 # RUTAS BÁSICAS (mismas que pdf_reports.py)
@@ -153,7 +154,7 @@ def generate_proforma_pdf(proforma_data: dict, logo_path: str | None = None) -> 
     proforma_id = proforma_data.get("id", "N/A")
     number = proforma_data.get("number", f"PRO-{proforma_id}")
     customer_name = proforma_data.get("customer_name", "Cliente General")
-    status = proforma_data.get("status", "VIGENTE")
+    status = proforma_data.get("status", ProformaStatus.VIGENTE)
     total = proforma_data.get("total", 0.0)
     notes = proforma_data.get("notes", None)
     validity_days = proforma_data.get("validity_days", 15)
@@ -310,10 +311,10 @@ def generate_proforma_pdf(proforma_data: dict, logo_path: str | None = None) -> 
 
     # Estado como subtítulo con color según estado
     status_colors = {
-        "VIGENTE": "#16a34a",
-        "VENCIDA": "#dc2626",
-        "CONVERTIDA": "#2563eb",
-        "ANULADA": "#6b7280",
+        ProformaStatus.VIGENTE: "#16a34a",
+        ProformaStatus.VENCIDA: "#dc2626",
+        ProformaStatus.CONVERTIDA: "#2563eb",
+        ProformaStatus.ANULADA: "#6b7280",
     }
     status_color = status_colors.get(status, "#333333")
     story.append(

@@ -113,7 +113,9 @@ def _validate_sql_content(content: bytes) -> None:
 # ============================================================
 @router.get("/", response_model=APIResponse[SettingsOut], dependencies=[Depends(get_current_user)])
 def get_settings_endpoint(db: Session = Depends(get_db)):
-    return APIResponse(message="Configuración cargada correctamente", data=get_settings_out(db))
+    result = get_settings_out(db)
+    db.commit()
+    return APIResponse(message="Configuración cargada correctamente", data=result)
 
 
 # ============================================================
@@ -125,6 +127,7 @@ def update_settings_endpoint(data: SettingsUpdate, db: Session = Depends(get_db)
     user_id = getattr(current_user, "id", None)
     username = getattr(current_user, "username", None)
     updated = svc_update_settings(db, data, user_id=user_id, username=username)
+    db.commit()
     return APIResponse(message="Configuración actualizada correctamente", data=updated)
 
 
@@ -169,6 +172,7 @@ def upload_logo(file: UploadFile = File(...), db: Session = Depends(get_db),
     log_audit(db, "upload_logo", {"filename": filename},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return APIResponse(message="Logo actualizado", data={"logo_path": filepath, "filename": filename})
 
@@ -188,6 +192,7 @@ def update_cabys_catalog(db: Session = Depends(get_db), current_user=Depends(get
         log_audit(db, "update_cabys", {"registros": total},
                   user_id=getattr(current_user, "id", None),
                   username=getattr(current_user, "username", None))
+        db.commit()
 
         return APIResponse(message="CABYS actualizado correctamente", data={"registros": total})
     except Exception as e:
@@ -244,6 +249,7 @@ def create_backup(db: Session = Depends(get_db), current_user=Depends(get_curren
     log_audit(db, "backup", {"filename": filename, "size_bytes": file_size},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     media = "application/x-sqlite3" if filepath.endswith(".db") else "application/sql"
     return FileResponse(path=filepath, filename=filename, media_type=media)
@@ -295,6 +301,7 @@ def restore_backup(file: UploadFile = File(...), db: Session = Depends(get_db),
         log_audit(db, "restore", {"filename": fname},
                   user_id=getattr(current_user, "id", None),
                   username=getattr(current_user, "username", None))
+        db.commit()
 
         return APIResponse(message="Base de datos restaurada correctamente",
                            data={"filename": fname})
@@ -416,6 +423,7 @@ def export_config(db: Session = Depends(get_db), current_user=Depends(get_curren
     log_audit(db, "export_config", None,
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return JSONResponse(
         content=export_data,
@@ -472,6 +480,7 @@ def import_config(file: UploadFile = File(...), db: Session = Depends(get_db),
     log_audit(db, "import_config", {"filename": file.filename},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return APIResponse(message="Configuración importada correctamente", data={"filename": file.filename})
 
@@ -551,6 +560,7 @@ def update_issuer_profile(payload: IssuerProfileUpdate, db: Session = Depends(ge
     log_audit(db, "update_issuer", data,
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return success_response("Perfil emisor actualizado", issuer)
 
@@ -585,6 +595,7 @@ from app.ai.providers.provider_registry import get_available_providers
 def get_ai_config_endpoint(db: Session = Depends(get_db)):
     """Retorna la configuración actual del asistente IA."""
     config = get_ai_config_out(db)
+    db.commit()
     return APIResponse(message="Configuración de IA cargada", data=config)
 
 
@@ -606,6 +617,7 @@ def update_ai_config_endpoint(
             user_id=getattr(current_user, "id", None),
             username=getattr(current_user, "username", None),
         )
+        db.commit()
 
         return APIResponse(message="Configuración de IA actualizada", data=updated)
     except ValueError as e:
@@ -734,6 +746,7 @@ def update_hacienda_config(
               {k: "***" if "pass" in k.lower() else v for k, v in updates.items()},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     # Retornar estado actualizado
     return get_hacienda_config(db=db)
@@ -782,6 +795,7 @@ def upload_hacienda_cert(
     log_audit(db, "upload_hacienda_cert", {"filename": fname},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return APIResponse(
         message="Certificado subido correctamente",
@@ -826,5 +840,6 @@ def update_email_config(
               {k: "***" if "pass" in k.lower() else v for k, v in updates.items()},
               user_id=getattr(current_user, "id", None),
               username=getattr(current_user, "username", None))
+    db.commit()
 
     return get_email_config(db=db)

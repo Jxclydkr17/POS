@@ -17,7 +17,10 @@ USO:
 import sys
 import os
 import argparse
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Asegurar path del proyecto
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -99,9 +102,9 @@ def run_setup(reset_db: bool = False) -> None:
     """Ejecuta el setup completo."""
     from app.core.config import settings, is_sqlite, APP_DIR
 
-    print("\n" + "=" * 55)
-    print("  Violette POS — Configuración Inicial")
-    print("=" * 55)
+    logger.info("\n" + "=" * 55)
+    logger.info("  Violette POS — Configuración Inicial")
+    logger.info("=" * 55)
 
     # ── Paso 1: Verificar .env ──
     env_path = APP_DIR / ".env"
@@ -111,7 +114,7 @@ def run_setup(reset_db: bool = False) -> None:
         if env_example.exists():
             import shutil
             shutil.copy2(env_example, env_path)
-            print("\n  ✅ Archivo .env creado desde template.")
+            logger.info("  ✅ Archivo .env creado desde template.")
         else:
             # Crear .env mínimo para SQLite
             env_path.write_text(
@@ -122,22 +125,22 @@ def run_setup(reset_db: bool = False) -> None:
                 f"SECRET_KEY={os.environ.get('SECRET_KEY', '')}\n",
                 encoding="utf-8",
             )
-            print("\n  ✅ Archivo .env creado (modo SQLite).")
+            logger.info("  ✅ Archivo .env creado (modo SQLite).")
     else:
-        print("\n  ✅ Archivo .env encontrado.")
+        logger.info("  ✅ Archivo .env encontrado.")
 
-    print(f"  📦 Motor de BD: {settings.db_engine.upper()}")
+    logger.info("  📦 Motor de BD: %s", settings.db_engine.upper())
 
     if is_sqlite():
         db_path = APP_DIR / settings.db_sqlite_path
-        print(f"  📁 Archivo BD: {db_path}")
+        logger.info("  📁 Archivo BD: %s", db_path)
 
         if reset_db and db_path.exists():
             db_path.unlink()
-            print("  🗑  Base de datos eliminada (--reset-db).")
+            logger.info("  🗑  Base de datos eliminada (--reset-db).")
 
     # ── Paso 2: Crear tablas ──
-    print("\n  [2/4] Creando tablas...")
+    logger.info("\n  [2/4] Creando tablas...")
     from app.db.database import Base, engine
     import app.db.models  # noqa: F401
     Base.metadata.create_all(bind=engine)
@@ -145,15 +148,15 @@ def run_setup(reset_db: bool = False) -> None:
     from sqlalchemy import inspect
     insp = inspect(engine)
     tables = insp.get_table_names()
-    print(f"  ✅ {len(tables)} tablas verificadas/creadas.")
+    logger.info("  ✅ %d tablas verificadas/creadas.", len(tables))
 
     # ── Paso 3: Seed ──
-    print("\n  [3/4] Datos iniciales...")
+    logger.info("\n  [3/4] Datos iniciales...")
     from app.scripts.seed_db import run as run_seed
     run_seed(force=False)
 
     # ── Paso 4: Resumen ──
-    print("\n  [4/4] Verificación final...")
+    logger.info("\n  [4/4] Verificación final...")
     status = check_status()
 
     all_ok = all([
@@ -164,27 +167,28 @@ def run_setup(reset_db: bool = False) -> None:
     ])
 
     if all_ok:
-        print("  ✅ Instalación completa.")
+        logger.info("  ✅ Instalación completa.")
     else:
         if not status["has_admin"]:
-            print("  ⚠  Falta usuario admin.")
+            logger.warning("  ⚠  Falta usuario admin.")
         if not status["has_settings"]:
-            print("  ⚠  Falta configuración.")
+            logger.warning("  ⚠  Falta configuración.")
         if not status["has_issuer"]:
-            print("  ⚠  Falta perfil emisor.")
+            logger.warning("  ⚠  Falta perfil emisor.")
         if not status["has_payment_methods"]:
-            print("  ⚠  Faltan métodos de pago.")
+            logger.warning("  ⚠  Faltan métodos de pago.")
 
-    print("\n" + "=" * 55)
-    print("  Próximos pasos:")
-    print("  1. Inicie la aplicación: python launcher.py")
-    print("  2. Inicie sesión: admin / admin123")
-    print("  3. Configure el emisor en Configuración > Emisor")
-    print("  4. Cargue su certificado .p12 de Hacienda")
-    print("=" * 55 + "\n")
+    logger.info("\n" + "=" * 55)
+    logger.info("  Próximos pasos:")
+    logger.info("  1. Inicie la aplicación: python launcher.py")
+    logger.info("  2. Inicie sesión: admin / admin123")
+    logger.info("  3. Configure el emisor en Configuración > Emisor")
+    logger.info("  4. Cargue su certificado .p12 de Hacienda")
+    logger.info("=" * 55 + "\n")
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Setup inicial de Violette POS")
     parser.add_argument("--check", action="store_true", help="Solo verificar estado")
     parser.add_argument("--reset-db", action="store_true", help="Recrear BD (PELIGROSO)")
@@ -192,20 +196,20 @@ def main():
 
     if args.check:
         status = check_status()
-        print("\n📊 Estado de la instalación:\n")
+        logger.info("\n📊 Estado de la instalación:\n")
         for k, v in status.items():
             icon = "✅" if v else "❌"
             if isinstance(v, bool):
-                print(f"  {icon} {k}: {v}")
+                logger.info("  %s %s: %s", icon, k, v)
             else:
-                print(f"  📌 {k}: {v}")
-        print()
+                logger.info("  📌 %s: %s", k, v)
+        logger.info("")
         return
 
     if args.reset_db:
         confirm = input("⚠  PELIGRO: Esto eliminará todos los datos. Escriba 'ELIMINAR' para confirmar: ")
         if confirm != "ELIMINAR":
-            print("Operación cancelada.")
+            logger.info("Operación cancelada.")
             return
 
     run_setup(reset_db=args.reset_db)

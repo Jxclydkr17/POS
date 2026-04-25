@@ -416,7 +416,7 @@ def create_supplier(db: Session, name: str, **kwargs) -> Supplier:
 
     supplier = Supplier(name=name, **kwargs)
     db.add(supplier)
-    db.commit()
+    db.flush()
     db.refresh(supplier)
     return supplier
 
@@ -442,7 +442,7 @@ def update_supplier(db: Session, supplier_id: int, data: dict) -> Optional[Suppl
     for k, v in data.items():
         setattr(supplier, k, v)
 
-    db.commit()
+    db.flush()
     db.refresh(supplier)
     return supplier
 
@@ -454,7 +454,7 @@ def toggle_supplier(db: Session, supplier_id: int) -> Optional[Supplier]:
         return None
 
     supplier.is_active = not bool(supplier.is_active)
-    db.commit()
+    db.flush()
     db.refresh(supplier)
     return supplier
 
@@ -472,7 +472,7 @@ def delete_supplier(db: Session, supplier_id: int) -> Optional[bool]:
         raise ValueError("No se puede eliminar un proveedor con productos asociados.")
 
     db.delete(supplier)
-    db.commit()
+    db.flush()
     return True
 
 

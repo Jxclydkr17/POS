@@ -12,6 +12,7 @@ from app.db.models.customer import Customer
 from app.core.dependencies import get_current_user
 from app.utils.dt import now_cr
 from app.constants.expense_categories import CAT_COMPRAS_PROVEEDORES
+from app.constants.status_enums import SaleStatus
 
 router = APIRouter(prefix="/financial", tags=["Reportes Financieros"])
 
@@ -36,7 +37,7 @@ def _compute_period(db: Session, start_day, end_day):
         .filter(
             Sale.created_at >= start,
             Sale.created_at <= end,
-            Sale.status != "ANULADA",
+            Sale.status != SaleStatus.ANULADA,
         )
         .all()
     )

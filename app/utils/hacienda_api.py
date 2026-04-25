@@ -25,6 +25,7 @@ from app.einvoice.hacienda_client import (
     HaciendaConfigError,
 )
 from app.utils.dt import utcnow
+from app.constants.status_enums import InvoiceStatus
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
             xml_base64=xml_b64,
         )
 
-        einv.status = "SENT"
+        einv.status = InvoiceStatus.SENT
         einv.sent_at = utcnow()
         einv.tries = (einv.tries or 0) + 1
         einv.last_error = None
@@ -140,7 +141,7 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
             return {
                 "success": False,
                 "einvoice_id": einv.id,
-                "status": "QUEUED",
+                "status": InvoiceStatus.QUEUED,
                 "error": f"Sin conexión. Encolado para reenvío automático.",
                 "offline": True,
                 "tries": (einv.tries or 0) + 1,
@@ -186,7 +187,7 @@ def check_einvoice_status(db: Session, einvoice_id: int) -> dict:
     if not einv.clave:
         raise ValueError("No hay clave para consultar.")
 
-    if einv.status in ("ACCEPTED", "REJECTED"):
+    if einv.status in (InvoiceStatus.ACCEPTED, InvoiceStatus.REJECTED):
         return {
             "einvoice_id": einv.id,
             "status": einv.status,
@@ -217,13 +218,13 @@ def check_einvoice_status(db: Session, einvoice_id: int) -> dict:
             resp_xml = resp_xml_b64
 
     if ind_estado in ("aceptado", "ACEPTADO", "1"):
-        einv.status = "ACCEPTED"
+        einv.status = InvoiceStatus.ACCEPTED
         einv.hacienda_status = "ACEPTADO"
         einv.hacienda_response = resp_xml
         einv.resolved_at = utcnow()
 
     elif ind_estado in ("rechazado", "RECHAZADO", "3"):
-        einv.status = "REJECTED"
+        einv.status = InvoiceStatus.REJECTED
         einv.hacienda_status = "RECHAZADO"
         einv.hacienda_response = resp_xml
         einv.resolved_at = utcnow()
@@ -247,7 +248,7 @@ def check_einvoice_status(db: Session, einvoice_id: int) -> dict:
         "einvoice_id": einv.id,
         "status": einv.status,
         "hacienda_status": einv.hacienda_status,
-        "resolved": einv.status in ("ACCEPTED", "REJECTED"),
+        "resolved": einv.status in (InvoiceStatus.ACCEPTED, InvoiceStatus.REJECTED),
         "has_response": bool(resp_xml),
     }
 
@@ -292,7 +293,7 @@ def send_rep_to_hacienda(db: Session, rep_id: int) -> dict:
             xml_base64=xml_b64,
         )
 
-        rep.status = "SENT"
+        rep.status = InvoiceStatus.SENT
         rep.sent_at = utcnow()
         rep.tries = (rep.tries or 0) + 1
         rep.last_error = None
@@ -319,7 +320,7 @@ def check_rep_status(db: Session, rep_id: int) -> dict:
     if not rep.clave:
         raise ValueError("No hay clave para consultar.")
 
-    if rep.status in ("ACCEPTED", "REJECTED"):
+    if rep.status in (InvoiceStatus.ACCEPTED, InvoiceStatus.REJECTED):
         return {"rep_id": rep.id, "status": rep.status, "already_resolved": True}
 
     client = get_hacienda_client()
@@ -340,12 +341,12 @@ def check_rep_status(db: Session, rep_id: int) -> dict:
             resp_xml = resp_xml_b64
 
     if ind_estado in ("aceptado", "ACEPTADO", "1"):
-        rep.status = "ACCEPTED"
+        rep.status = InvoiceStatus.ACCEPTED
         rep.hacienda_status = "ACEPTADO"
         rep.hacienda_response = resp_xml
         rep.resolved_at = utcnow()
     elif ind_estado in ("rechazado", "RECHAZADO", "3"):
-        rep.status = "REJECTED"
+        rep.status = InvoiceStatus.REJECTED
         rep.hacienda_status = "RECHAZADO"
         rep.hacienda_response = resp_xml
         rep.resolved_at = utcnow()

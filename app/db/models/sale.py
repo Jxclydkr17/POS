@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric, I
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 from app.utils.dt import now_cr
+from app.constants.status_enums import SaleStatus
 
 
 class Sale(Base):
@@ -25,7 +26,7 @@ class Sale(Base):
     payment_method = Column(String(20), nullable=False)
     condicion_venta_code = Column(String(2), nullable=True)
     document_type = Column(String(2), nullable=False, default='04')
-    status = Column(String(20), nullable=False, default='ACTIVA')
+    status = Column(String(20), nullable=False, default=SaleStatus.ACTIVA)
 
     created_at = Column(DateTime, default=now_cr, index=True)
 
