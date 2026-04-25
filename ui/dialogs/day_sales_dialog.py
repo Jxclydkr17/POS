@@ -338,6 +338,9 @@ class DaySalesDialog(QDialog):
             parts = str(created_at).split(" ")
             return parts[-1][:5] if len(parts) > 1 else str(created_at)
 
+    def _auth_headers(self):
+        return {"Authorization": f"Bearer {session.token}"}
+
     def _pdf_path_for_sale(self, sale_id: int) -> str:
         return os.path.abspath(f"app/pdfs/venta_{sale_id}.pdf")
 
@@ -354,7 +357,7 @@ class DaySalesDialog(QDialog):
             }
 
             from ui.utils.http_worker import api_request
-            response = api_request("get", f"{API_URL}/reports/sales/history", params=params)
+            response = api_request("get", f"{API_URL}/reports/sales/history", params=params, headers=self._auth_headers())
             response.raise_for_status()
 
             payload = response.json()
@@ -407,7 +410,7 @@ class DaySalesDialog(QDialog):
             sale_id = int(item.text())
             self.current_sale_id = sale_id
 
-            response = api_request("get", f"{API_URL}/reports/sales/{sale_id}")
+            response = api_request("get", f"{API_URL}/reports/sales/{sale_id}", headers=self._auth_headers())
             response.raise_for_status()
 
             data = response.json()
@@ -475,6 +478,7 @@ class DaySalesDialog(QDialog):
                         "post",
                         f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
                         timeout=15,
+                        headers=self._auth_headers(),
                     )
                     resp.raise_for_status()
                 except Exception as e:
@@ -519,6 +523,7 @@ class DaySalesDialog(QDialog):
                         "post",
                         f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
                         timeout=15,
+                        headers=self._auth_headers(),
                     )
                     resp.raise_for_status()
                 except Exception as e:
