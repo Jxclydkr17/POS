@@ -73,7 +73,14 @@ def _ensure_secret_key() -> str:
             env_path.write_text(f"SECRET_KEY={new_key}\n", encoding="utf-8")
         logger.warning("SECRET_KEY genérica detectada. Se generó una nueva.")
     except OSError as e:
-        logger.warning(f"No se pudo persistir SECRET_KEY en .env ({e}).")
+        logger.error(
+            f"⚠️ CRÍTICO: No se pudo persistir SECRET_KEY en .env ({e}). "
+            f"La clave se generó solo en memoria. Al reiniciar la aplicación: "
+            f"(1) se generará una clave diferente, "
+            f"(2) TODOS los tokens JWT activos se invalidarán (sesiones cerradas), "
+            f"(3) las API keys encriptadas no se podrán descifrar. "
+            f"Solución: asegúrese de que el archivo .env tenga permisos de escritura."
+        )
 
     os.environ["SECRET_KEY"] = new_key
     return new_key

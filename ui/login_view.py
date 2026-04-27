@@ -578,16 +578,37 @@ class LoginWindow(QWidget):
 
         payload = decode_token(token)
         role = payload.get("role")
-        session.start_session(username, role, token)
 
-        logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
-
-        # ── FASE 6 — Fix 6.1: Forzar cambio de contraseña ──
+        # ── FASE 4 — Fix 4.1: Forzar cambio de contraseña ANTES de persistir sesión ──
+        # Antes: start_session() guardaba el token a disco con admin123 vigente,
+        # y si el usuario cerraba la ventana de cambio, la sesión quedaba
+        # persistida con la contraseña insegura. Ahora solo guardamos la sesión
+        # en memoria temporalmente para que el dialog pueda usar el token,
+        # pero NO la persistimos a disco hasta que el cambio se complete.
         if data.get("must_change_password"):
+            # Sesión temporal solo en memoria (para que el dialog use session.token)
+            session.token = token
+            session.username = username
+            session.role = role
+            # NO llamar save_session() aquí
+
             changed = self._show_change_password_dialog(self._pending_password)
             if not changed:
-                session.end_session()
+                # Usuario cerró el dialog sin cambiar → limpiar todo
+                session.token = None
+                session.username = None
+                session.role = None
                 return
+
+            # El dialog ya actualizó session.token con el nuevo token
+            # y llamó save_session(). No sobreescribir con el token viejo.
+            # Solo asegurar que username/role estén persistidos.
+            session.save_session()
+        else:
+            # No requería cambio de contraseña → persistir normalmente
+            session.start_session(username, role, token)
+
+        logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
 
         QMessageBox.information(self, "Bienvenido", f"Acceso concedido, {username}.")
 

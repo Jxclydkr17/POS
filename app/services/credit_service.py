@@ -162,6 +162,13 @@ def get_credit_info(
     if not customer:
         return None
 
+    # ── FASE 3 — Fix 3.1: Acotar límites de paginación ──
+    # Sin esto, un request con mov_limit=999999 cargaría toda la tabla.
+    mov_limit = max(1, min(mov_limit, 100))
+    sales_limit = max(1, min(sales_limit, 100))
+    mov_skip = max(0, mov_skip)
+    sales_skip = max(0, sales_skip)
+
     today = today_cr()
     first_of_month = today.replace(day=1)
 
@@ -208,21 +215,23 @@ def get_credit_info(
         if agg.last_payment_at else None
     )
 
-    # ── FASE 2 — Fix 2.3: Reconciliación automática ──
-    # Detecta drift entre customer.credit_balance (incremental) y
+    # ── FASE 2 — Fix 2.3: Detección de drift (solo lectura) ──
+    # Detecta divergencia entre customer.credit_balance (incremental) y
     # el balance real calculado desde la tabla credits.
-    # Si divergen, corrige el campo cacheado y registra en log.
+    # NO se corrige aquí: un GET no debe modificar datos (idempotencia).
+    # La corrección ocurre automáticamente en la próxima operación de
+    # escritura (abono/venta) que actualiza customer.credit_balance.
     stored_balance = round(float(customer.credit_balance or 0), 2)
-    if abs(stored_balance - balance) > 0.01:
+    balance_drift = round(stored_balance - balance, 2)
+    if abs(balance_drift) > 0.01:
         from app.core.logger import logger as _logger
         _logger.warning(
-            f"RECONCILIACIÓN CRÉDITO: Cliente #{customer_id} '{customer.name}' — "
+            f"DRIFT CRÉDITO: Cliente #{customer_id} '{customer.name}' — "
             f"credit_balance almacenado: ₡{stored_balance:,.2f}, "
-            f"balance real calculado: ₡{balance:,.2f}. "
-            f"Corrigiendo automáticamente."
+            f"balance real calculado: ₡{balance:,.2f}, "
+            f"drift: ₡{balance_drift:,.2f}. "
+            f"Se reporta pero NO se corrige en lectura."
         )
-        customer.credit_balance = Decimal(str(max(0, balance)))
-        db.flush()
 
     # ─────────────────────────────────────────────────────────
     # QUERY 2: Movimientos paginados + conteo + aging (sale movements)
@@ -370,6 +379,7 @@ def get_credit_info(
             "has_credit_limit": bool(customer.has_credit_limit),
         },
         "balance": balance,
+        "balance_drift": balance_drift if abs(balance_drift) > 0.01 else 0,
 
         # Aging
         "aging": aging,

@@ -40,6 +40,13 @@ from app.constants.status_enums import SaleStatus, InvoiceStatus
 from app.utils.unit_helpers import is_unit_based
 from app.core.config import is_sqlite
 
+# ── FASE 3 — Fix 3.2: Pool de threads para PDF/Email ──
+# Limita la concurrencia a 3 workers. Si la ferretería procesa muchas
+# ventas rápido o si ReportLab/SMTP se cuelgan, las tareas se encolan
+# en vez de crear threads ilimitados.
+from concurrent.futures import ThreadPoolExecutor
+_pdf_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pdf-sale")
+
 
 # ── FASE 4 — Fix 4.5: Redondeo para display ──
 # Internamente los cálculos usan 5 decimales (requerido por Hacienda CR),
@@ -140,6 +147,15 @@ def _get_open_cash_session(db: Session) -> CashSession:
 def _get_or_create_issuer(db: Session) -> IssuerProfile:
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
     if not issuer:
+        # ── FASE 3 — Fix 3.3: Advertir sobre perfil emisor dummy ──
+        # Facturas electrónicas generadas con estos datos serán rechazadas
+        # por Hacienda. El usuario debe configurar su perfil real en Ajustes.
+        logger.error(
+            "⚠️ PERFIL EMISOR NO CONFIGURADO: Se creó un perfil con datos "
+            "genéricos (legal_name='Mi Negocio', id_number='000000000'). "
+            "Las facturas electrónicas serán RECHAZADAS por Hacienda. "
+            "Configure el perfil del emisor en Ajustes → Facturación Electrónica."
+        )
         issuer = IssuerProfile(
             legal_name="Mi Negocio", id_type="01",
             id_number="000000000", email="facturacion@tudominio.com",
@@ -579,15 +595,17 @@ def _run_pdf_and_email(sale_data: dict, customer_email: str | None, business_nam
 
 def _generate_pdf_and_email_async(sale_data: dict, customer_email: str | None, business_name: str):
     """
-    FASE 4 — Fix 4.3: Lanza PDF + email en un thread de background.
+    FASE 4 — Fix 4.3: Lanza PDF + email en background.
     El cajero recibe la respuesta de la venta inmediatamente sin esperar
     a que ReportLab genere el PDF o que el SMTP responda.
+
+    FASE 3 — Fix 3.2: Usa ThreadPoolExecutor en vez de threading.Thread
+    para limitar concurrencia. Si el pool está lleno, la tarea se encola
+    internamente en vez de crear threads ilimitados.
 
     FASE C — Fix C.3: Actualiza sale.pdf_generated para que el frontend
     pueda consultar si el PDF se generó correctamente.
     """
-    import threading
-
     sale_id = sale_data.get("id")
 
     def _worker():
@@ -598,27 +616,25 @@ def _generate_pdf_and_email_async(sale_data: dict, customer_email: str | None, b
             logger.error(f"Error en background PDF/Email para venta #{sale_id}: {e}")
             _update_pdf_status(sale_id, False)
 
-    t = threading.Thread(target=_worker, daemon=True, name=f"pdf-sale-{sale_id}")
-    t.start()
+    try:
+        _pdf_executor.submit(_worker)
+    except RuntimeError:
+        # El executor fue apagado (shutdown de la app)
+        logger.warning(f"PDF executor apagado, generando PDF sincrónicamente para venta #{sale_id}")
+        _worker()
 
 
 def _update_pdf_status(sale_id: int, success: bool):
     """Actualiza el campo pdf_generated en la BD (sesión propia para el thread)."""
     try:
-        from app.db.database import SessionLocal
-        db = SessionLocal()
-        try:
+        from app.db.database import safe_session
+        with safe_session() as db:
             db.query(Sale).filter(Sale.id == sale_id).update(
                 {"pdf_generated": success}, synchronize_session=False,
             )
             db.commit()
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"No se pudo actualizar pdf_generated para venta #{sale_id}: {e}")
-        finally:
-            db.close()
     except Exception as e:
-        logger.warning(f"Error accediendo a BD para pdf_generated: {e}")
+        logger.warning(f"No se pudo actualizar pdf_generated para venta #{sale_id}: {e}")
 
 
 def _generate_pdf_and_email(db, sale, customer_db, customer_name, payment_method, document_type, total):

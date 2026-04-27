@@ -7,6 +7,7 @@ from app.db.models.supplier import Supplier
 from app.db.models.inventory_movement import InventoryMovement, MovementType   # ✅ FASE 7
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
+from app.constants.status_enums import SaleStatus
 from app.schemas.products import ProductCreate, ProductUpdate
 from decimal import Decimal
 from datetime import datetime, timedelta
@@ -149,6 +150,9 @@ def _calc_rotation_data_batch(
     now = utcnow()
 
     # UNA query con GROUP BY para todos los productos
+    # ── FASE 5 — Fix 5.2: Excluir ventas ANULADAS ──
+    # Antes: las ventas anuladas inflaban la rotación, dando predicciones
+    # de reposición incorrectamente altas.
     rows = (
         db.query(
             SaleDetail.product_id,
@@ -160,6 +164,7 @@ def _calc_rotation_data_batch(
         .filter(
             SaleDetail.product_id.in_(product_ids),
             Sale.created_at >= cutoff,
+            Sale.status != SaleStatus.ANULADA,
         )
         .group_by(SaleDetail.product_id)
         .all()

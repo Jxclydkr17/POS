@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
-from datetime import date, datetime, timedelta
+from datetime import date
 from decimal import Decimal
 
 from app.db.models.cash_session import CashSession
@@ -117,13 +117,37 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
         .all()
     )
     for stale in stale_sessions:
+        # ── FASE 2 — Fix 2.2: Calcular cierre esperado basado en
+        # movimientos reales (mismo cálculo que cash_close_service).
+        # Antes: closing_amount = opening_amount, lo cual ignoraba
+        # todas las ventas/gastos/retiros del día. ──
+        net_movements = (
+            db.query(
+                func.sum(
+                    case(
+                        (CashMovement.type == "in", CashMovement.amount),
+                        else_=-CashMovement.amount
+                    )
+                )
+            )
+            .filter(CashMovement.cash_session_id == stale.id)
+            .scalar()
+            or 0
+        )
+
+        opening_dec = to_dec(stale.opening_amount)
+        expected = opening_dec + to_dec(net_movements)
+
         from app.core.logger import logger
         logger.warning(
             f"CAJA: Auto-cerrando sesión del {stale.date} (terminal {terminal_id}) "
-            f"que quedó abierta. Monto de cierre = apertura ({stale.opening_amount})."
+            f"que quedó abierta. Apertura: {opening_dec}, "
+            f"Movimientos netos: {to_dec(net_movements)}, "
+            f"Cierre esperado calculado: {expected}."
         )
         stale.status = "closed"
-        stale.closing_amount = stale.opening_amount
+        stale.expected_closing = expected
+        stale.closing_amount = expected
         stale.difference = to_dec(0)
         stale.closed_at = utcnow()
 
@@ -190,15 +214,13 @@ def get_cash_report(db: Session, report_date: date) -> dict:
     if not session:
         return {}
 
-    start = datetime.combine(report_date, datetime.min.time())
-    end = start + timedelta(days=1)
-
-    # FIX #8: Obtener solo ventas ACTIVAS (excluir anuladas)
+    # ── FASE 5 — Fix 5.1: Filtrar por cash_session_id ──
+    # Antes: filtraba por rango de fecha, lo cual mezclaba ventas de
+    # todas las cajas/terminales del mismo día. Ahora usa la FK directa.
     sales = (
         db.query(Sale)
         .filter(
-            Sale.created_at >= start,
-            Sale.created_at < end,
+            Sale.cash_session_id == session.id,
             Sale.status != SaleStatus.ANULADA,
         )
         .all()

@@ -128,38 +128,47 @@ def get_quick_favorite_products(
     remaining = limit - len(result_products)
 
     if remaining > 0:
+        from app.constants.status_enums import SaleStatus
+
         start_date = utcnow() - timedelta(days=days)
 
-        top_rows = (
+        # ── FASE 5 — Fix 5.3: Una sola query en vez de dos ──
+        # Antes: 1 query para agregar IDs + 1 query para cargar Products.
+        # Ahora: subquery para ranking + fetch con joinedload en un paso.
+        # También excluye ventas ANULADAS (coherente con Fix 5.2).
+        top_subq = (
             db.query(
                 SaleDetail.product_id,
-                func.sum(SaleDetail.quantity).label("qty_sold")
+                func.sum(SaleDetail.quantity).label("qty_sold"),
             )
             .join(Sale, Sale.id == SaleDetail.sale_id)
-            .join(Product, Product.id == SaleDetail.product_id)
-            .filter(Sale.created_at >= start_date)
-            .filter(Product.is_active == True)
-            .filter(Product.id.notin_(result_ids))  # excluir ya incluidos
+            .filter(
+                Sale.created_at >= start_date,
+                Sale.status != SaleStatus.ANULADA,
+            )
             .group_by(SaleDetail.product_id)
-            .order_by(desc("qty_sold"))
+            .subquery()
+        )
+
+        exclude_ids = result_ids if result_ids else [-1]
+
+        top_products = (
+            db.query(Product)
+            .options(joinedload(Product.category), joinedload(Product.supplier))
+            .join(top_subq, Product.id == top_subq.c.product_id)
+            .filter(
+                Product.is_active == True,
+                Product.id.notin_(exclude_ids),
+            )
+            .order_by(desc(top_subq.c.qty_sold))
             .limit(remaining)
             .all()
         )
 
-        if top_rows:
-            top_ids = [row.product_id for row in top_rows]
-            extra_products = (
-                db.query(Product)
-                .options(joinedload(Product.category), joinedload(Product.supplier))
-                .filter(Product.id.in_(top_ids))
-                .all()
-            )
-            product_map = {p.id: p for p in extra_products}
-
-            for pid in top_ids:
-                if pid in product_map and pid not in result_ids:
-                    result_ids.append(pid)
-                    result_products.append(_product_to_dict(product_map[pid]))
+        for p in top_products:
+            if p.id not in result_ids:
+                result_ids.append(p.id)
+                result_products.append(_product_to_dict(p))
 
         # --- 3. Si aún falta, fallback a stock más alto ---
         remaining = limit - len(result_products)

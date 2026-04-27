@@ -53,70 +53,64 @@ def _poll_sent_invoices():
     Busca ElectronicInvoice con status SENT y consulta su estado en Hacienda.
     También busca ElectronicRep con status SENT.
     """
-    from app.db.database import SessionLocal
+    from app.db.database import safe_session
     from app.db.models.electronic_invoice import ElectronicInvoice
     from app.db.models.electronic_rep import ElectronicRep
     from app.utils.hacienda_api import check_einvoice_status, check_rep_status
     from app.einvoice.hacienda_client import HaciendaConfigError
 
-    db = SessionLocal()
     try:
-        # ── Invoices (FE, TE, NC, ND) ──
-        pending = (
-            db.query(ElectronicInvoice)
-            .filter(ElectronicInvoice.status == InvoiceStatus.SENT)
-            .order_by(ElectronicInvoice.sent_at.asc())
-            .limit(BATCH_SIZE)
-            .all()
-        )
+        with safe_session() as db:
+            # ── Invoices (FE, TE, NC, ND) ──
+            pending = (
+                db.query(ElectronicInvoice)
+                .filter(ElectronicInvoice.status == InvoiceStatus.SENT)
+                .order_by(ElectronicInvoice.sent_at.asc())
+                .limit(BATCH_SIZE)
+                .all()
+            )
 
-        if pending:
-            logger.info(f"Poller: revisando {len(pending)} comprobante(s) SENT...")
+            if pending:
+                logger.info(f"Poller: revisando {len(pending)} comprobante(s) SENT...")
 
-        resolved = 0
-        for einv in pending:
-            try:
-                result = check_einvoice_status(db, einv.id)
-                if result.get("resolved"):
-                    resolved += 1
-                    logger.info(
-                        f"Poller: einvoice #{einv.id} → {result.get('hacienda_status')} "
-                        f"(clave: ...{einv.clave[-8:] if einv.clave else '?'})"
-                    )
-            except HaciendaConfigError:
-                logger.debug("Poller: credenciales no configuradas, saltando ciclo")
-                return  # sin credenciales no tiene sentido seguir
-            except Exception as e:
-                logger.warning(f"Poller: error consultando einvoice #{einv.id}: {e}")
+            resolved = 0
+            for einv in pending:
+                try:
+                    result = check_einvoice_status(db, einv.id)
+                    if result.get("resolved"):
+                        resolved += 1
+                        logger.info(
+                            f"Poller: einvoice #{einv.id} → {result.get('hacienda_status')} "
+                            f"(clave: ...{einv.clave[-8:] if einv.clave else '?'})"
+                        )
+                except HaciendaConfigError:
+                    logger.debug("Poller: credenciales no configuradas, saltando ciclo")
+                    return  # sin credenciales no tiene sentido seguir
+                except Exception as e:
+                    logger.warning(f"Poller: error consultando einvoice #{einv.id}: {e}")
 
-        if resolved:
-            logger.info(f"Poller: {resolved} comprobante(s) resueltos en este ciclo")
+            if resolved:
+                logger.info(f"Poller: {resolved} comprobante(s) resueltos en este ciclo")
 
-        # ── REPs ──
-        pending_reps = (
-            db.query(ElectronicRep)
-            .filter(ElectronicRep.status == InvoiceStatus.SENT)
-            .order_by(ElectronicRep.sent_at.asc())
-            .limit(BATCH_SIZE)
-            .all()
-        )
+            # ── REPs ──
+            pending_reps = (
+                db.query(ElectronicRep)
+                .filter(ElectronicRep.status == InvoiceStatus.SENT)
+                .order_by(ElectronicRep.sent_at.asc())
+                .limit(BATCH_SIZE)
+                .all()
+            )
 
-        for rep in pending_reps:
-            try:
-                check_rep_status(db, rep.id)
-            except HaciendaConfigError:
-                return
-            except Exception as e:
-                logger.warning(f"Poller: error consultando REP #{rep.id}: {e}")
+            for rep in pending_reps:
+                try:
+                    check_rep_status(db, rep.id)
+                except HaciendaConfigError:
+                    return
+                except Exception as e:
+                    logger.warning(f"Poller: error consultando REP #{rep.id}: {e}")
 
     except Exception as e:
         logger.error(f"Poller: error general: {e}")
-        try:
-            db.rollback()
-        except Exception:
-            pass
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -128,116 +122,110 @@ def _retry_failed_sends():
     Busca comprobantes con status SEND_ERROR y tries < MAX_RETRY_ATTEMPTS,
     y reintenta enviarlos. Después de MAX_RETRY_ATTEMPTS, marca como FAILED.
     """
-    from app.db.database import SessionLocal
+    from app.db.database import safe_session
     from app.db.models.electronic_invoice import ElectronicInvoice
     from app.db.models.electronic_rep import ElectronicRep
     from app.utils.hacienda_api import send_einvoice_to_hacienda, send_rep_to_hacienda
     from app.einvoice.hacienda_client import HaciendaConfigError
 
-    db = SessionLocal()
     try:
-        # ── Invoices con SEND_ERROR y reintentos disponibles ──
-        retriable = (
-            db.query(ElectronicInvoice)
-            .filter(
-                ElectronicInvoice.status == "SEND_ERROR",
-                ElectronicInvoice.tries < MAX_RETRY_ATTEMPTS,
-            )
-            .order_by(ElectronicInvoice.tries.asc(), ElectronicInvoice.id.asc())
-            .limit(BATCH_SIZE)
-            .all()
-        )
-
-        if retriable:
-            logger.info(f"Retry: reintentando {len(retriable)} comprobante(s) fallidos...")
-
-        for einv in retriable:
-            try:
-                result = send_einvoice_to_hacienda(db, einv.id)
-                if result.get("success"):
-                    logger.info(
-                        f"Retry: einvoice #{einv.id} reenviado OK "
-                        f"(intento {einv.tries})"
-                    )
-                else:
-                    logger.warning(
-                        f"Retry: einvoice #{einv.id} falló de nuevo "
-                        f"(intento {einv.tries}): {result.get('error', '')[:100]}"
-                    )
-            except HaciendaConfigError:
-                logger.debug("Retry: credenciales no configuradas, saltando ciclo")
-                return
-            except Exception as e:
-                logger.warning(f"Retry: error reenviando einvoice #{einv.id}: {e}")
-
-        # ── Marcar como FAILED los que ya agotaron reintentos ──
-        exhausted = (
-            db.query(ElectronicInvoice)
-            .filter(
-                ElectronicInvoice.status == "SEND_ERROR",
-                ElectronicInvoice.tries >= MAX_RETRY_ATTEMPTS,
-            )
-            .all()
-        )
-
-        for einv in exhausted:
-            einv.status = "FAILED"
-            einv.last_error = (
-                f"Agotados {MAX_RETRY_ATTEMPTS} reintentos automáticos. "
-                f"Último error: {(einv.last_error or '')[:200]}"
-            )
-            logger.warning(
-                f"Retry: einvoice #{einv.id} marcado como FAILED "
-                f"(clave: ...{einv.clave[-8:] if einv.clave else '?'})"
+        with safe_session() as db:
+            # ── Invoices con SEND_ERROR y reintentos disponibles ──
+            retriable = (
+                db.query(ElectronicInvoice)
+                .filter(
+                    ElectronicInvoice.status == "SEND_ERROR",
+                    ElectronicInvoice.tries < MAX_RETRY_ATTEMPTS,
+                )
+                .order_by(ElectronicInvoice.tries.asc(), ElectronicInvoice.id.asc())
+                .limit(BATCH_SIZE)
+                .all()
             )
 
-        if exhausted:
-            db.commit()
+            if retriable:
+                logger.info(f"Retry: reintentando {len(retriable)} comprobante(s) fallidos...")
 
-        # ── REPs con SEND_ERROR ──
-        retriable_reps = (
-            db.query(ElectronicRep)
-            .filter(
-                ElectronicRep.status == "SEND_ERROR",
-                ElectronicRep.tries < MAX_RETRY_ATTEMPTS,
+            for einv in retriable:
+                try:
+                    result = send_einvoice_to_hacienda(db, einv.id)
+                    if result.get("success"):
+                        logger.info(
+                            f"Retry: einvoice #{einv.id} reenviado OK "
+                            f"(intento {einv.tries})"
+                        )
+                    else:
+                        logger.warning(
+                            f"Retry: einvoice #{einv.id} falló de nuevo "
+                            f"(intento {einv.tries}): {result.get('error', '')[:100]}"
+                        )
+                except HaciendaConfigError:
+                    logger.debug("Retry: credenciales no configuradas, saltando ciclo")
+                    return
+                except Exception as e:
+                    logger.warning(f"Retry: error reenviando einvoice #{einv.id}: {e}")
+
+            # ── Marcar como FAILED los que ya agotaron reintentos ──
+            exhausted = (
+                db.query(ElectronicInvoice)
+                .filter(
+                    ElectronicInvoice.status == "SEND_ERROR",
+                    ElectronicInvoice.tries >= MAX_RETRY_ATTEMPTS,
+                )
+                .all()
             )
-            .limit(BATCH_SIZE)
-            .all()
-        )
 
-        for rep in retriable_reps:
-            try:
-                send_rep_to_hacienda(db, rep.id)
-            except HaciendaConfigError:
-                return
-            except Exception as e:
-                logger.warning(f"Retry: error reenviando REP #{rep.id}: {e}")
+            for einv in exhausted:
+                einv.status = "FAILED"
+                einv.last_error = (
+                    f"Agotados {MAX_RETRY_ATTEMPTS} reintentos automáticos. "
+                    f"Último error: {(einv.last_error or '')[:200]}"
+                )
+                logger.warning(
+                    f"Retry: einvoice #{einv.id} marcado como FAILED "
+                    f"(clave: ...{einv.clave[-8:] if einv.clave else '?'})"
+                )
 
-        # Marcar REPs agotados
-        exhausted_reps = (
-            db.query(ElectronicRep)
-            .filter(
-                ElectronicRep.status == "SEND_ERROR",
-                ElectronicRep.tries >= MAX_RETRY_ATTEMPTS,
+            if exhausted:
+                db.commit()
+
+            # ── REPs con SEND_ERROR ──
+            retriable_reps = (
+                db.query(ElectronicRep)
+                .filter(
+                    ElectronicRep.status == "SEND_ERROR",
+                    ElectronicRep.tries < MAX_RETRY_ATTEMPTS,
+                )
+                .limit(BATCH_SIZE)
+                .all()
             )
-            .all()
-        )
 
-        for rep in exhausted_reps:
-            rep.status = "FAILED"
-            rep.last_error = f"Agotados {MAX_RETRY_ATTEMPTS} reintentos. {(rep.last_error or '')[:200]}"
+            for rep in retriable_reps:
+                try:
+                    send_rep_to_hacienda(db, rep.id)
+                except HaciendaConfigError:
+                    return
+                except Exception as e:
+                    logger.warning(f"Retry: error reenviando REP #{rep.id}: {e}")
 
-        if exhausted_reps:
-            db.commit()
+            # Marcar REPs agotados
+            exhausted_reps = (
+                db.query(ElectronicRep)
+                .filter(
+                    ElectronicRep.status == "SEND_ERROR",
+                    ElectronicRep.tries >= MAX_RETRY_ATTEMPTS,
+                )
+                .all()
+            )
+
+            for rep in exhausted_reps:
+                rep.status = "FAILED"
+                rep.last_error = f"Agotados {MAX_RETRY_ATTEMPTS} reintentos. {(rep.last_error or '')[:200]}"
+
+            if exhausted_reps:
+                db.commit()
 
     except Exception as e:
         logger.error(f"Retry: error general: {e}")
-        try:
-            db.rollback()
-        except Exception:
-            pass
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -307,61 +295,59 @@ def get_pending_summary() -> dict:
     Retorna un resumen de comprobantes por estado.
     Útil para mostrar badges/alertas en la UI.
     """
-    from app.db.database import SessionLocal
+    from app.db.database import safe_session
     from app.db.models.electronic_invoice import ElectronicInvoice
     from app.db.models.electronic_rep import ElectronicRep
     from sqlalchemy import func
 
-    db = SessionLocal()
     try:
-        # Contar por status
-        inv_counts = dict(
-            db.query(ElectronicInvoice.status, func.count(ElectronicInvoice.id))
-            .group_by(ElectronicInvoice.status)
-            .all()
-        )
+        with safe_session() as db:
+            # Contar por status
+            inv_counts = dict(
+                db.query(ElectronicInvoice.status, func.count(ElectronicInvoice.id))
+                .group_by(ElectronicInvoice.status)
+                .all()
+            )
 
-        rep_counts = dict(
-            db.query(ElectronicRep.status, func.count(ElectronicRep.id))
-            .group_by(ElectronicRep.status)
-            .all()
-        )
+            rep_counts = dict(
+                db.query(ElectronicRep.status, func.count(ElectronicRep.id))
+                .group_by(ElectronicRep.status)
+                .all()
+            )
 
-        return {
-            "invoices": {
-                "pending": inv_counts.get(InvoiceStatus.PENDING, 0),
-                "xml_ready": inv_counts.get(InvoiceStatus.XML_READY, 0),
-                "xml_unsigned": inv_counts.get(InvoiceStatus.XML_UNSIGNED, 0),
-                "sign_error": inv_counts.get(InvoiceStatus.SIGN_ERROR, 0),
-                "xsd_error": inv_counts.get(InvoiceStatus.XSD_ERROR, 0),
-                "sent": inv_counts.get(InvoiceStatus.SENT, 0),
-                "send_error": inv_counts.get(InvoiceStatus.SEND_ERROR, 0),
-                "accepted": inv_counts.get(InvoiceStatus.ACCEPTED, 0),
-                "rejected": inv_counts.get(InvoiceStatus.REJECTED, 0),
-                "failed": inv_counts.get(InvoiceStatus.FAILED, 0),
-                "total": sum(inv_counts.values()),
-            },
-            "reps": {
-                "sent": rep_counts.get(InvoiceStatus.SENT, 0),
-                "send_error": rep_counts.get(InvoiceStatus.SEND_ERROR, 0),
-                "accepted": rep_counts.get(InvoiceStatus.ACCEPTED, 0),
-                "rejected": rep_counts.get(InvoiceStatus.REJECTED, 0),
-                "failed": rep_counts.get(InvoiceStatus.FAILED, 0),
-                "total": sum(rep_counts.values()),
-            },
-            "needs_attention": (
-                inv_counts.get(InvoiceStatus.REJECTED, 0)
-                + inv_counts.get(InvoiceStatus.FAILED, 0)
-                + inv_counts.get(InvoiceStatus.SEND_ERROR, 0)
-                + rep_counts.get(InvoiceStatus.REJECTED, 0)
-                + rep_counts.get(InvoiceStatus.FAILED, 0)
-            ),
-        }
+            return {
+                "invoices": {
+                    "pending": inv_counts.get(InvoiceStatus.PENDING, 0),
+                    "xml_ready": inv_counts.get(InvoiceStatus.XML_READY, 0),
+                    "xml_unsigned": inv_counts.get(InvoiceStatus.XML_UNSIGNED, 0),
+                    "sign_error": inv_counts.get(InvoiceStatus.SIGN_ERROR, 0),
+                    "xsd_error": inv_counts.get(InvoiceStatus.XSD_ERROR, 0),
+                    "sent": inv_counts.get(InvoiceStatus.SENT, 0),
+                    "send_error": inv_counts.get(InvoiceStatus.SEND_ERROR, 0),
+                    "accepted": inv_counts.get(InvoiceStatus.ACCEPTED, 0),
+                    "rejected": inv_counts.get(InvoiceStatus.REJECTED, 0),
+                    "failed": inv_counts.get(InvoiceStatus.FAILED, 0),
+                    "total": sum(inv_counts.values()),
+                },
+                "reps": {
+                    "sent": rep_counts.get(InvoiceStatus.SENT, 0),
+                    "send_error": rep_counts.get(InvoiceStatus.SEND_ERROR, 0),
+                    "accepted": rep_counts.get(InvoiceStatus.ACCEPTED, 0),
+                    "rejected": rep_counts.get(InvoiceStatus.REJECTED, 0),
+                    "failed": rep_counts.get(InvoiceStatus.FAILED, 0),
+                    "total": sum(rep_counts.values()),
+                },
+                "needs_attention": (
+                    inv_counts.get(InvoiceStatus.REJECTED, 0)
+                    + inv_counts.get(InvoiceStatus.FAILED, 0)
+                    + inv_counts.get(InvoiceStatus.SEND_ERROR, 0)
+                    + rep_counts.get(InvoiceStatus.REJECTED, 0)
+                    + rep_counts.get(InvoiceStatus.FAILED, 0)
+                ),
+            }
     except Exception as e:
         logger.error(f"Error obteniendo resumen pendientes: {e}")
         return {"error": str(e)}
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════

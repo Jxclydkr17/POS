@@ -144,74 +144,71 @@ def _process_queue_cycle() -> int:
     Procesa un ciclo de la cola offline.
     Retorna la cantidad de comprobantes procesados exitosamente.
     """
-    from app.db.database import SessionLocal
+    from app.db.database import safe_session
     from app.utils.hacienda_api import send_einvoice_to_hacienda
 
     # Primero verificar internet
     if not check_internet():
         return 0
 
-    db = SessionLocal()
     processed = 0
 
     try:
-        # Obtener comprobantes en cola (FIFO)
-        queued = (
-            db.query(ElectronicInvoice)
-            .filter(ElectronicInvoice.status.in_(OFFLINE_STATUSES))
-            .order_by(ElectronicInvoice.created_at.asc())
-            .limit(MAX_RETRY_PER_CYCLE)
-            .all()
-        )
+        with safe_session() as db:
+            # Obtener comprobantes en cola (FIFO)
+            queued = (
+                db.query(ElectronicInvoice)
+                .filter(ElectronicInvoice.status.in_(OFFLINE_STATUSES))
+                .order_by(ElectronicInvoice.created_at.asc())
+                .limit(MAX_RETRY_PER_CYCLE)
+                .all()
+            )
 
-        if not queued:
-            return 0
+            if not queued:
+                return 0
 
-        logger.info(f"Cola offline: procesando {len(queued)} comprobante(s)...")
+            logger.info(f"Cola offline: procesando {len(queued)} comprobante(s)...")
 
-        for einv in queued:
-            try:
-                # Cambiar status para evitar procesamiento duplicado
-                einv.status = "XML_READY"
-                db.commit()
+            for einv in queued:
+                try:
+                    # Cambiar status para evitar procesamiento duplicado
+                    einv.status = "XML_READY"
+                    db.commit()
 
-                # Intentar enviar
-                result = send_einvoice_to_hacienda(db, einv.id)
+                    # Intentar enviar
+                    result = send_einvoice_to_hacienda(db, einv.id)
 
-                if result.get("success"):
-                    processed += 1
-                    logger.info(
-                        f"Cola offline: einvoice {einv.id} enviado OK | "
-                        f"clave=...{einv.clave[-8:] if einv.clave else '?'}"
-                    )
-                else:
-                    # Si falló pero no por red, dejarlo como SEND_ERROR
-                    logger.warning(
-                        f"Cola offline: einvoice {einv.id} falló envío | "
-                        f"error={result.get('error', '?')}"
-                    )
+                    if result.get("success"):
+                        processed += 1
+                        logger.info(
+                            f"Cola offline: einvoice {einv.id} enviado OK | "
+                            f"clave=...{einv.clave[-8:] if einv.clave else '?'}"
+                        )
+                    else:
+                        # Si falló pero no por red, dejarlo como SEND_ERROR
+                        logger.warning(
+                            f"Cola offline: einvoice {einv.id} falló envío | "
+                            f"error={result.get('error', '?')}"
+                        )
 
-            except (requests.ConnectionError, requests.Timeout) as e:
-                # Sigue sin internet, re-encolar
-                einv.status = "QUEUED"
-                einv.last_error = f"Re-encolado: {str(e)[:200]}"
-                db.commit()
-                logger.info(f"Cola offline: einvoice {einv.id} re-encolado (sin conexión)")
-                break  # No seguir intentando si no hay red
+                except (requests.ConnectionError, requests.Timeout) as e:
+                    # Sigue sin internet, re-encolar
+                    einv.status = "QUEUED"
+                    einv.last_error = f"Re-encolado: {str(e)[:200]}"
+                    db.commit()
+                    logger.info(f"Cola offline: einvoice {einv.id} re-encolado (sin conexión)")
+                    break  # No seguir intentando si no hay red
 
-            except Exception as e:
-                # Error no relacionado a red
-                einv.status = "SEND_ERROR"
-                einv.last_error = f"Error en cola: {str(e)[:400]}"
-                einv.tries = (einv.tries or 0) + 1
-                db.commit()
-                logger.error(f"Cola offline: error procesando einvoice {einv.id}: {e}")
+                except Exception as e:
+                    # Error no relacionado a red
+                    einv.status = "SEND_ERROR"
+                    einv.last_error = f"Error en cola: {str(e)[:400]}"
+                    einv.tries = (einv.tries or 0) + 1
+                    db.commit()
+                    logger.error(f"Cola offline: error procesando einvoice {einv.id}: {e}")
 
     except Exception as e:
         logger.error(f"Cola offline: error en ciclo de procesamiento: {e}")
-        db.rollback()
-    finally:
-        db.close()
 
     if processed > 0:
         logger.info(f"Cola offline: {processed} comprobante(s) enviados exitosamente")

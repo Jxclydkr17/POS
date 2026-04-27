@@ -8,6 +8,9 @@ FASE 4: Soporte dual SQLite/MySQL
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, declarative_base
+from contextlib import contextmanager
+import logging
+
 from app.core.config import get_database_url, is_sqlite, settings
 
 DATABASE_URL = get_database_url()
@@ -49,5 +52,38 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    finally:
+        db.close()
+
+
+_bg_logger = logging.getLogger("app.db.background")
+
+
+@contextmanager
+def safe_session():
+    """Context manager for background tasks that need their own DB session.
+
+    Guarantees:
+      - Session is always closed (even on unhandled exceptions).
+      - Rollback on exception so the connection returns clean to the pool.
+      - pool_pre_ping (MySQL) tests the connection at checkout, so stale
+        connections after pool_recycle are replaced transparently.
+
+    Usage:
+        from app.db.database import safe_session
+
+        with safe_session() as db:
+            rows = db.query(Model).all()
+            db.commit()   # caller manages commit/rollback as needed
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    except Exception:
+        try:
+            db.rollback()
+        except Exception as rollback_err:
+            _bg_logger.debug(f"Rollback failed in safe_session: {rollback_err}")
+        raise
     finally:
         db.close()

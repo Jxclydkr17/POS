@@ -65,28 +65,26 @@ async def lifespan(app: FastAPI):
     # ── STARTUP ──────────────────────────────────────────────
 
     # Proformas: vencimiento automático
-    from app.db.database import SessionLocal
+    from app.db.database import safe_session
     from app.db.models.proforma import Proforma
 
     def _do_expire():
-        db = SessionLocal()
-        try:
-            from app.utils.dt import utcnow as _utcnow
-            # valid_until se almacena como naive UTC (ver proforma_crud._now_naive),
-            # así que la comparación debe ser naive vs naive.
-            now = _utcnow().replace(tzinfo=None)
-            count = (
-                db.query(Proforma)
-                .filter(Proforma.status == ProformaStatus.VIGENTE, Proforma.valid_until < now)
-                .update({"status": ProformaStatus.VENCIDA}, synchronize_session="fetch")
-            )
-            if count:
-                db.commit()
-                logger.info(f"Startup: {count} proforma(s) marcadas como VENCIDA.")
-        except Exception:
-            db.rollback()
-        finally:
-            db.close()
+        with safe_session() as db:
+            try:
+                from app.utils.dt import utcnow as _utcnow
+                # valid_until se almacena como naive UTC (ver proforma_crud._now_naive),
+                # así que la comparación debe ser naive vs naive.
+                now = _utcnow().replace(tzinfo=None)
+                count = (
+                    db.query(Proforma)
+                    .filter(Proforma.status == ProformaStatus.VIGENTE, Proforma.valid_until < now)
+                    .update({"status": ProformaStatus.VENCIDA}, synchronize_session="fetch")
+                )
+                if count:
+                    db.commit()
+                    logger.info(f"Startup: {count} proforma(s) marcadas como VENCIDA.")
+            except Exception:
+                db.rollback()
 
     _do_expire()
 
@@ -129,12 +127,8 @@ async def lifespan(app: FastAPI):
     # Verificar API keys encriptadas
     try:
         from app.core.crypto import check_encrypted_keys_on_startup
-        from app.db.database import SessionLocal
-        _db = SessionLocal()
-        try:
+        with safe_session() as _db:
             check_encrypted_keys_on_startup(_db)
-        finally:
-            _db.close()
     except Exception as e:
         logger.warning(f"No se pudo verificar API keys: {e}")
 

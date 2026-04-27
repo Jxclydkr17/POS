@@ -6,6 +6,8 @@ from app.db.models.user import User, ALL_PERMISSIONS, DEFAULT_PERMISSIONS
 from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token
 # ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
+# ── FASE 4 — Fix 4.3: Rate limiter para endpoints sin auth ──
+from app.core.rate_limiter import rate_limit
 from fastapi.security import OAuth2PasswordRequestForm
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -109,7 +111,7 @@ def needs_setup(db: Session = Depends(get_db)):
     return {"needs_setup": count == 0}
 
 
-@router.post("/setup")
+@router.post("/setup", dependencies=[rate_limit("setup", 5, 60)])
 def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
     """
     Crea el primer usuario administrador.
@@ -131,6 +133,17 @@ def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
     )
     db.add(admin)
     try:
+        db.flush()
+        # ── FASE 4 — Fix 4.3: Guard contra race condition ──
+        # Si dos requests pasaron el count==0 check simultáneamente,
+        # después del flush habrá más de 1 usuario. Revertir el segundo.
+        recheck = db.query(User).count()
+        if recheck > 1:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="El sistema ya fue configurado por otro usuario simultáneo.",
+            )
         db.commit()
     except HTTPException:
         db.rollback()

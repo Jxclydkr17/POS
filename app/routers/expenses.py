@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
 from datetime import date
@@ -59,7 +59,8 @@ def add_expense(
             if not cash_session:
                 # Si no hay caja abierta, revertir el gasto
                 db.rollback()
-                return error_response(
+                # ── FASE 6 — Fix 6.1: error_response() hace raise, no return ──
+                error_response(
                     message="No hay una caja abierta para registrar un gasto de caja.",
                     status_code=400
                 )
@@ -70,6 +71,7 @@ def add_expense(
                 cash_session_id=cash_session.id,
                 movement_type="OUT",
                 amount=expense_obj.amount,
+                concept="Gasto de caja",
                 source="EXPENSE",
                 description=expense_obj.description,
                 reference_id=expense_obj.id
@@ -91,9 +93,11 @@ def add_expense(
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return error_response(
+        error_response(
             message="Error registrando el gasto.",
             status_code=500,
             error_details={"detail": str(e)}
@@ -143,7 +147,7 @@ def update_expense(
         # Solo enviar campos que realmente vinieron con valor
         updates = payload.model_dump(exclude_none=True)
         if not updates:
-            return error_response(
+            error_response(
                 message="No se enviaron campos para actualizar.",
                 status_code=400
             )
@@ -174,9 +178,11 @@ def update_expense(
                 "payment_method": updated.payment_method,
             }
         )
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return error_response(
+        error_response(
             message="Error actualizando el gasto.",
             status_code=500,
             error_details={"detail": str(e)}
@@ -197,7 +203,7 @@ def delete_expense(
         # -------------------------------------------------
         expense = db.query(Expense).filter(Expense.id == expense_id).first()
         if not expense:
-            return error_response(
+            error_response(
                 message="Gasto no encontrado.",
                 status_code=404
             )
@@ -227,9 +233,11 @@ def delete_expense(
             message="Gasto eliminado correctamente.",
             data={"expense_id": deleted["expense_id"]}
         )
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return error_response(
+        error_response(
             message="Error eliminando el gasto.",
             status_code=500,
             error_details={"detail": str(e)}

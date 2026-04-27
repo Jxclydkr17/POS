@@ -23,6 +23,7 @@ que la tabla economic_activities no quede vacía en instalación nueva.
 
 import sys
 import argparse
+import logging
 from pathlib import Path
 
 # Asegurar que el proyecto raíz esté en el path
@@ -35,6 +36,8 @@ from app.db.models.payment_method import PaymentMethod
 from app.db.models.settings import Settings
 from app.db.models.issuer_profile import IssuerProfile
 from app.core.security import hash_password
+
+logger = logging.getLogger(__name__)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -56,7 +59,7 @@ def seed_admin(db: Session, force: bool = False) -> None:
     existing = db.query(User).filter(User.username == "admin").first()
 
     if existing and not force:
-        print("  ⏭  Usuario 'admin' ya existe. Use --force para recrearlo.")
+        logger.info("Usuario 'admin' ya existe. Use --force para recrearlo.")
         return
 
     if existing and force:
@@ -66,7 +69,7 @@ def seed_admin(db: Session, force: bool = False) -> None:
         existing.full_name = "Administrador"
         existing.must_change_password = True
         db.commit()
-        print("  🔄 Usuario 'admin' actualizado (contraseña: admin123).")
+        logger.info("Usuario 'admin' actualizado (contraseña: admin123).")
         return
 
     admin = User(
@@ -79,8 +82,8 @@ def seed_admin(db: Session, force: bool = False) -> None:
     )
     db.add(admin)
     db.commit()
-    print("  ✅ Usuario 'admin' creado (contraseña: admin123).")
-    print("     ⚠  CAMBIE la contraseña en el primer inicio de sesión.")
+    logger.info("Usuario 'admin' creado (contraseña: admin123).")
+    logger.warning("CAMBIE la contraseña en el primer inicio de sesión.")
 
 
 def seed_payment_methods(db: Session) -> None:
@@ -95,16 +98,16 @@ def seed_payment_methods(db: Session) -> None:
 
     if created:
         db.commit()
-        print(f"  ✅ {created} método(s) de pago creados.")
+        logger.info(f"{created} método(s) de pago creados.")
     else:
-        print("  ⏭  Métodos de pago ya existen.")
+        logger.info("Métodos de pago ya existen.")
 
 
 def seed_settings(db: Session) -> None:
     """Crea la fila de configuración si no existe."""
     existing = db.query(Settings).filter(Settings.id == 1).first()
     if existing:
-        print("  ⏭  Configuración (settings) ya existe.")
+        logger.info("Configuración (settings) ya existe.")
         return
 
     s = Settings(
@@ -119,14 +122,14 @@ def seed_settings(db: Session) -> None:
     )
     db.add(s)
     db.commit()
-    print("  ✅ Configuración inicial creada.")
+    logger.info("Configuración inicial creada.")
 
 
 def seed_issuer_profile(db: Session) -> None:
     """Crea un perfil emisor placeholder si no existe ninguno."""
     existing = db.query(IssuerProfile).first()
     if existing:
-        print("  ⏭  Perfil emisor ya existe.")
+        logger.info("Perfil emisor ya existe.")
         return
 
     profile = IssuerProfile(
@@ -140,8 +143,8 @@ def seed_issuer_profile(db: Session) -> None:
     )
     db.add(profile)
     db.commit()
-    print("  ✅ Perfil emisor placeholder creado.")
-    print("     ⚠  Configure los datos reales desde Configuración > Emisor.")
+    logger.info("Perfil emisor placeholder creado.")
+    logger.warning("Configure los datos reales desde Configuración > Emisor.")
 
 
 def seed_economic_activities(db: Session) -> None:
@@ -152,7 +155,7 @@ def seed_economic_activities(db: Session) -> None:
 
 def run(force: bool = False) -> None:
     """Ejecuta todos los seeds."""
-    print("\n🌱 Violette POS — Seed de datos iniciales\n" + "─" * 45)
+    logger.info("Violette POS — Seed de datos iniciales")
 
     db = SessionLocal()
     try:
@@ -161,10 +164,10 @@ def run(force: bool = False) -> None:
         seed_settings(db)
         seed_issuer_profile(db)
         seed_economic_activities(db)
-        print("\n✅ Seed completado.\n")
+        logger.info("Seed completado.")
     except Exception as e:
         db.rollback()
-        print(f"\n❌ Error en seed: {e}\n")
+        logger.error(f"Error en seed: {e}")
         raise
     finally:
         db.close()

@@ -360,10 +360,10 @@ def withdraw_cash(
     session = get_open_session(db)
 
     if not session:
-        return error_response("No hay caja abierta.", 400)
+        error_response("No hay caja abierta.", 400)
 
     if session.status != "open":
-        return error_response("La caja ya está cerrada.", 400)
+        error_response("La caja ya está cerrada.", 400)
 
     try:
         register_cash_movement(
@@ -371,6 +371,7 @@ def withdraw_cash(
             cash_session_id=session.id,
             movement_type="OUT",
             amount=amount,
+            concept="Retiro de efectivo",
             source="WITHDRAW",
             description=reason
         )
@@ -385,9 +386,11 @@ def withdraw_cash(
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return error_response(f"Error registrando retiro: {e}", 400)
+        error_response(f"Error registrando retiro: {e}", 500)
 
 
 # ==========================================================
@@ -408,10 +411,10 @@ def adjust_cash(
     session = get_open_session(db)
 
     if not session:
-        return error_response("No hay caja abierta.", 400)
+        error_response("No hay caja abierta.", 400)
 
     if session.status != "open":
-        return error_response("La caja ya está cerrada.", 400)
+        error_response("La caja ya está cerrada.", 400)
 
     try:
         movement_type = "IN" if amount > 0 else "OUT"
@@ -421,6 +424,7 @@ def adjust_cash(
             cash_session_id=session.id,
             movement_type=movement_type,
             amount=abs(amount),
+            concept="Ajuste de caja",
             source="ADJUSTMENT",
             description=reason
         )
@@ -436,9 +440,11 @@ def adjust_cash(
             }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
-        return error_response(f"Error registrando ajuste: {e}", 400)
+        error_response(f"Error registrando ajuste: {e}", 500)
 
 
 @router.get("/report/session/{cash_session_id}")

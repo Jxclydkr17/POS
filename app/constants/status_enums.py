@@ -52,3 +52,24 @@ class ProformaStatus(str, enum.Enum):
     VENCIDA = "VENCIDA"
     CONVERTIDA = "CONVERTIDA"
     ANULADA = "ANULADA"
+
+
+class CashMovementType(str, enum.Enum):
+    """Tipos de movimiento de caja.
+
+    ── FASE 6 — Fix 6.2 ──
+    Centraliza los valores que antes eran strings sueltos ("in"/"out"/"IN"/"OUT")
+    repartidos por el código. El service normaliza a lowercase para la BD,
+    y las queries deben comparar contra estos valores.
+
+    Uso:
+        from app.constants.status_enums import CashMovementType
+
+        # Al registrar:
+        register_cash_movement(..., movement_type=CashMovementType.IN, ...)
+
+        # En queries:
+        CashMovement.type == CashMovementType.IN
+    """
+    IN = "in"
+    OUT = "out"
