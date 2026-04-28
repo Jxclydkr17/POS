@@ -32,7 +32,6 @@ def run(db: Session | None = None):
     if not os.path.exists(CSV_PATH):
         msg = f"No se encontró el archivo en: {CSV_PATH}"
         logger.warning(msg)
-        print(f"  ⚠  {msg}")
         return
 
     own_session = db is None
@@ -74,18 +73,18 @@ def run(db: Session | None = None):
         db.commit()
         total = created + updated
         if total > 0:
-            print(f"  ✅ Actividades económicas: {created} creadas, {updated} actualizadas.")
+            logger.info(f"  ✅ Actividades económicas: {created} creadas, {updated} actualizadas.")
         else:
-            print("  ⏭  Actividades económicas ya están al día.")
+            logger.info("  ⏭  Actividades económicas ya están al día.")
 
     except Exception as e:
         db.rollback()
         logger.error(f"Error importando actividades económicas: {e}")
-        print(f"  ❌ Error importando actividades económicas: {e}")
     finally:
         if own_session:
             db.close()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     run()

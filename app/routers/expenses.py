@@ -18,6 +18,7 @@ from app.db.models.cash_movement import CashMovement
 from app.db.models.expense import Expense
 from app.db.models.user import User
 from app.utils.responses import success_response, error_response
+from app.core.logger import logger
 from app.constants.expense_categories import CAT_GASTOS_CAJA
 from app.core.dependencies import get_current_user
 from app.utils.decimal_utils import to_dec
@@ -97,10 +98,10 @@ def add_expense(
         raise
     except Exception as e:
         db.rollback()
+        logger.error(f"Error registrando gasto: {e}")
         error_response(
             message="Error registrando el gasto.",
             status_code=500,
-            error_details={"detail": str(e)}
         )
 
 # ============================================================
@@ -182,10 +183,10 @@ def update_expense(
         raise
     except Exception as e:
         db.rollback()
+        logger.error(f"Error actualizando gasto #{expense_id}: {e}")
         error_response(
             message="Error actualizando el gasto.",
             status_code=500,
-            error_details={"detail": str(e)}
         )
 
 # ============================================================
@@ -237,8 +238,8 @@ def delete_expense(
         raise
     except Exception as e:
         db.rollback()
+        logger.error(f"Error eliminando gasto #{expense_id}: {e}")
         error_response(
             message="Error eliminando el gasto.",
             status_code=500,
-            error_details={"detail": str(e)}
         )

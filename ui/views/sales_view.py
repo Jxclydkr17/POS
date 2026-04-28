@@ -1913,47 +1913,37 @@ class SalesView(QWidget):
             QTimer.singleShot(delay_ms, lambda m=msg: show_toast(m, success=False, parent=self, duration=3000))
 
     def _submit_sale(self, payload: dict, print_ticket: bool = False):
-        try:
-            resp = api_request("post",
-                SALES_URL,
-                json=payload,
-                headers=self._auth_headers(),
-                timeout=15
-            )
+        # ── FASE 2: Async + protección doble-submit ──
+        self.confirm_btn.setEnabled(False)
 
-            if resp.status_code == 200:
-                show_toast("✅ Venta registrada correctamente", success=True, parent=self)
+        def on_success(json_data):
+            show_toast("✅ Venta registrada correctamente", success=True, parent=self)
+            self._show_post_sale_stock_alerts()
+            if print_ticket:
+                self.print_ticket(json_data, payload)
+            self.clear_cart()
+            self.load_products_page(reset=True)
+            self.load_favorite_products()
+            QTimer.singleShot(0, self._focus_product_search)
 
-                # Alertas rápidas de stock post-venta
-                self._show_post_sale_stock_alerts()
-
-                if print_ticket:
-                    self.print_ticket(resp.json(), payload)
-
-                self.clear_cart()
-                self.load_products_page(reset=True)
-                self.load_favorite_products()
-                QTimer.singleShot(0, self._focus_product_search)
-
-            else:
-                try:
-                    err_body = resp.json()
-                    msg = err_body.get("detail") or err_body.get("message") or resp.text
-                except Exception:
-                    msg = resp.text
-
-                QMessageBox.warning(
-                    self,
-                    "Error",
-                    f"No se pudo registrar la venta.\n{msg}"
-                )
-
-        except Exception as e:
-            QMessageBox.critical(
+        def on_error(msg):
+            QMessageBox.warning(
                 self,
                 "Error",
-                f"Error conectando al servidor:\n{e}"
+                f"No se pudo registrar la venta.\n{msg}"
             )
+
+        def on_finished():
+            self.confirm_btn.setEnabled(True)
+
+        api_call("post", SALES_URL,
+            json=payload,
+            headers=self._auth_headers(),
+            timeout=15,
+            on_success=on_success,
+            on_error=on_error,
+            on_finished=on_finished,
+        )
 
     def confirm_sale(self):
         if not self.cart:
@@ -2516,31 +2506,27 @@ class SalesView(QWidget):
             self.ask_open_cash()
             return
 
-        try:
-            resp = api_request("post",
-                f"{API_BASE_URL}/cash/open",
-                json={"opening_amount": amount},
-                headers=self._auth_headers(),
-                timeout=5
-            )
+        # ── FASE 2: Async para no congelar la UI ──
+        def on_success(json_data):
+            self.cash_session_open = True
+            self.set_cash_buttons_enabled(True)
+            show_toast("🟢 Caja abierta correctamente", success=True, parent=self)
+            self._apply_focus_policy()
+            QTimer.singleShot(0, self._focus_product_search)
+            QTimer.singleShot(150, self._focus_product_search)
 
-            if resp.status_code == 200:
-                self.cash_session_open = True
-                self.set_cash_buttons_enabled(True)
-                show_toast("🟢 Caja abierta correctamente", success=True, parent=self)
-
-                # Reinstalar política de foco ahora que la caja ya está abierta
-                self._apply_focus_policy()
-
-                # Forzar foco después de cerrar el diálogo/modal
-                QTimer.singleShot(0, self._focus_product_search)
-                QTimer.singleShot(150, self._focus_product_search)
-            else:
-                raise Exception(resp.text)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        def on_error(msg):
+            QMessageBox.critical(self, "Error", msg)
             self.ask_open_cash()
+
+        api_call("post",
+            f"{API_BASE_URL}/cash/open",
+            json={"opening_amount": amount},
+            headers=self._auth_headers(),
+            timeout=5,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def open_cash_movement(self, movement_type: str):
         from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
@@ -2596,8 +2582,6 @@ class SalesView(QWidget):
         dialog.exec()
 
     def send_cash_movement(self, movement_type: str, concept: str, amount: float):
-        from PySide6.QtWidgets import QMessageBox
-
         payload = {
             "type": movement_type,
             "concept": concept,
@@ -2605,25 +2589,25 @@ class SalesView(QWidget):
             "create_expense": movement_type == "out"
         }
 
-        try:
-            resp = api_request("post",
-                f"{API_BASE_URL}/cash/movements",
-                json=payload,
-                headers=self._auth_headers(),
-                timeout=5
-            )
-
-            if resp.status_code != 200:
-                raise Exception(resp.text)
-
+        # ── FASE 2: Async para no congelar la UI ──
+        def on_success(json_data):
             show_toast(
                 "Movimiento registrado correctamente",
                 success=True,
                 parent=self
             )
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo registrar el movimiento:\n{e}")
+        def on_error(msg):
+            QMessageBox.critical(self, "Error", f"No se pudo registrar el movimiento:\n{msg}")
+
+        api_call("post",
+            f"{API_BASE_URL}/cash/movements",
+            json=payload,
+            headers=self._auth_headers(),
+            timeout=5,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def set_cash_buttons_enabled(self, enabled: bool):
         self.btn_cash_in.setEnabled(enabled)
@@ -2713,31 +2697,26 @@ class SalesView(QWidget):
             QMessageBox.warning(dialog, "Error", "Monto inválido.")
             return
 
-        try:
-            resp = api_request("post",
-                f"{API_BASE_URL}/cash/close",
-                json={"closing_amount": real_amount},
-                headers=self._auth_headers(),
-                timeout=5
-            )
-
-            if resp.status_code != 200:
-                raise Exception(resp.text)
-
+        # ── FASE 2: Async para no congelar la UI ──
+        def on_success(json_data):
             show_toast("🔒 Caja cerrada correctamente", success=True, parent=self)
-
             dialog.accept()
-
-            # 🔒 Bloquear acciones
             self.btn_cash_in.setEnabled(False)
             self.btn_cash_out.setEnabled(False)
             self.confirm_btn.setEnabled(False)
-
-            # Refrescar estado de caja para actualizar el perma-focus
             self.check_cash_session()
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo cerrar la caja:\n{e}")
+        def on_error(msg):
+            QMessageBox.critical(self, "Error", f"No se pudo cerrar la caja:\n{msg}")
+
+        api_call("post",
+            f"{API_BASE_URL}/cash/close",
+            json={"closing_amount": real_amount},
+            headers=self._auth_headers(),
+            timeout=5,
+            on_success=on_success,
+            on_error=on_error,
+        )
 
     def print_ticket(self, api_response: dict, payload: dict):
         # 🔥 Placeholder (luego aquí conectamos tu generador PDF/impresora)

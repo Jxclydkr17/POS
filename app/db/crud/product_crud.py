@@ -259,109 +259,28 @@ def _build_rotation_result(
 def _calc_rotation_data(db: Session, product_id: int, lookback_days: int = 90) -> dict:
     """
     Calcula datos de rotación reales basados en el historial de ventas.
+
+    ── FASE 3: Refactor ──
+    Antes: ~40 líneas duplicadas de _calc_rotation_data_batch + _build_rotation_result,
+    con riesgo de divergencia (ej: el bug de Fase 1 donde faltaba el filtro ANULADA).
+    Ahora: delega a la versión batch (1 solo ID) + _build_rotation_result,
+    garantizando que siempre se apliquen los mismos filtros y cálculos.
+
     Retorna:
-      - daily_avg: promedio de unidades vendidas por día
-      - weekly_avg: promedio semanal
-      - monthly_avg: promedio mensual (30 días)
-      - total_sold: total vendido en el periodo
-      - days_analyzed: días reales con datos
-      - days_until_stockout: estimación de días hasta agotarse
-      - smart_reorder: cantidad sugerida basada en rotación real
-      - reorder_urgency: 'critico' | 'alto' | 'medio' | 'bajo'
+      - daily_avg, weekly_avg, monthly_avg
+      - total_sold, days_analyzed
+      - days_until_stockout, smart_reorder, reorder_urgency
     """
-    cutoff = utcnow() - timedelta(days=lookback_days)
+    # Reutilizar la query batch con un solo producto
+    sales_batch = _calc_rotation_data_batch(db, [product_id], lookback_days)
 
-    # Ventas del producto en el periodo
-    rows = (
-        db.query(
-            func.sum(SaleDetail.quantity).label("total_sold"),
-            func.count(func.distinct(func.date(Sale.created_at))).label("days_with_sales"),
-            func.min(Sale.created_at).label("first_sale"),
-            func.max(Sale.created_at).label("last_sale"),
-        )
-        .join(Sale, Sale.id == SaleDetail.sale_id)
-        .filter(
-            SaleDetail.product_id == product_id,
-            Sale.created_at >= cutoff,
-        )
-        .first()
-    )
-
-    total_sold = float(rows.total_sold or 0)
-    days_with_sales = int(rows.days_with_sales or 0)
-
-    if total_sold == 0 or days_with_sales == 0:
-        return {
-            "daily_avg": 0.0,
-            "weekly_avg": 0.0,
-            "monthly_avg": 0.0,
-            "total_sold": 0,
-            "days_analyzed": lookback_days,
-            "days_until_stockout": None,
-            "smart_reorder": 0,
-            "reorder_urgency": "bajo",
-        }
-
-    # Calcular rango real de días (first_sale a hoy)
-    first_sale = rows.first_sale
-    if first_sale:
-        # Asegurar que first_sale sea timezone-aware (MySQL puede devolver naive)
-        if first_sale.tzinfo is None:
-            from datetime import timezone
-            first_sale = first_sale.replace(tzinfo=timezone.utc)
-        actual_days = max((utcnow() - first_sale).days, 1)
-        # Tomar el menor entre actual_days y lookback_days
-        effective_days = min(actual_days, lookback_days)
-    else:
-        effective_days = lookback_days
-
-    effective_days = max(effective_days, 1)
-
-    daily_avg = total_sold / effective_days
-    weekly_avg = daily_avg * 7
-    monthly_avg = daily_avg * 30
-
-    # Obtener stock actual (convertir a float para evitar Decimal vs float)
+    # Obtener stock actual para los cálculos de predicción
     product = db.query(Product).filter(Product.id == product_id).first()
     stock = float(product.stock) if product and product.stock is not None else 0.0
     min_stock_val = float(product.min_stock) if product and product.min_stock is not None else 3.0
 
-    # Días hasta agotamiento
-    days_until_stockout = None
-    if daily_avg > 0:
-        days_until_stockout = round(stock / daily_avg, 1)
-
-    # Smart reorder: cubrir ventas de los próximos 30 días + buffer de seguridad (7 días)
-    # Mínimo: el valor clásico (2 × min_stock - stock)
-    coverage_days = 30
-    safety_days = 7
-    projected_need = daily_avg * (coverage_days + safety_days)
-    smart_reorder = max(0, int(projected_need - stock + 0.5))
-
-    # Garantizar al menos el cálculo clásico
-    classic_reorder = max(0, 2 * min_stock_val - stock)
-    smart_reorder = max(smart_reorder, classic_reorder)
-
-    # Urgencia
-    if days_until_stockout is not None and days_until_stockout <= 3:
-        urgency = "critico"
-    elif days_until_stockout is not None and days_until_stockout <= 7:
-        urgency = "alto"
-    elif stock <= min_stock_val:
-        urgency = "medio"
-    else:
-        urgency = "bajo"
-
-    return {
-        "daily_avg": round(daily_avg, 2),
-        "weekly_avg": round(weekly_avg, 2),
-        "monthly_avg": round(monthly_avg, 2),
-        "total_sold": total_sold,
-        "days_analyzed": effective_days,
-        "days_until_stockout": days_until_stockout,
-        "smart_reorder": smart_reorder,
-        "reorder_urgency": urgency,
-    }
+    sales_info = sales_batch.get(product_id, {})
+    return _build_rotation_result(sales_info, stock, min_stock_val, lookback_days)
 
 
 # -----------------------------

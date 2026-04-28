@@ -57,40 +57,24 @@ def check_status() -> dict:
         status["tables_count"] = len(tables)
 
         if "users" in tables:
-            from app.db.database import SessionLocal
+            from app.db.database import safe_session
             from app.db.models.user import User
-            db = SessionLocal()
-            try:
-                status["has_admin"] = db.query(User).filter(User.username == "admin").first() is not None
-            finally:
-                db.close()
-
-        if "settings" in tables:
-            from app.db.database import SessionLocal
             from app.db.models.settings import Settings
-            db = SessionLocal()
-            try:
-                status["has_settings"] = db.query(Settings).filter(Settings.id == 1).first() is not None
-            finally:
-                db.close()
-
-        if "issuer_profiles" in tables:
-            from app.db.database import SessionLocal
             from app.db.models.issuer_profile import IssuerProfile
-            db = SessionLocal()
-            try:
-                status["has_issuer"] = db.query(IssuerProfile).first() is not None
-            finally:
-                db.close()
-
-        if "payment_methods" in tables:
-            from app.db.database import SessionLocal
             from app.db.models.payment_method import PaymentMethod
-            db = SessionLocal()
-            try:
-                status["has_payment_methods"] = db.query(PaymentMethod).count() >= 5
-            finally:
-                db.close()
+
+            # ── FASE 2: Una sola sesión para todas las verificaciones ──
+            with safe_session() as db:
+                status["has_admin"] = db.query(User).filter(User.username == "admin").first() is not None
+
+                if "settings" in tables:
+                    status["has_settings"] = db.query(Settings).filter(Settings.id == 1).first() is not None
+
+                if "issuer_profiles" in tables:
+                    status["has_issuer"] = db.query(IssuerProfile).first() is not None
+
+                if "payment_methods" in tables:
+                    status["has_payment_methods"] = db.query(PaymentMethod).count() >= 5
 
     except Exception as e:
         status["db_error"] = str(e)

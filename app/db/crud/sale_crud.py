@@ -3,7 +3,7 @@
 FASE 4.1 — Lógica de negocio de ventas extraída del router.
 El router solo valida entrada, llama a estas funciones y devuelve respuesta.
 """
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Optional
 

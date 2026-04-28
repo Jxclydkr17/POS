@@ -9,14 +9,19 @@ USO:
 
 import sys
 import argparse
+import logging
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.services.backup_service import create_backup, list_backups
 
+logger = logging.getLogger(__name__)
+
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     parser = argparse.ArgumentParser(description="Backup de la BD de Violette POS")
     parser.add_argument("--tag", default="", help="Etiqueta para el nombre del backup")
     parser.add_argument("--list", action="store_true", help="Listar backups existentes")
@@ -25,22 +30,22 @@ def main():
     if args.list:
         backups = list_backups()
         if not backups:
-            print("No hay backups disponibles.")
+            logger.info("No hay backups disponibles.")
             return
 
-        print(f"\n📦 Backups disponibles ({len(backups)}):\n" + "─" * 60)
+        logger.info(f"\n📦 Backups disponibles ({len(backups)}):\n" + "─" * 60)
         for b in backups:
-            print(f"  {b['filename']}  ({b['size_mb']} MB)  {b['created_at']}")
-        print()
+            logger.info(f"  {b['filename']}  ({b['size_mb']} MB)  {b['created_at']}")
+        logger.info("")
         return
 
-    print("\n💾 Creando backup de la base de datos...\n")
+    logger.info("\n💾 Creando backup de la base de datos...\n")
     try:
         path = create_backup(tag=args.tag)
-        print(f"✅ Backup creado exitosamente:")
-        print(f"   📁 {path}\n")
+        logger.info(f"✅ Backup creado exitosamente:")
+        logger.info(f"   📁 {path}\n")
     except RuntimeError as e:
-        print(f"❌ Error: {e}\n")
+        logger.error(f"❌ Error: {e}\n")
         sys.exit(1)
 
 

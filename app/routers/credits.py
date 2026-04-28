@@ -17,6 +17,7 @@ from app.services.credit_service import (
 )
 from app.schemas.credit import CreditPaymentCreate
 from app.utils.responses import success_response
+from app.core.logger import logger
 
 
 # ── Schema de validación (Fase 8 — Bug 8.3) ──────────────
@@ -54,7 +55,8 @@ def add_credit(
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error al registrar crédito para cliente {customer_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el crédito.")
 
 
 
@@ -96,7 +98,8 @@ def pay_credit(
         raise HTTPException(status_code=400, detail=str(ve))
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error al registrar abono para cliente {customer_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al procesar el abono.")
 
 
 # -----------------------------------------------------------

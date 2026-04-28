@@ -498,7 +498,7 @@ def generate_pdf(einvoice_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error generando PDF para einvoice {einvoice_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error generando PDF: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al generar el PDF del comprobante.")
 
 
 # ================================================================
@@ -535,7 +535,8 @@ def print_einvoice_ticket(einvoice_id: int, db: Session = Depends(get_db)):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=f"Error de impresión: {e}")
+        logger.error(f"Error de impresión para einvoice {einvoice_id}: {e}")
+        raise HTTPException(status_code=500, detail="Error interno al enviar a impresora.")
 
 
 # ================================================================
