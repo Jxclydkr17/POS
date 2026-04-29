@@ -3,10 +3,11 @@ from PySide6.QtWidgets import (
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit,
     QScrollArea, QTabWidget, QFileDialog, QMessageBox, QGraphicsOpacityEffect
 )
-from PySide6.QtCore import Qt, QDate, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QDate, Signal, QTimer
 from PySide6.QtGui import QColor, QFont
 import requests
 from ui.session_manager import session
+from ui.utils.http_worker import run_async
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from reportlab.lib.pagesizes import letter
@@ -65,37 +66,21 @@ METHOD_COLORS = {
 
 
 
-
 # ─────────────────────────────────────────────────────────────
-# Worker para llamada HTTP asíncrona (FIX #1 + FIX #9)
-# Un solo worker porque ahora el endpoint devuelve todo
+# Worker para llamada HTTP asíncrona (migrado a run_async)
 # ─────────────────────────────────────────────────────────────
-class ReportWorker(QThread):
-    """Carga el reporte consolidado del día en segundo plano."""
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, url: str, headers: dict):
-        super().__init__()
-        self.url = url
-        self.headers = headers
-
-    def run(self):
-        try:
-            response = requests.get(self.url, headers=self.headers, timeout=15)
-            if response.status_code != 200:
-                self.error.emit(f"HTTP {response.status_code}: {response.text}")
-                return
-            self.finished.emit(response.json())
-        except Exception as e:
-            self.error.emit(str(e))
+def _fetch_report(url: str, headers: dict) -> dict:
+    """Función ejecutada en el thread pool de Qt."""
+    response = requests.get(url, headers=headers, timeout=15)
+    if response.status_code != 200:
+        raise Exception(f"HTTP {response.status_code}: {response.text}")
+    return response.json()
 
 
 class DailyReportView(QWidget):
     def __init__(self):
         super().__init__()
         self.data = None
-        self._active_workers = []
         self._temp_chart_files = []
         self.bar_chart_path = None
         self.pie_chart_path = None
@@ -428,21 +413,6 @@ class DailyReportView(QWidget):
             self.btn_load_date.setText("🔍 Cargar")
             self._stop_spinner()
 
-    def _keep_worker(self, worker: QThread):
-        """Mantiene referencia al worker y lo limpia al terminar."""
-        self._active_workers.append(worker)
-        worker.finished.connect(lambda: self._cleanup_worker(worker))
-        if hasattr(worker, 'error'):
-            worker.error.connect(lambda: self._cleanup_worker(worker))
-
-    def _cleanup_worker(self, worker: QThread):
-        """Elimina la referencia al worker terminado."""
-        try:
-            self._active_workers.remove(worker)
-        except ValueError:
-            pass
-        worker.deleteLater()
-
     def load_report(self):
         try:
             selected_date = self.date_selector.date().toString("yyyy-MM-dd")
@@ -452,11 +422,12 @@ class DailyReportView(QWidget):
             logging.debug(f"Cargando reporte para: {selected_date}")
             self._set_loading_state(True)
 
-            worker = ReportWorker(url, headers)
-            worker.finished.connect(lambda data: self._on_report_loaded(data, selected_date))
-            worker.error.connect(lambda err: self._on_report_error(err, selected_date))
-            self._keep_worker(worker)
-            worker.start()
+            run_async(
+                _fetch_report, url, headers,
+                on_success=lambda data: self._on_report_loaded(data, selected_date),
+                on_error=lambda err: self._on_report_error(err, selected_date),
+                on_finished=lambda: self._set_loading_state(False),
+            )
 
         except Exception as e:
             logging.error(f"Error iniciando carga de reporte: {e}")
@@ -1325,7 +1296,4 @@ class DailyReportView(QWidget):
         self._close_all_figures()
         self._cleanup_temp_charts()
         self._stop_spinner()
-        for worker in self._active_workers:
-            worker.quit()
-            worker.wait(2000)
         super().closeEvent(event)

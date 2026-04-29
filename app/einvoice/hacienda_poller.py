@@ -134,7 +134,7 @@ def _retry_failed_sends():
             retriable = (
                 db.query(ElectronicInvoice)
                 .filter(
-                    ElectronicInvoice.status == "SEND_ERROR",
+                    ElectronicInvoice.status == InvoiceStatus.SEND_ERROR,
                     ElectronicInvoice.tries < MAX_RETRY_ATTEMPTS,
                 )
                 .order_by(ElectronicInvoice.tries.asc(), ElectronicInvoice.id.asc())
@@ -168,14 +168,14 @@ def _retry_failed_sends():
             exhausted = (
                 db.query(ElectronicInvoice)
                 .filter(
-                    ElectronicInvoice.status == "SEND_ERROR",
+                    ElectronicInvoice.status == InvoiceStatus.SEND_ERROR,
                     ElectronicInvoice.tries >= MAX_RETRY_ATTEMPTS,
                 )
                 .all()
             )
 
             for einv in exhausted:
-                einv.status = "FAILED"
+                einv.status = InvoiceStatus.FAILED
                 einv.last_error = (
                     f"Agotados {MAX_RETRY_ATTEMPTS} reintentos automáticos. "
                     f"Último error: {(einv.last_error or '')[:200]}"
@@ -192,7 +192,7 @@ def _retry_failed_sends():
             retriable_reps = (
                 db.query(ElectronicRep)
                 .filter(
-                    ElectronicRep.status == "SEND_ERROR",
+                    ElectronicRep.status == InvoiceStatus.SEND_ERROR,
                     ElectronicRep.tries < MAX_RETRY_ATTEMPTS,
                 )
                 .limit(BATCH_SIZE)
@@ -211,14 +211,14 @@ def _retry_failed_sends():
             exhausted_reps = (
                 db.query(ElectronicRep)
                 .filter(
-                    ElectronicRep.status == "SEND_ERROR",
+                    ElectronicRep.status == InvoiceStatus.SEND_ERROR,
                     ElectronicRep.tries >= MAX_RETRY_ATTEMPTS,
                 )
                 .all()
             )
 
             for rep in exhausted_reps:
-                rep.status = "FAILED"
+                rep.status = InvoiceStatus.FAILED
                 rep.last_error = f"Agotados {MAX_RETRY_ATTEMPTS} reintentos. {(rep.last_error or '')[:200]}"
 
             if exhausted_reps:

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QFrame, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
 )
-from PySide6.QtCore import Qt, QDate, QThread, Signal, QTimer
+from PySide6.QtCore import Qt, QDate, Signal, QTimer
 from PySide6.QtGui import QFont, QColor
 import requests
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -11,6 +11,7 @@ from matplotlib.figure import Figure
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.calendar_fix import fix_calendar_colors
+from ui.utils.http_worker import run_async
 import logging
 import os
 import tempfile
@@ -63,30 +64,14 @@ STATUS_COLORS = {
 
 
 # ─────────────────────────────────────────────────────────────
-# Worker HTTP asíncrono
+# Worker HTTP asíncrono (migrado a run_async)
 # ─────────────────────────────────────────────────────────────
-class FinancialWorker(QThread):
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, url: str, headers: dict, params: dict):
-        super().__init__()
-        self.url = url
-        self.headers = headers
-        self.params = params
-
-    def run(self):
-        try:
-            r = requests.get(
-                self.url, headers=self.headers,
-                params=self.params, timeout=15,
-            )
-            if r.status_code != 200:
-                self.error.emit(f"HTTP {r.status_code}: {r.text}")
-                return
-            self.finished.emit(r.json())
-        except Exception as e:
-            self.error.emit(str(e))
+def _fetch_financial(url: str, headers: dict, params: dict) -> dict:
+    """Función ejecutada en el thread pool de Qt."""
+    r = requests.get(url, headers=headers, params=params, timeout=15)
+    if r.status_code != 200:
+        raise Exception(f"HTTP {r.status_code}: {r.text}")
+    return r.json()
 
 
 # ─────────────────────────────────────────────────────────────
@@ -97,7 +82,6 @@ class FinancialView(QWidget):
         super().__init__()
         self.setWindowTitle("Reporte Financiero Global")
         self.resize(950, 850)
-        self._active_workers = []
         self._figures = []
         self._spinner_dots = 0
         self._spinner_timer = None
@@ -448,18 +432,6 @@ class FinancialView(QWidget):
         else:
             self.btn_refresh.setText("🔍 Actualizar"); self._stop_spinner()
 
-    # ─── worker management ──────────────────────────────────
-    def _keep_worker(self, w):
-        self._active_workers.append(w)
-        w.finished.connect(lambda: self._cleanup_worker(w))
-        if hasattr(w, "error"):
-            w.error.connect(lambda: self._cleanup_worker(w))
-
-    def _cleanup_worker(self, w):
-        try: self._active_workers.remove(w)
-        except ValueError: pass
-        w.deleteLater()
-
     def _auth_headers(self):
         if not session.token:
             raise ValueError("No hay sesión activa.")
@@ -488,15 +460,16 @@ class FinancialView(QWidget):
             start_date = self.dt_from.date().toString("yyyy-MM-dd")
             end_date = self.dt_to.date().toString("yyyy-MM-dd")
             self._set_loading_state(True)
-            worker = FinancialWorker(
-                url=f"{API_URL}/financial/summary",
-                headers=self._auth_headers(),
-                params={"start_date": start_date, "end_date": end_date},
+
+            run_async(
+                _fetch_financial,
+                f"{API_URL}/financial/summary",
+                self._auth_headers(),
+                {"start_date": start_date, "end_date": end_date},
+                on_success=self._on_data_loaded,
+                on_error=self._on_data_error,
+                on_finished=lambda: self._set_loading_state(False),
             )
-            worker.finished.connect(self._on_data_loaded)
-            worker.error.connect(self._on_data_error)
-            self._keep_worker(worker)
-            worker.start()
         except Exception as e:
             logging.error(f"Error iniciando carga financiera: {e}")
             self._set_loading_state(False)
@@ -946,8 +919,6 @@ class FinancialView(QWidget):
     def closeEvent(self, event):
         self._clear_chart()
         self._stop_spinner()
-        for w in self._active_workers:
-            w.quit(); w.wait(2000)
         if self._chart_path and os.path.exists(self._chart_path):
             try: os.remove(self._chart_path)
             except Exception: logging.debug("No se pudo eliminar chart temporal: %s", self._chart_path)

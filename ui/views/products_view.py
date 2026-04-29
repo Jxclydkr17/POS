@@ -222,6 +222,7 @@ class ProductsView(QWidget):
         self.total_products = 0
         self._categories_map: dict = {}
         self._suppliers_map: dict = {}
+        self._filters_loaded = False
 
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
@@ -474,21 +475,40 @@ class ProductsView(QWidget):
 
     # ── Filtros ──────────────────────────────────────────────
     def _load_filter_options(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp_cat = api_request("get", f"{BASE_URL}/categories", headers=headers)
-            if resp_cat.status_code == 200:
-                cats = resp_cat.json().get("data", [])
-                self._categories_map = {c["name"]: c["id"] for c in cats if c.get("is_active", True)}
+        """Carga categorías y proveedores en background para los filtros.
+        Se ejecuta una sola vez; llamadas posteriores son no-op."""
+        if self._filters_loaded:
+            return
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", f"{BASE_URL}/categories",
+            headers=headers,
+            on_success=self._on_filter_categories_loaded,
+        )
 
-            resp_sup = api_request("get", f"{BASE_URL}/suppliers", headers=headers)
-            if resp_sup.status_code == 200:
-                sups = resp_sup.json() if isinstance(resp_sup.json(), list) else resp_sup.json().get("items", resp_sup.json().get("data", []))
-                self._suppliers_map = {s["name"]: s["id"] for s in sups if s.get("is_active", True)}
+    def refresh_filter_options(self):
+        """Fuerza recarga de categorías y proveedores (llamar tras editar catálogos)."""
+        self._filters_loaded = False
+        self._load_filter_options()
 
-            self._populate_filter_combos()
-        except Exception:
-            pass
+    def _on_filter_categories_loaded(self, payload):
+        """Callback: categorías para filtros recibidas — continuar con proveedores."""
+        cats = payload.get("data", []) if isinstance(payload, dict) else []
+        self._categories_map = {c["name"]: c["id"] for c in cats if c.get("is_active", True)}
+
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", f"{BASE_URL}/suppliers",
+            headers=headers,
+            on_success=self._on_filter_suppliers_loaded,
+        )
+
+    def _on_filter_suppliers_loaded(self, payload):
+        """Callback: proveedores para filtros recibidos — poblar combos."""
+        sups = payload if isinstance(payload, list) else payload.get("items", payload.get("data", []))
+        self._suppliers_map = {s["name"]: s["id"] for s in sups if s.get("is_active", True)}
+        self._filters_loaded = True
+        self._populate_filter_combos()
 
     def _update_pagination_controls(self):
         total_pages = max(1, -(-self.total_products // self.page_size))
@@ -633,166 +653,168 @@ class ProductsView(QWidget):
 
     # ── Carga de datos ────────────────────────────────────────
     def load_products(self):
+        """Lanza la carga de productos en background sin congelar la UI."""
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+        skip = (self.current_page - 1) * self.page_size
+        params = {"skip": skip, "limit": self.page_size}
+
+        if self.status_filter is True:
+            params["is_active"] = "true"
+        elif self.status_filter is False:
+            params["is_active"] = "false"
+
+        if getattr(self, "supplier_id_filter", None):
+            params["supplier_id"] = self.supplier_id_filter
+
+        search_text = self.search_input.text().strip()
+        if search_text:
+            params["search"] = search_text
+
+        if not getattr(self, "_clearing_filters", False):
+            cat_name = self.combo_category.currentText()
+            if not cat_name.startswith("📁") and cat_name in self._categories_map:
+                params["category_id"] = self._categories_map[cat_name]
+
+            if not params.get("supplier_id"):
+                sup_name = self.combo_supplier.currentText()
+                if not sup_name.startswith("🏭") and sup_name in self._suppliers_map:
+                    params["supplier_id"] = self._suppliers_map[sup_name]
+
+        api_call(
+            "get", API_URL,
+            headers=headers,
+            params=params,
+            on_success=self._on_products_loaded,
+            on_error=self._on_products_error,
+        )
+
+    def _on_products_loaded(self, payload):
+        """Callback: productos recibidos del servidor — poblar tabla."""
         try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+            from ui.dialogs.add_product_dialog import IVA_RATES
 
-            skip = (self.current_page - 1) * self.page_size
-            params = {"skip": skip, "limit": self.page_size}
+            products = payload.get("data", [])
+            if not isinstance(products, list):
+                raise ValueError("El campo 'data' no es una lista.")
+            self.total_products = payload.get("total") or len(products)
 
-            if self.status_filter is True:
-                params["is_active"] = "true"
-            elif self.status_filter is False:
-                params["is_active"] = "false"
+            self.categories = {p.get("category_name", "-") for p in products if p.get("category_name")}
+            self.table.setRowCount(len(products))
+            self.table.setSortingEnabled(False)
 
-            if getattr(self, "supplier_id_filter", None):
-                params["supplier_id"] = self.supplier_id_filter
+            for _r in range(len(products)):
+                self.table.setRowHidden(_r, False)
 
-            search_text = self.search_input.text().strip()
-            if search_text:
-                params["search"] = search_text
+            PRECISION_COMPARE = Decimal('0.0001')
 
-            if not getattr(self, "_clearing_filters", False):
-                cat_name = self.combo_category.currentText()
-                if not cat_name.startswith("📁") and cat_name in self._categories_map:
-                    params["category_id"] = self._categories_map[cat_name]
-
-                if not params.get("supplier_id"):
-                    sup_name = self.combo_supplier.currentText()
-                    if not sup_name.startswith("🏭") and sup_name in self._suppliers_map:
-                        params["supplier_id"] = self._suppliers_map[sup_name]
-
-            response = api_request("get", API_URL, headers=headers, params=params)
-
-            if response.status_code == 200:
-                from ui.dialogs.add_product_dialog import IVA_RATES
-
-                payload  = response.json()
-                products = payload.get("data", [])
-                if not isinstance(products, list):
-                    raise ValueError("El campo 'data' no es una lista.")
-                self.total_products = payload.get("total") or len(products)
-
-                self.categories = {p.get("category_name", "-") for p in products if p.get("category_name")}
-                self.table.setRowCount(len(products))
-                self.table.setSortingEnabled(False)
-
-                for _r in range(len(products)):
-                    self.table.setRowHidden(_r, False)
-
-                PRECISION_COMPARE = Decimal('0.0001')
-
-                def iva_label(value):
-                    if value is None:
-                        return "Tarifa Exenta"
-                    try:
-                        d = Decimal(str(value)).quantize(PRECISION_COMPARE)
-                    except Exception:
-                        return "Tarifa Desconocida"
-                    if d == Decimal("0.0000"):
-                        return "Tarifa 0% (Artículo 32, num 1, RLIVA)"
-                    for label, rate in IVA_RATES.items():
-                        if rate is None:
-                            continue
-                        if d == Decimal(str(rate)).quantize(PRECISION_COMPARE):
-                            return label
+            def iva_label(value):
+                if value is None:
+                    return "Tarifa Exenta"
+                try:
+                    d = Decimal(str(value)).quantize(PRECISION_COMPARE)
+                except Exception:
                     return "Tarifa Desconocida"
+                if d == Decimal("0.0000"):
+                    return "Tarifa 0% (Artículo 32, num 1, RLIVA)"
+                for label, rate in IVA_RATES.items():
+                    if rate is None:
+                        continue
+                    if d == Decimal(str(rate)).quantize(PRECISION_COMPARE):
+                        return label
+                return "Tarifa Desconocida"
 
-                def colored_item(text, bg_hex, fg_hex, align=Qt.AlignCenter):
-                    it = QTableWidgetItem(text)
-                    it.setBackground(QColor(bg_hex))
-                    it.setForeground(QColor(fg_hex))
-                    it.setTextAlignment(align)
-                    f = it.font(); f.setBold(True); it.setFont(f)
-                    return it
+            def colored_item(text, bg_hex, fg_hex, align=Qt.AlignCenter):
+                it = QTableWidgetItem(text)
+                it.setBackground(QColor(bg_hex))
+                it.setForeground(QColor(fg_hex))
+                it.setTextAlignment(align)
+                f = it.font(); f.setBold(True); it.setFont(f)
+                return it
 
-                for row, product in enumerate(products):
-                    stock_val     = _clean_stock(product.get("stock", 0))
-                    min_stock_val = _clean_stock(product.get("min_stock", 3))
-                    status_text, status_bg, status_fg, row_bg = self.get_stock_status(stock_val, min_stock_val)
+            for row, product in enumerate(products):
+                stock_val     = _clean_stock(product.get("stock", 0))
+                min_stock_val = _clean_stock(product.get("min_stock", 3))
+                status_text, status_bg, status_fg, row_bg = self.get_stock_status(stock_val, min_stock_val)
 
-                    # Col 0 — ID (oculto)
-                    id_item = QTableWidgetItem(str(product.get("id", "")))
-                    id_item.setData(Qt.UserRole,     product.get("is_active",       True))
-                    id_item.setData(Qt.UserRole + 1, product.get("is_pos_favorite", False))
-                    self.table.setItem(row, COL_ID, id_item)
+                # Col 0 — ID (oculto)
+                id_item = QTableWidgetItem(str(product.get("id", "")))
+                id_item.setData(Qt.UserRole,     product.get("is_active",       True))
+                id_item.setData(Qt.UserRole + 1, product.get("is_pos_favorite", False))
+                self.table.setItem(row, COL_ID, id_item)
 
-                    # Col 1 — Imagen
-                    img_lbl = QLabel()
-                    img_lbl.setAlignment(Qt.AlignCenter)
-                    img_lbl.setPixmap(_load_thumbnail(product.get("image_path"), size=48))
-                    img_lbl.setFixedSize(58, 58)
-                    img_lbl.setStyleSheet("background: transparent; padding: 2px;")
-                    self.table.setCellWidget(row, COL_IMG, img_lbl)
+                # Col 1 — Imagen
+                img_lbl = QLabel()
+                img_lbl.setAlignment(Qt.AlignCenter)
+                img_lbl.setPixmap(_load_thumbnail(product.get("image_path"), size=48))
+                img_lbl.setFixedSize(58, 58)
+                img_lbl.setStyleSheet("background: transparent; padding: 2px;")
+                self.table.setCellWidget(row, COL_IMG, img_lbl)
 
-                    # Col 2 — Código
-                    self.table.setItem(row, COL_CODE, QTableWidgetItem(product.get("code", "-")))
+                # Col 2 — Código
+                self.table.setItem(row, COL_CODE, QTableWidgetItem(product.get("code", "-")))
 
-                    # Col 3 — Nombre (bold + tooltip)
-                    name_item = QTableWidgetItem(product.get("name", "-"))
-                    desc = product.get("description") or ""
-                    if desc:
-                        name_item.setToolTip(desc)
-                    f = name_item.font(); f.setBold(True); name_item.setFont(f)
-                    self.table.setItem(row, COL_NAME, name_item)
+                # Col 3 — Nombre (bold + tooltip)
+                name_item = QTableWidgetItem(product.get("name", "-"))
+                desc = product.get("description") or ""
+                if desc:
+                    name_item.setToolTip(desc)
+                f = name_item.font(); f.setBold(True); name_item.setFont(f)
+                self.table.setItem(row, COL_NAME, name_item)
 
-                    # Col 4 — Precio
-                    try:
-                        price_value = float(product.get("price") or 0)
-                    except Exception:
-                        price_value = 0
-                    p_item = NumericTableItem(f"₡{price_value:,.2f}", price_value)
-                    p_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    self.table.setItem(row, COL_PRICE, p_item)
+                # Col 4 — Precio
+                try:
+                    price_value = float(product.get("price") or 0)
+                except Exception:
+                    price_value = 0
+                p_item = NumericTableItem(f"₡{price_value:,.2f}", price_value)
+                p_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.table.setItem(row, COL_PRICE, p_item)
 
-                    # Col 5 — Costo
-                    try:
-                        cost_value = float(product.get("cost") or 0)
-                    except Exception:
-                        cost_value = 0
-                    c_item = NumericTableItem(f"₡{cost_value:,.2f}", cost_value)
-                    c_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                    c_item.setForeground(QColor("#AAAAAA"))
-                    self.table.setItem(row, COL_COST, c_item)
+                # Col 5 — Costo
+                try:
+                    cost_value = float(product.get("cost") or 0)
+                except Exception:
+                    cost_value = 0
+                c_item = NumericTableItem(f"₡{cost_value:,.2f}", cost_value)
+                c_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                c_item.setForeground(QColor("#AAAAAA"))
+                self.table.setItem(row, COL_COST, c_item)
 
-                    # Col 6 — Stock
-                    st_item = StockTableItem(_format_stock(stock_val), stock_val, min_stock_val)
-                    st_item.setTextAlignment(Qt.AlignCenter)
-                    st_item.setToolTip(f"Stock actual: {_format_stock(stock_val)}  |  Mínimo: {_format_stock(min_stock_val)}")
-                    self.table.setItem(row, COL_STOCK, st_item)
+                # Col 6 — Stock
+                st_item = StockTableItem(_format_stock(stock_val), stock_val, min_stock_val)
+                st_item.setTextAlignment(Qt.AlignCenter)
+                st_item.setToolTip(f"Stock actual: {_format_stock(stock_val)}  |  Mínimo: {_format_stock(min_stock_val)}")
+                self.table.setItem(row, COL_STOCK, st_item)
 
-                    # Col 7 — Mínimo
-                    mn_item = NumericTableItem(_format_stock(min_stock_val), min_stock_val)
-                    mn_item.setTextAlignment(Qt.AlignCenter)
-                    mn_item.setForeground(QColor("#888888"))
-                    self.table.setItem(row, COL_MIN, mn_item)
+                # Col 7 — Mínimo
+                mn_item = NumericTableItem(_format_stock(min_stock_val), min_stock_val)
+                mn_item.setTextAlignment(Qt.AlignCenter)
+                mn_item.setForeground(QColor("#888888"))
+                self.table.setItem(row, COL_MIN, mn_item)
 
-                    # Col 8 — Estado
-                    status_item = StatusTableItem(status_text, stock_val, min_stock_val)
-                    status_item.setTextAlignment(Qt.AlignCenter)
-                    status_item.setToolTip(f"Stock: {stock_val}  |  Mín: {min_stock_val}")
-                    self.table.setItem(row, COL_STATUS, status_item)
+                # Col 8 — Estado
+                status_item = StatusTableItem(status_text, stock_val, min_stock_val)
+                status_item.setTextAlignment(Qt.AlignCenter)
+                status_item.setToolTip(f"Stock: {stock_val}  |  Mín: {min_stock_val}")
+                self.table.setItem(row, COL_STATUS, status_item)
 
-                    # Col 9 — Categoría
-                    cat_name = product.get("category_name") or "-"
-                    self.table.setItem(row, COL_CATEGORY, QTableWidgetItem(cat_name))
+                # Col 9 — Categoría
+                cat_name = product.get("category_name") or "-"
+                self.table.setItem(row, COL_CATEGORY, QTableWidgetItem(cat_name))
 
-                    # Col 10 — Proveedor
-                    sup_name = product.get("supplier_name") or "-"
-                    self.table.setItem(row, COL_SUPPLIER, QTableWidgetItem(sup_name))
+                # Col 10 — Proveedor
+                sup_name = product.get("supplier_name") or "-"
+                self.table.setItem(row, COL_SUPPLIER, QTableWidgetItem(sup_name))
 
-                    # Cols ocultas
-                    self.table.setItem(row, COL_BARCODE, QTableWidgetItem(product.get("barcode", "-")))
-                    profit = price_value - cost_value
-                    margin = (profit / cost_value * 100) if cost_value > 0 else 0
-                    self.table.setItem(row, COL_PROFIT, NumericTableItem(f"₡{profit:,.2f}", profit))
-                    self.table.setItem(row, COL_MARGIN,  NumericTableItem(f"{margin:.1f}%", margin))
-                    self.table.setItem(row, COL_CABYS,   QTableWidgetItem(product.get("cabys_code", "-")))
-                    self.table.setItem(row, COL_IVA,     QTableWidgetItem(iva_label(product.get("tax_rate"))))
-
-
-
-            else:
-                raise Exception(f"Error {response.status_code}: {response.text}")
+                # Cols ocultas
+                self.table.setItem(row, COL_BARCODE, QTableWidgetItem(product.get("barcode", "-")))
+                profit = price_value - cost_value
+                margin = (profit / cost_value * 100) if cost_value > 0 else 0
+                self.table.setItem(row, COL_PROFIT, NumericTableItem(f"₡{profit:,.2f}", profit))
+                self.table.setItem(row, COL_MARGIN,  NumericTableItem(f"{margin:.1f}%", margin))
+                self.table.setItem(row, COL_CABYS,   QTableWidgetItem(product.get("cabys_code", "-")))
+                self.table.setItem(row, COL_IVA,     QTableWidgetItem(iva_label(product.get("tax_rate"))))
 
             self.setup_autocomplete()
             self.update_toggle_button_state()
@@ -810,6 +832,10 @@ class ProductsView(QWidget):
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron cargar los productos:\n{e}")
+
+    def _on_products_error(self, msg):
+        """Callback: error al cargar productos."""
+        QMessageBox.critical(self, "Error", f"No se pudieron cargar los productos:\n{msg}")
 
     # ── Combos ───────────────────────────────────────────────
     def _populate_filter_combos(self):

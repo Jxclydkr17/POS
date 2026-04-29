@@ -59,6 +59,10 @@ qrcode==8.0
 pillow==12.2.0
 
 # ── Excel / CSV ──
+# NOTA: pandas y numpy agregan ~100MB al .exe empaquetado con PyInstaller.
+# Se usan en: export_utils.py, cabys_updater.py, supplier_service.py.
+# Evaluar migración a openpyxl puro + SQL si el tamaño del instalador
+# se vuelve un problema en producción.
 openpyxl==3.1.5
 et_xmlfile==2.0.0
 pandas==2.2.3
@@ -74,6 +78,10 @@ cssselect==1.4.0
 cssutils==2.11.1
 
 # ── Gráficos ──
+# NOTA: matplotlib se usa para gráficos interactivos embebidos en Qt
+# (daily_report_view, financial_view, sales/purchases_analytics_view,
+# performance_chart_card). No es sustituible por reportlab porque
+# son gráficos renderizados en vivo en la UI, no solo en PDFs.
 matplotlib==3.10.0
 contourpy==1.3.3
 cycler==0.12.1
@@ -103,4 +111,3 @@ ecdsa==0.19.2
 cachetools==7.0.5
 chardet==7.4.0.post2
 anyio==4.13.0
-setuptools==82.0.1

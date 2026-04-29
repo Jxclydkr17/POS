@@ -48,6 +48,13 @@ from concurrent.futures import ThreadPoolExecutor
 _pdf_executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="pdf-sale")
 
 
+def stop_pdf_executor():
+    """Cierra el pool de threads de PDF/Email de forma limpia.
+    Llamar desde el lifespan shutdown de main.py."""
+    _pdf_executor.shutdown(wait=False)
+    logger.info("PDF executor detenido")
+
+
 # ── FASE 4 — Fix 4.5: Redondeo para display ──
 # Internamente los cálculos usan 5 decimales (requerido por Hacienda CR),
 # pero los montos mostrados al usuario deben redondearse a 2 decimales

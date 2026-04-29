@@ -48,6 +48,16 @@ BACKUP_DIR = DATA_DIR / "backups"
 MAX_BACKUPS = 30          # Mantener últimos 30 backups
 BACKUP_INTERVAL = 86400   # 24 horas en segundos
 
+# ── FASE 3 — Fix 3.3: Flag de modo mantenimiento ──
+# Activo durante restore para que el middleware rechace requests
+# y evite que un request concurrente acceda a una BD a medio copiar.
+_maintenance_mode = False
+
+
+def is_maintenance_mode() -> bool:
+    """Retorna True si la app está en modo mantenimiento (restore en curso)."""
+    return _maintenance_mode
+
 # ── FASE 4 — Fix 4.2: Estado del último backup verificable ──
 _STATUS_FILE = DATA_DIR / "backup_status.json"
 _last_backup_status: dict = {
@@ -370,11 +380,16 @@ def _restore_sqlite_backup(filepath: Path) -> None:
     Si copiamos el .db mientras SQLAlchemy tiene conexiones activas,
     el archivo puede quedar corrupto.  engine.dispose() cierra todo
     el pool; SQLAlchemy reconecta automáticamente en la siguiente query.
+
+    FASE 3 — Fix 3.3: Activa modo mantenimiento durante el restore
+    para que el middleware rechace requests concurrentes.
     """
+    global _maintenance_mode
     from app.db.database import engine
 
     db_path = _get_sqlite_db_path()
     try:
+        _maintenance_mode = True
         engine.dispose()
         logger.info("Conexiones SQLite cerradas antes de restaurar.")
         shutil.copy2(str(filepath), str(db_path))
@@ -386,10 +401,13 @@ def _restore_sqlite_backup(filepath: Path) -> None:
         logger.info(f"Base de datos SQLite restaurada desde: {filepath.name}")
     except OSError as e:
         raise RuntimeError(f"Error restaurando SQLite: {e}")
+    finally:
+        _maintenance_mode = False
 
 
 def _restore_mysql_backup(filepath: Path) -> None:
     """Restaura MySQL: usa mysql CLI con credenciales seguras."""
+    global _maintenance_mode
     from app.utils.mysql_safe import build_mysql_cmd
 
     mysql = _find_mysql()
@@ -410,6 +428,7 @@ def _restore_mysql_backup(filepath: Path) -> None:
     )
 
     try:
+        _maintenance_mode = True
         with open(filepath, "r", encoding="utf-8") as f:
             result = subprocess.run(
                 cmd,
@@ -427,6 +446,7 @@ def _restore_mysql_backup(filepath: Path) -> None:
     except subprocess.TimeoutExpired:
         raise RuntimeError("Restore tardó más de 10 minutos. Operación cancelada.")
     finally:
+        _maintenance_mode = False
         cleanup()
 
 

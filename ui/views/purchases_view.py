@@ -42,9 +42,11 @@ class PurchasesView(QWidget):
         self._search_timer.setInterval(400)  # ms
         self._search_timer.timeout.connect(self._on_search_debounced)
 
+        self.suppliers_map = {}
+
         self.setup_ui()
+        self._preload_suppliers()
         self.load_purchases()
-        self.load_dashboard()
 
     # ---------------------------------------------------------
     # 🧠 UI
@@ -285,16 +287,52 @@ class PurchasesView(QWidget):
         self.setLayout(layout)
 
     # ---------------------------------------------------------
+    # 🏭 PRE-CARGAR PROVEEDORES (en paralelo con compras)
+    # ---------------------------------------------------------
+    def _preload_suppliers(self):
+        """Carga el mapa de proveedores en background al inicializar.
+        Así cuando llegan los datos de compras, los proveedores ya
+        están listos y no se encadena una petición extra."""
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", API_SUPPLIERS,
+            headers=headers,
+            on_success=self._on_suppliers_preloaded,
+        )
+
+    def _on_suppliers_preloaded(self, payload):
+        """Callback: proveedores pre-cargados — poblar combo."""
+        if self.suppliers_map:
+            return  # Ya fueron cargados por la cadena de compras, no sobrescribir
+        if isinstance(payload, dict):
+            suppliers_list = payload.get("items", payload.get("data", []))
+        else:
+            suppliers_list = payload if isinstance(payload, list) else []
+        self.suppliers_map = {s["id"]: s["name"] for s in suppliers_list}
+
+        self.filter_supplier_combo.blockSignals(True)
+        self.filter_supplier_combo.clear()
+        self.filter_supplier_combo.addItem("Todos", None)
+        for sid_key, name in self.suppliers_map.items():
+            self.filter_supplier_combo.addItem(name, sid_key)
+        self.filter_supplier_combo.blockSignals(False)
+
+    # ---------------------------------------------------------
     # 📊 CARGAR MINI-DASHBOARD
     # ---------------------------------------------------------
     def load_dashboard(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = api_request("get", f"{API_URL}/dashboard", headers=headers, timeout=10)
-            if res.status_code != 200:
-                return
+        """Carga KPIs del dashboard de compras en background."""
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        api_call(
+            "get", f"{API_URL}/dashboard",
+            headers=headers,
+            timeout=(5, 10),
+            on_success=self._on_dashboard_loaded,
+        )
 
-            payload = res.json()
+    def _on_dashboard_loaded(self, payload):
+        """Callback: KPIs del dashboard recibidos."""
+        try:
             data = payload.get("data", {}) if isinstance(payload, dict) else {}
 
             self.kpi_payable_week.setText(f"₡{data.get('payable_this_week', 0):,.2f} ({data.get('count_payable_week', 0)})")
@@ -309,7 +347,6 @@ class PurchasesView(QWidget):
                 show_toast(f"🔴 {overdue} factura(s) VENCIDA(S)", success=False, parent=self.window(), duration=5000)
             elif urgent > 0:
                 show_toast(f"⚡ {urgent} factura(s) vencen en 3 días", success=False, parent=self.window(), duration=4000)
-
         except Exception:
             pass  # No bloquear si el dashboard falla
 
@@ -317,37 +354,43 @@ class PurchasesView(QWidget):
     # 📦 CARGAR FACTURAS
     # ---------------------------------------------------------
     def load_purchases(self):
+        """Lanza la carga de compras en background sin congelar la UI."""
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+        # --- Parámetros server-side ---
+        skip = (self.current_page - 1) * self.page_size
+        params = {"skip": skip, "limit": self.page_size}
+
+        # Proveedor (filtro fijo de constructor o combo)
+        if getattr(self, "supplier_id_filter", None):
+            params["supplier_id"] = self.supplier_id_filter
+        else:
+            sid = getattr(self, "filter_supplier_combo", None)
+            if sid and sid.currentData() is not None:
+                params["supplier_id"] = sid.currentData()
+
+        # Estado → enviar al server (excepto "por vencer" que es client-side)
+        status_combo = getattr(self, "filter_status_combo", None)
+        status_text = status_combo.currentText().lower() if status_combo else "todos"
+        if status_text not in ("todos", "por vencer"):
+            params["status_filter"] = status_text
+
+        # Búsqueda por número de factura
+        search_text = getattr(self, "advanced_search_input", None)
+        if search_text and search_text.text().strip():
+            params["search"] = search_text.text().strip()
+
+        api_call(
+            "get", API_URL,
+            headers=headers,
+            params=params,
+            on_success=self._on_purchases_loaded,
+            on_error=self._on_purchases_error,
+        )
+
+    def _on_purchases_loaded(self, payload):
+        """Callback: datos de compras recibidos del servidor."""
         try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-
-            # --- Parámetros server-side ---
-            skip = (self.current_page - 1) * self.page_size
-            params = {"skip": skip, "limit": self.page_size}
-
-            # Proveedor (filtro fijo de constructor o combo)
-            if getattr(self, "supplier_id_filter", None):
-                params["supplier_id"] = self.supplier_id_filter
-            else:
-                sid = getattr(self, "filter_supplier_combo", None)
-                if sid and sid.currentData() is not None:
-                    params["supplier_id"] = sid.currentData()
-
-            # Estado → enviar al server (excepto "por vencer" que es client-side)
-            status_combo = getattr(self, "filter_status_combo", None)
-            status_text = status_combo.currentText().lower() if status_combo else "todos"
-            if status_text not in ("todos", "por vencer"):
-                params["status_filter"] = status_text
-
-            # Búsqueda por número de factura
-            search_text = getattr(self, "advanced_search_input", None)
-            if search_text and search_text.text().strip():
-                params["search"] = search_text.text().strip()
-
-            res = api_request("get", API_URL, headers=headers, params=params)
-            if res.status_code != 200:
-                raise Exception(res.text)
-
-            payload = res.json()
             if isinstance(payload, dict):
                 if not payload.get("success", True):
                     raise Exception(payload.get("message", "Error"))
@@ -366,34 +409,48 @@ class PurchasesView(QWidget):
             if self.current_page > self.total_pages:
                 self.current_page = self.total_pages
 
-            # Cargar proveedores (solo la primera vez o si el combo está vacío)
-            if not getattr(self, "suppliers_map", None) or not self.suppliers_map:
-                res_sup = api_request("get", API_SUPPLIERS, headers=headers)
-                suppliers_payload = res_sup.json() if res_sup.status_code == 200 else []
-                if isinstance(suppliers_payload, dict):
-                    suppliers_list = suppliers_payload.get("items", suppliers_payload.get("data", []))
-                else:
-                    suppliers_list = suppliers_payload
-                self.suppliers_map = {s["id"]: s["name"] for s in suppliers_list}
+            # Proveedores: si el pre-load ya los cargó, saltar; si no, encadenar
+            if not self.suppliers_map:
+                headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+                api_call(
+                    "get", API_SUPPLIERS,
+                    headers=headers,
+                    on_success=self._on_purchases_suppliers_loaded,
+                    on_error=lambda _msg: self._finalize_purchases_load(),
+                )
+                return
 
-                self.filter_supplier_combo.blockSignals(True)
-                self.filter_supplier_combo.clear()
-                self.filter_supplier_combo.addItem("Todos", None)
-                for sid_key, name in self.suppliers_map.items():
-                    self.filter_supplier_combo.addItem(name, sid_key)
-                self.filter_supplier_combo.blockSignals(False)
-
-            # Aplicar filtros client-side (monto, fecha, "por vencer")
-            self.apply_client_filters()
-
-            # Actualizar controles de paginación
-            self._update_pagination_controls()
-
-            # Refresh dashboard KPIs
-            self.load_dashboard()
+            self._finalize_purchases_load()
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudieron cargar las compras:\n{e}")
+
+    def _on_purchases_suppliers_loaded(self, payload):
+        """Callback: proveedores recibidos — poblar combo y finalizar."""
+        if isinstance(payload, dict):
+            suppliers_list = payload.get("items", payload.get("data", []))
+        else:
+            suppliers_list = payload if isinstance(payload, list) else []
+        self.suppliers_map = {s["id"]: s["name"] for s in suppliers_list}
+
+        self.filter_supplier_combo.blockSignals(True)
+        self.filter_supplier_combo.clear()
+        self.filter_supplier_combo.addItem("Todos", None)
+        for sid_key, name in self.suppliers_map.items():
+            self.filter_supplier_combo.addItem(name, sid_key)
+        self.filter_supplier_combo.blockSignals(False)
+
+        self._finalize_purchases_load()
+
+    def _finalize_purchases_load(self):
+        """Paso final común: aplicar filtros, actualizar paginación, cargar dashboard."""
+        self.apply_client_filters()
+        self._update_pagination_controls()
+        self.load_dashboard()
+
+    def _on_purchases_error(self, msg):
+        """Callback: error al cargar compras."""
+        QMessageBox.critical(self, "Error", f"No se pudieron cargar las compras:\n{msg}")
 
     def update_table(self, purchase_list=None):
         if purchase_list is None:

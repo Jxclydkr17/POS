@@ -12,6 +12,7 @@ import logging
 # 🧩 Importar gestor de sesión global
 from ui.session_manager import session
 from app.core.security import decode_token
+from ui.utils.http_worker import api_call
 
 from ui.api import BASE_URL
 
@@ -414,24 +415,29 @@ class LoginWindow(QWidget):
                 QMessageBox.warning(dlg, "Error", "Las contraseñas no coinciden.")
                 return
 
-            try:
-                resp = requests.post(
-                    f"{BASE_URL}/users/setup",
-                    json={"username": username, "password": password},
-                    timeout=10,
+            btn_create.setEnabled(False)
+            btn_create.setText("⏳ Creando...")
+
+            def _on_ok(data):
+                QMessageBox.information(
+                    dlg, "Listo",
+                    f"Administrador '{username}' creado exitosamente.\n"
+                    "Ahora puede iniciar sesión."
                 )
-                if resp.status_code == 200:
-                    QMessageBox.information(
-                        dlg, "Listo",
-                        f"Administrador '{username}' creado exitosamente.\n"
-                        "Ahora puede iniciar sesión."
-                    )
-                    dlg.accept()
-                else:
-                    detail = resp.json().get("detail", "Error desconocido")
-                    QMessageBox.critical(dlg, "Error", f"No se pudo crear el usuario:\n{detail}")
-            except Exception as e:
-                QMessageBox.critical(dlg, "Error", f"Error de conexión:\n{e}")
+                dlg.accept()
+
+            def _on_err(msg):
+                btn_create.setEnabled(True)
+                btn_create.setText("Crear administrador")
+                QMessageBox.critical(dlg, "Error", f"No se pudo crear el usuario:\n{msg}")
+
+            api_call(
+                "post", f"{BASE_URL}/users/setup",
+                json={"username": username, "password": password},
+                timeout=(5, 10),
+                on_success=_on_ok,
+                on_error=_on_err,
+            )
 
         btn_create.clicked.connect(_do_setup)
         setup_pass.returnPressed.connect(_do_setup)
@@ -506,28 +512,32 @@ class LoginWindow(QWidget):
             if pwd == current_password:
                 QMessageBox.warning(dlg, "Error", "La nueva contraseña debe ser diferente a la actual.")
                 return
-            try:
-                headers = {"Authorization": f"Bearer {session.token}"}
-                resp = requests.post(
-                    f"{BASE_URL}/users/me/change-password",
-                    json={"current_password": current_password, "new_password": pwd},
-                    headers=headers,
-                    timeout=(5, 15),
-                )
-                if resp.status_code == 200:
-                    new_data = resp.json()
-                    new_token = new_data.get("access_token")
-                    if new_token:
-                        session.token = new_token
-                        session.save_session()
-                    result["changed"] = True
-                    QMessageBox.information(dlg, "Listo", "Contraseña actualizada exitosamente.")
-                    dlg.accept()
-                else:
-                    detail = resp.json().get("detail", "Error desconocido")
-                    QMessageBox.critical(dlg, "Error", f"No se pudo cambiar la contraseña:\n{detail}")
-            except Exception as e:
-                QMessageBox.critical(dlg, "Error", f"Error de conexión:\n{e}")
+
+            btn_save.setEnabled(False)
+            btn_save.setText("⏳ Guardando...")
+
+            def _on_ok(new_data):
+                new_token = new_data.get("access_token")
+                if new_token:
+                    session.token = new_token
+                    session.save_session()
+                result["changed"] = True
+                QMessageBox.information(dlg, "Listo", "Contraseña actualizada exitosamente.")
+                dlg.accept()
+
+            def _on_err(msg):
+                btn_save.setEnabled(True)
+                btn_save.setText("Guardar nueva contraseña")
+                QMessageBox.critical(dlg, "Error", f"No se pudo cambiar la contraseña:\n{msg}")
+
+            api_call(
+                "post", f"{BASE_URL}/users/me/change-password",
+                json={"current_password": current_password, "new_password": pwd},
+                headers={"Authorization": f"Bearer {session.token}"},
+                timeout=(5, 15),
+                on_success=_on_ok,
+                on_error=_on_err,
+            )
 
         btn_save.clicked.connect(_do_change)
         confirm_pass.returnPressed.connect(_do_change)

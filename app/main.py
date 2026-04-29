@@ -149,6 +149,7 @@ async def lifespan(app: FastAPI):
         ("app.einvoice.hacienda_poller", "stop_background_tasks"),
         ("app.services.backup_service", "stop_scheduled_backups"),
         ("app.services.offline_queue", "stop_offline_processor"),
+        ("app.db.crud.sale_crud", "stop_pdf_executor"),
     ]:
         try:
             mod = __import__(stop_fn_path[0], fromlist=[stop_fn_path[1]])
@@ -194,6 +195,25 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+# ══════════════════════════════════════════════════════════════
+# FASE 3 — Fix 3.3: Middleware de modo mantenimiento
+# Rechaza requests mientras se restaura un backup para evitar
+# que consultas concurrentes accedan a una BD a medio copiar.
+# ══════════════════════════════════════════════════════════════
+@app.middleware("http")
+async def _maintenance_guard(request: Request, call_next):
+    from app.services.backup_service import is_maintenance_mode
+    if is_maintenance_mode() and not request.url.path.startswith("/settings/restore"):
+        return JSONResponse(
+            status_code=503,
+            content={
+                "success": False,
+                "message": "Sistema en mantenimiento — restore en curso. Intente en unos segundos.",
+            },
+        )
+    return await call_next(request)
 
 
 # ══════════════════════════════════════════════════════════════

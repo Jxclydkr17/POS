@@ -19,11 +19,17 @@ from collections import deque
 
 logger = logging.getLogger(__name__)
 
-# ── FASE C — Fix C.2: Hash dummy generado dinámicamente al importar ──
-# Antes era un hash bcrypt literal hardcodeado. Si alguien leía el código
-# fuente, podía identificar que ese hash no pertenecía a ningún usuario.
-# Ahora se genera una vez al startup con la misma función hash_password.
-_DUMMY_HASH = hash_password("__timing_safe_dummy__")
+# ── FASE C — Fix C.2 + FASE 4 — Fix 4.1: Hash dummy lazy ──
+# Se genera en el primer intento de login fallido, no al importar.
+# Ahorra ~200ms en el startup de FastAPI sin sacrificar timing-safety.
+_DUMMY_HASH: str | None = None
+
+
+def _get_dummy_hash() -> str:
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = hash_password("__timing_safe_dummy__")
+    return _DUMMY_HASH
 
 
 # ── Schemas de validación (Fase 8 — Bug 8.2) ─────────────
@@ -280,7 +286,7 @@ def login(
     # usuario válido con contraseña incorrecta. Esto previene enumeración
     # de usuarios por timing.
     if not user:
-        verify_password(form_data.password, _DUMMY_HASH)
+        verify_password(form_data.password, _get_dummy_hash())
         _record_attempt(client_ip)
         raise HTTPException(status_code=401, detail="Credenciales inválidas")
 

@@ -18,6 +18,7 @@ from app.db.models.product import Product
 from app.db.models.customer import Customer
 from app.db.models.cash_session import CashSession
 from app.db.models.expense import Expense
+from app.constants.status_enums import SaleStatus
 
 
 def _fmt(val) -> str:
@@ -60,7 +61,7 @@ def get_proactive_alerts(db: Session) -> List[Dict[str, Any]]:
                 func.coalesce(func.sum(Sale.total), 0),
                 func.count(Sale.id),
             )
-            .filter(Sale.created_at >= start_dt, Sale.created_at <= end_dt, Sale.status != "ANULADA")
+            .filter(Sale.created_at >= start_dt, Sale.created_at <= end_dt, Sale.status != SaleStatus.ANULADA)
             .first()
         )
         sales_total = float(sales_result[0] or 0)
