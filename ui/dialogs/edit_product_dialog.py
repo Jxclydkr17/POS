@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QEvent, QTimer
 from ui.session_manager import session
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call
 from ui.dialogs.add_product_dialog import IVA_TYPES, IVA_RATES
 from ui.api import BASE_URL
 
@@ -322,31 +322,38 @@ class EditProductDialog(QDialog):
             return
 
         headers = {"Authorization": f"Bearer {session.token}"}
-        resp = api_request("get", CABYS_SEARCH_URL, headers=headers, params={"q": keyword})
-        payload = resp.json()
-        data = payload.get("data", [])
 
-        if not data:
-            QMessageBox.information(self, "CABYS", "No se encontraron coincidencias.")
-            return
+        def _on_cabys_results(payload):
+            data = payload.get("data", []) if isinstance(payload, dict) else []
 
-        from ui.dialogs.cabys_selector_dialog import CabysSelectorDialog
-        dlg = CabysSelectorDialog(data)
+            if not data:
+                QMessageBox.information(self, "CABYS", "No se encontraron coincidencias.")
+                return
 
-        if dlg.exec() == QDialog.Accepted:
-            cb = dlg.selected
-            self.cabys_input.setText(cb["code"])
+            from ui.dialogs.cabys_selector_dialog import CabysSelectorDialog
+            dlg = CabysSelectorDialog(data)
 
-            iva_selector_map = {
-                0: "Tarifa 0% (Artículo 32, num 1, RLIVA)",
-                1: "Tarifa reducida 1%",
-                2: "Tarifa reducida 2%",
-                4: "Tarifa reducida 4%",
-                13: "Tarifa general 13%",
-            }
+            if dlg.exec() == QDialog.Accepted:
+                cb = dlg.selected
+                self.cabys_input.setText(cb["code"])
 
-            selected_label = iva_selector_map.get(int(cb["iva"]), "Tarifa general 13%")
-            self.tax_rate_combo.setCurrentText(selected_label)
+                iva_selector_map = {
+                    0: "Tarifa 0% (Artículo 32, num 1, RLIVA)",
+                    1: "Tarifa reducida 1%",
+                    2: "Tarifa reducida 2%",
+                    4: "Tarifa reducida 4%",
+                    13: "Tarifa general 13%",
+                }
+
+                selected_label = iva_selector_map.get(int(cb["iva"]), "Tarifa general 13%")
+                self.tax_rate_combo.setCurrentText(selected_label)
+
+        api_call(
+            "get", CABYS_SEARCH_URL,
+            headers=headers, params={"q": keyword},
+            on_success=_on_cabys_results,
+            on_error=lambda msg: QMessageBox.critical(self, "Error CABYS", msg),
+        )
 
     def save_changes(self):
         try:

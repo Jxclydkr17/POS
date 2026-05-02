@@ -3,7 +3,7 @@ from fastapi import HTTPException, status
 from app.db.models.customer import Customer
 from app.db.models.economic_activity import EconomicActivity
 from app.schemas.customer import CustomerCreate, CustomerUpdate
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 
 
 
@@ -66,6 +66,10 @@ def get_customers(
     sort_by: str = None,
     sort_dir: str = "desc",
 ):
+    """
+    FASE 1 — Fix 1.4: Se reemplazó query.count() separada por window
+    function, obteniendo (datos, total) en una sola query.
+    """
     query = db.query(Customer).filter(Customer.is_active == True)
 
     if search:
@@ -79,9 +83,6 @@ def get_customers(
                 Customer.id_number.ilike(f"%{safe}%")
             )
         )
-
-    # Total ANTES de paginar (para paginación en el frontend)
-    total = query.count()
 
     # Ordenamiento
     sortable_columns = {
@@ -101,13 +102,20 @@ def get_customers(
     else:
         query = query.order_by(col.desc())
 
-    customers = (
+    # ── Window function: total sin query separada ──
+    rows = (
         query
+        .add_columns(func.count(Customer.id).over().label("_total"))
         .offset(skip)
         .limit(limit)
         .all()
     )
 
+    if not rows:
+        return [], 0
+
+    total = rows[0]._total
+    customers = [row[0] for row in rows]
     return customers, total
 
 

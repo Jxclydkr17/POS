@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from datetime import date
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call, run_async
 from ui.session_manager import session
 from PySide6 import QtGui
 from PySide6.QtWidgets import QAbstractItemView
@@ -522,17 +522,24 @@ class PurchasesView(QWidget):
             QMessageBox.warning(self, "Atención", "Selecciona una factura.")
             return
         purchase = self.filtered_purchases[row]
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = api_request("get", f"{API_URL}/{purchase['id']}", headers=headers)
-            if res.status_code == 200:
-                full = res.json()
-                if isinstance(full, dict) and "data" in full:
-                    purchase = full["data"]
-        except Exception:
-            pass
-        if EditPurchaseDialog(purchase).exec():
-            self.load_purchases()
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+        def _on_detail(payload):
+            full = payload
+            p = purchase
+            if isinstance(full, dict) and "data" in full:
+                p = full["data"]
+            if EditPurchaseDialog(p).exec():
+                self.load_purchases()
+
+        api_call(
+            "get", f"{API_URL}/{purchase['id']}",
+            headers=headers,
+            on_success=_on_detail,
+            on_error=lambda _msg: (
+                EditPurchaseDialog(purchase).exec() and self.load_purchases()
+            ),
+        )
 
     def delete_purchase(self):
         row = self.table.currentRow()
@@ -541,9 +548,15 @@ class PurchasesView(QWidget):
         pid = self.table.item(row, 0).text()
         if QMessageBox.question(self, "Eliminar", f"¿Eliminar factura ID {pid}?", QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            api_request("delete", f"{API_URL}/{pid}", headers=headers)
-            show_toast("Factura eliminada", success=True, parent=self.window())
-            self.load_purchases()
+            api_call(
+                "delete", f"{API_URL}/{pid}",
+                headers=headers,
+                on_success=lambda _: (
+                    show_toast("Factura eliminada", success=True, parent=self.window()),
+                    self.load_purchases(),
+                ),
+                on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+            )
 
     def receive_purchase(self):
         row = self.table.currentRow()
@@ -558,20 +571,15 @@ class PurchasesView(QWidget):
         if QMessageBox.question(self, "Recibir", f"¿Confirmar recepción factura {pid}?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-        try:
-            res = api_request("put", f"{API_URL}/{pid}/receive", headers=headers)
-            if res.status_code == 200:
-                show_toast("📦 Mercadería recibida", success=True, parent=self.window())
-                self.load_purchases()
-            else:
-                err = res.text
-                try:
-                    err = res.json().get("detail", err)
-                except Exception:
-                    pass
-                QMessageBox.critical(self, "Error", str(err))
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        api_call(
+            "put", f"{API_URL}/{pid}/receive",
+            headers=headers,
+            on_success=lambda _: (
+                show_toast("📦 Mercadería recibida", success=True, parent=self.window()),
+                self.load_purchases(),
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )
 
     # ---------------------------------------------------------
     # FINANCIEROS
@@ -609,15 +617,16 @@ class PurchasesView(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-        try:
-            res = api_request("put", f"{API_URL}/{pid}/pay", json={"payment_method": dlg.selected_method()}, headers=headers)
-            if res.status_code == 200:
-                show_toast("💰 Factura pagada", success=True, parent=self.window())
-                self.load_purchases()
-            else:
-                QMessageBox.critical(self, "Error", res.text)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        api_call(
+            "put", f"{API_URL}/{pid}/pay",
+            json={"payment_method": dlg.selected_method()},
+            headers=headers,
+            on_success=lambda _: (
+                show_toast("💰 Factura pagada", success=True, parent=self.window()),
+                self.load_purchases(),
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )
 
     def upload_pdf(self):
         row = self.table.currentRow()
@@ -628,11 +637,26 @@ class PurchasesView(QWidget):
         if not file:
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-        with open(file, "rb") as f:
-            res = api_request("post", f"{API_URL}/{pid}/upload-pdf", files={"file": f}, headers=headers)
-        if res.status_code == 200:
-            show_toast("PDF subido", success=True, parent=self.window())
-            self.load_purchases()
+
+        def _do_upload():
+            import requests as _req
+            with open(file, "rb") as f:
+                resp = _req.post(
+                    f"{API_URL}/{pid}/upload-pdf",
+                    files={"file": f}, headers=headers,
+                    timeout=(5, 15),
+                )
+            resp.raise_for_status()
+            return resp.json()
+
+        run_async(
+            _do_upload,
+            on_success=lambda _: (
+                show_toast("PDF subido", success=True, parent=self.window()),
+                self.load_purchases(),
+            ),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )
 
     # ---------------------------------------------------------
     # EXPORTACIÓN
@@ -651,38 +675,52 @@ class PurchasesView(QWidget):
         return params
 
     def export_excel(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            params = self._export_params()
-            params["format"] = "excel"
-            res = api_request("get", f"{API_URL}/export", headers=headers, params=params, timeout=30)
-            if res.status_code == 200:
-                path, _ = QFileDialog.getSaveFileName(self, "Guardar Excel", "compras.xlsx", "Excel (*.xlsx)")
-                if path:
-                    with open(path, "wb") as f:
-                        f.write(res.content)
-                    show_toast(f"Excel exportado", success=True, parent=self.window())
-            else:
-                QMessageBox.critical(self, "Error", "No se pudo exportar.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        params = self._export_params()
+        params["format"] = "excel"
+
+        def _fetch():
+            import requests as _req
+            resp = _req.get(f"{API_URL}/export", headers=headers, params=params, timeout=(5, 30))
+            resp.raise_for_status()
+            return resp.content
+
+        def _on_data(content):
+            path, _ = QFileDialog.getSaveFileName(self, "Guardar Excel", "compras.xlsx", "Excel (*.xlsx)")
+            if path:
+                with open(path, "wb") as f:
+                    f.write(content)
+                show_toast("Excel exportado", success=True, parent=self.window())
+
+        run_async(
+            _fetch,
+            on_success=_on_data,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo exportar.\n{msg}"),
+        )
 
     def export_pdf(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            params = self._export_params()
-            params["format"] = "pdf"
-            res = api_request("get", f"{API_URL}/export", headers=headers, params=params, timeout=30)
-            if res.status_code == 200:
-                path, _ = QFileDialog.getSaveFileName(self, "Guardar PDF", "compras.pdf", "PDF (*.pdf)")
-                if path:
-                    with open(path, "wb") as f:
-                        f.write(res.content)
-                    show_toast(f"PDF exportado", success=True, parent=self.window())
-            else:
-                QMessageBox.critical(self, "Error", "No se pudo exportar.")
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        params = self._export_params()
+        params["format"] = "pdf"
+
+        def _fetch():
+            import requests as _req
+            resp = _req.get(f"{API_URL}/export", headers=headers, params=params, timeout=(5, 30))
+            resp.raise_for_status()
+            return resp.content
+
+        def _on_data(content):
+            path, _ = QFileDialog.getSaveFileName(self, "Guardar PDF", "compras.pdf", "PDF (*.pdf)")
+            if path:
+                with open(path, "wb") as f:
+                    f.write(content)
+                show_toast("PDF exportado", success=True, parent=self.window())
+
+        run_async(
+            _fetch,
+            on_success=_on_data,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo exportar.\n{msg}"),
+        )
 
     # ---------------------------------------------------------
     # ALERTA POR CORREO
@@ -692,22 +730,21 @@ class PurchasesView(QWidget):
         if not ok or not email.strip():
             return
         headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-        try:
-            res = api_request("post",
-                f"{API_URL}/notify-expiring",
-                headers=headers,
-                params={"recipient": email.strip(), "days_ahead": 3},
-            )
-            if res.status_code == 200:
-                data = res.json().get("data", {})
-                if data.get("sent"):
-                    show_toast(f"📧 Alerta enviada ({data.get('count', 0)} facturas)", success=True, parent=self.window())
-                else:
-                    show_toast("No hay facturas por vencer o el correo no está configurado", success=False, parent=self.window())
+
+        def _on_success(payload):
+            data = payload.get("data", {}) if isinstance(payload, dict) else {}
+            if data.get("sent"):
+                show_toast(f"📧 Alerta enviada ({data.get('count', 0)} facturas)", success=True, parent=self.window())
             else:
-                QMessageBox.critical(self, "Error", res.text)
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+                show_toast("No hay facturas por vencer o el correo no está configurado", success=False, parent=self.window())
+
+        api_call(
+            "post", f"{API_URL}/notify-expiring",
+            headers=headers,
+            params={"recipient": email.strip(), "days_ahead": 3},
+            on_success=_on_success,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
+        )
 
     # ---------------------------------------------------------
     # FILTROS
@@ -862,22 +899,32 @@ class AddPaymentDialog(QDialog):
         self.setLayout(layout)
 
     def save(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = api_request("post", f"{API_URL}/{self.purchase['id']}/payments", json={
-                "amount": self.amount_spin.value(), "payment_method": self.method_combo.currentText(),
-                "notes": self.notes_input.text().strip() or None,
-            }, headers=headers)
-            if res.status_code == 200:
-                show_toast("Abono registrado", success=True, parent=self.window())
-                self.accept()
-            else:
-                err = res.text
-                try: err = res.json().get("detail", err)
-                except Exception: logging.debug("No se pudo parsear JSON de error en abono: %s", err)
-                QMessageBox.critical(self, "Error", str(err))
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        payload = {
+            "amount": self.amount_spin.value(),
+            "payment_method": self.method_combo.currentText(),
+            "notes": self.notes_input.text().strip() or None,
+        }
+
+        # Deshabilitar botón para evitar doble-click
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(False)
+
+        def _on_success(_data):
+            show_toast("Abono registrado", success=True, parent=self.window())
+            self.accept()
+
+        def _on_error(msg):
+            for btn in self.findChildren(QPushButton):
+                btn.setEnabled(True)
+            QMessageBox.critical(self, "Error", msg)
+
+        api_call(
+            "post", f"{API_URL}/{self.purchase['id']}/payments",
+            json=payload, headers=headers,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
 
 
 class AddCreditNoteDialog(QDialog):
@@ -915,39 +962,50 @@ class AddCreditNoteDialog(QDialog):
         self.setLayout(layout)
 
     def _load_products(self):
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = api_request("get", API_PRODUCTS, headers=headers)
-            payload = res.json()
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+        def _on_products(payload):
             products = payload.get("data", []) if isinstance(payload, dict) else payload
             if isinstance(products, dict):
                 products = products.get("items", [])
-            for p in products:
+            for p in (products if isinstance(products, list) else []):
                 self.product_combo.addItem(f"{p['name']} (Stock: {p.get('stock', 0)})", p["id"])
-        except Exception:
-            pass
+
+        api_call(
+            "get", API_PRODUCTS,
+            headers=headers,
+            on_success=_on_products,
+        )
 
     def save(self):
         reason = self.reason_input.toPlainText().strip()
         if not reason:
             QMessageBox.warning(self, "Atención", "Motivo obligatorio.")
             return
-        try:
-            headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            res = api_request("post", f"{API_URL}/{self.purchase['id']}/credit-notes", json={
-                "amount": self.amount_spin.value(), "reason": reason,
-                "product_id": self.product_combo.currentData(), "quantity_returned": self.qty_spin.value(),
-            }, headers=headers)
-            if res.status_code == 200:
-                show_toast("NC registrada", success=True, parent=self.window())
-                self.accept()
-            else:
-                err = res.text
-                try: err = res.json().get("detail", err)
-                except Exception: logging.debug("No se pudo parsear JSON de error en NC: %s", err)
-                QMessageBox.critical(self, "Error", str(err))
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+        payload = {
+            "amount": self.amount_spin.value(), "reason": reason,
+            "product_id": self.product_combo.currentData(), "quantity_returned": self.qty_spin.value(),
+        }
+
+        for btn in self.findChildren(QPushButton):
+            btn.setEnabled(False)
+
+        def _on_success(_data):
+            show_toast("NC registrada", success=True, parent=self.window())
+            self.accept()
+
+        def _on_error(msg):
+            for btn in self.findChildren(QPushButton):
+                btn.setEnabled(True)
+            QMessageBox.critical(self, "Error", msg)
+
+        api_call(
+            "post", f"{API_URL}/{self.purchase['id']}/credit-notes",
+            json=payload, headers=headers,
+            on_success=_on_success,
+            on_error=_on_error,
+        )
 
 
 class PaymentDetailDialog(QDialog):
@@ -969,32 +1027,59 @@ class PaymentDetailDialog(QDialog):
         r("Saldo", f"₡{float(purchase.get('balance', 0)):,.2f}")
         r("Estado", purchase.get("status", "-"))
 
-        pid = purchase.get("id")
-        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-
         layout.addWidget(QLabel("<b>💵 Abonos:</b>"))
-        try:
-            res = api_request("get", f"{API_URL}/{pid}/payments", headers=headers)
-            pays = res.json().get("data", []) if res.status_code == 200 else []
-            for pp in (pays if isinstance(pays, list) else []):
-                layout.addWidget(QLabel(f"  • {pp.get('date','?')} — ₡{float(pp.get('amount',0)):,.2f} ({pp.get('payment_method','')})"))
-            if not pays:
-                layout.addWidget(QLabel("  Sin abonos."))
-        except Exception: layout.addWidget(QLabel("  Error."))
+        self._payments_container = QVBoxLayout()
+        self._payments_container.addWidget(QLabel("  Cargando..."))
+        layout.addLayout(self._payments_container)
 
         layout.addWidget(QLabel("<b>📋 Notas crédito:</b>"))
-        try:
-            res = api_request("get", f"{API_URL}/{pid}/credit-notes", headers=headers)
-            cns = res.json().get("data", []) if res.status_code == 200 else []
-            for cn in (cns if isinstance(cns, list) else []):
-                t = f"  • {cn.get('date','?')} — ₡{float(cn.get('amount',0)):,.2f} — {cn.get('reason','')}"
-                if cn.get("quantity_returned"):
-                    t += f" ({cn['quantity_returned']} uds)"
-                layout.addWidget(QLabel(t))
-            if not cns:
-                layout.addWidget(QLabel("  Sin NC."))
-        except Exception: layout.addWidget(QLabel("  Error."))
+        self._cn_container = QVBoxLayout()
+        self._cn_container.addWidget(QLabel("  Cargando..."))
+        layout.addLayout(self._cn_container)
 
         btn = QPushButton("Cerrar"); btn.clicked.connect(self.accept)
         layout.addWidget(btn)
         self.setLayout(layout)
+
+        # Cargar datos en background
+        pid = purchase.get("id")
+        headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
+
+        api_call("get", f"{API_URL}/{pid}/payments", headers=headers,
+                 on_success=self._on_payments_loaded,
+                 on_error=lambda _: self._on_payments_loaded(None))
+
+        api_call("get", f"{API_URL}/{pid}/credit-notes", headers=headers,
+                 on_success=self._on_cn_loaded,
+                 on_error=lambda _: self._on_cn_loaded(None))
+
+    def _clear_layout(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+    def _on_payments_loaded(self, payload):
+        self._clear_layout(self._payments_container)
+        pays = []
+        if payload and isinstance(payload, dict):
+            pays = payload.get("data", [])
+        for pp in (pays if isinstance(pays, list) else []):
+            self._payments_container.addWidget(
+                QLabel(f"  • {pp.get('date','?')} — ₡{float(pp.get('amount',0)):,.2f} ({pp.get('payment_method','')})"))
+        if not pays:
+            self._payments_container.addWidget(QLabel("  Sin abonos."))
+
+    def _on_cn_loaded(self, payload):
+        self._clear_layout(self._cn_container)
+        cns = []
+        if payload and isinstance(payload, dict):
+            cns = payload.get("data", [])
+        for cn in (cns if isinstance(cns, list) else []):
+            t = f"  • {cn.get('date','?')} — ₡{float(cn.get('amount',0)):,.2f} — {cn.get('reason','')}"
+            if cn.get("quantity_returned"):
+                t += f" ({cn['quantity_returned']} uds)"
+            self._cn_container.addWidget(QLabel(t))
+        if not cns:
+            self._cn_container.addWidget(QLabel("  Sin NC."))

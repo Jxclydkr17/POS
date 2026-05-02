@@ -12,7 +12,7 @@ from ui.session_manager import session
 from ui.dialogs.add_supplier_dialog import AddSupplierDialog
 from ui.dialogs.edit_supplier_dialog import EditSupplierDialog
 from ui.api import BASE_URL
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call
 
 # Ruta al stylesheet compartido
 _STYLES_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "styles.qss")
@@ -656,16 +656,20 @@ class SuppliersView(QWidget):
         try:
             url = f"{API_SUPPLIERS}/{supplier['id']}"
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = api_request("delete", url, headers=headers)
 
-            payload = resp.json()
+            def _on_deleted(payload):
+                if isinstance(payload, dict) and not payload.get("success"):
+                    QMessageBox.warning(self, "Error", payload.get("message", "No se pudo eliminar"))
+                    return
+                QMessageBox.information(self, "Proveedor eliminado", "Proveedor eliminado correctamente.")
+                self.load_suppliers()
 
-            if not payload.get("success"):
-                QMessageBox.warning(self, "Error", payload.get("message", "No se pudo eliminar"))
-                return
-
-            QMessageBox.information(self, "Proveedor eliminado", "Proveedor eliminado correctamente.")
-            self.load_suppliers()
+            api_call(
+                "delete", url,
+                headers=headers,
+                on_success=_on_deleted,
+                on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al eliminar proveedor:\n{msg}"),
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al eliminar proveedor:\n{e}")
@@ -746,13 +750,13 @@ class SuppliersView(QWidget):
         try:
             url = f"{API_SUPPLIERS}/{supplier['id']}/toggle"
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
-            resp = api_request("patch", url, headers=headers)
 
-            if resp.status_code not in (200, 201):
-                QMessageBox.warning(self, "Error", f"No se pudo cambiar el estado.\n{resp.text}")
-                return
-
-            self.load_suppliers()
+            api_call(
+                "patch", url,
+                headers=headers,
+                on_success=lambda _: self.load_suppliers(),
+                on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al cambiar estado:\n{msg}"),
+            )
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Error al cambiar estado:\n{e}")

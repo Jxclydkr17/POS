@@ -59,14 +59,10 @@ qrcode==8.0
 pillow==12.2.0
 
 # ── Excel / CSV ──
-# NOTA: pandas y numpy agregan ~100MB al .exe empaquetado con PyInstaller.
-# Se usan en: export_utils.py, cabys_updater.py, supplier_service.py.
-# Evaluar migración a openpyxl puro + SQL si el tamaño del instalador
-# se vuelve un problema en producción.
+# FASE 3 — Fix 3.2: pandas y numpy eliminados (~100MB menos en el .exe).
+# Todas las exportaciones Excel ahora usan openpyxl puro.
 openpyxl==3.1.5
 et_xmlfile==2.0.0
-pandas==2.2.3
-numpy==2.4.4
 
 # ── XML (factura electrónica) ──
 lxml==5.3.0

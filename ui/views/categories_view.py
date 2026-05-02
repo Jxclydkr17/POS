@@ -14,7 +14,7 @@ from ui.dialogs.add_category_dialog import AddCategoryDialog
 from ui.dialogs.edit_category_dialog import EditCategoryDialog
 from ui.session_manager import session
 from ui.api import BASE_URL
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call
 
 API_URL = f"{BASE_URL}/categories"
 
@@ -281,19 +281,12 @@ class CategoriesView(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        try:
-            r = api_request("patch", f"{API_URL}/{cat_id}/toggle", headers=self._auth_headers())
-
-            if r.status_code != 200:
-                payload = r.json()
-                msg = payload.get("message") or payload.get("detail") or "Error desconocido"
-                QMessageBox.critical(self, "Error", msg)
-                return
-
-            self.load_categories()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo actualizar el estado.\n{e}")
+        api_call(
+            "patch", f"{API_URL}/{cat_id}/toggle",
+            headers=self._auth_headers(),
+            on_success=lambda _: self.load_categories(),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo actualizar el estado.\n{msg}"),
+        )
 
     def delete_category(self):
         row = self.table.currentRow()
@@ -312,15 +305,9 @@ class CategoriesView(QWidget):
         if confirm != QMessageBox.Yes:
             return
 
-        try:
-            r = api_request("delete", f"{API_URL}/{cat_id}", headers=self._auth_headers())
-
-            if r.status_code != 200:
-                msg = r.json().get("message", "Error desconocido")
-                QMessageBox.critical(self, "Error", msg)
-                return
-
-            self.load_categories()
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo eliminar.\n{e}")
+        api_call(
+            "delete", f"{API_URL}/{cat_id}",
+            headers=self._auth_headers(),
+            on_success=lambda _: self.load_categories(),
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo eliminar.\n{msg}"),
+        )

@@ -17,7 +17,7 @@ import os
 from datetime import datetime, date
 from ui.session_manager import session
 from ui.api import BASE_URL
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call, run_async
 
 API_URL = BASE_URL
 
@@ -341,7 +341,7 @@ class CustomerCreditView(QDialog):
         return ids
 
     # ─────────────────────────────────────────────────────
-    # FASE 1 — Fix 1.2: Acciones con timeout
+    # FASE 2 — Fix 2.1: Cadena de pagos asíncrona
     # ─────────────────────────────────────────────────────
     def register_payment(self):
         if not self.customer_id:
@@ -353,14 +353,9 @@ class CustomerCreditView(QDialog):
             if amount is None or amount <= 0:
                 QMessageBox.warning(self, "Error", "Ingrese un monto válido."); return
 
-            try:
-                r = api_request("post", f"{API_URL}/credits/{self.customer_id}/payments",
-                    json={"amount": amount, "payment_method": payment_method}, headers=self._auth())
-                if r.status_code != 200:
-                    error_detail = r.json().get("detail", r.text)
-                    QMessageBox.warning(self, "Error", f"Error al registrar abono:\n{error_detail}"); return
-
-                data = r.json().get("data", {})
+            # Paso 1: Registrar abono
+            def _on_payment_ok(payload):
+                data = payload.get("data", {}) if isinstance(payload, dict) else {}
                 payment_id = data.get("payment_id")
                 if not payment_id:
                     QMessageBox.warning(self, "REP", "No se pudo obtener payment_id del servidor."); return
@@ -376,33 +371,50 @@ class CustomerCreditView(QDialog):
                     QMessageBox.warning(self, "REP", "No hay comprobantes seleccionados para aplicar FIFO.")
                     self.load_credit_info(); return
 
-                s = api_request("post", f"{API_URL}/ereps/suggest-allocations/{self.customer_id}",
-                    json={"amount": amount, "electronic_invoice_ids": einv_ids}, headers=self._auth())
-                if s.status_code != 200:
-                    QMessageBox.warning(self, "REP", f"Error sugiriendo FIFO:\n{s.text}"); self.load_credit_info(); return
+                # Paso 2: Sugerir asignaciones FIFO
+                def _on_suggest_ok(s_payload):
+                    sdata = s_payload.get("data", {}) if isinstance(s_payload, dict) else {}
+                    items = sdata.get("items", [])
+                    if not items:
+                        QMessageBox.information(self, "REP", "No hay saldo pendiente aplicable."); self.load_credit_info(); return
 
-                sdata = s.json().get("data", {})
-                items = sdata.get("items", [])
-                if not items:
-                    QMessageBox.information(self, "REP", "No hay saldo pendiente aplicable."); self.load_credit_info(); return
+                    resumen = "\n".join([f"- Factura {it['electronic_invoice_id']}: ₡{it['amount_applied']:.2f}" for it in items])
+                    confirm = QMessageBox.question(self, "Confirmar REP",
+                        f"{msg}\n\nSe aplicará FIFO así:\n\n{resumen}\n\n¿Generar REP ahora?", QMessageBox.Yes | QMessageBox.No)
+                    if confirm != QMessageBox.Yes:
+                        self.load_credit_info(); return
 
-                resumen = "\n".join([f"- Factura {it['electronic_invoice_id']}: ₡{it['amount_applied']:.2f}" for it in items])
-                confirm = QMessageBox.question(self, "Confirmar REP",
-                    f"{msg}\n\nSe aplicará FIFO así:\n\n{resumen}\n\n¿Generar REP ahora?", QMessageBox.Yes | QMessageBox.No)
-                if confirm != QMessageBox.Yes:
-                    self.load_credit_info(); return
+                    # Paso 3: Crear REP
+                    refs = [{"electronic_invoice_id": it["electronic_invoice_id"], "amount_applied": it["amount_applied"]} for it in items]
+                    api_call(
+                        "post", f"{API_URL}/ereps/from-payment/{payment_id}",
+                        json={"references": refs}, headers=self._auth(),
+                        on_success=lambda _: (
+                            QMessageBox.information(self, "Éxito", "✅ REP generado correctamente."),
+                            self.load_credit_info(),
+                        ),
+                        on_error=lambda m: (
+                            QMessageBox.warning(self, "REP", f"Error creando REP:\n{m}"),
+                            self.load_credit_info(),
+                        ),
+                    )
 
-                refs = [{"electronic_invoice_id": it["electronic_invoice_id"], "amount_applied": it["amount_applied"]} for it in items]
-                cr = api_request("post", f"{API_URL}/ereps/from-payment/{payment_id}",
-                    json={"references": refs}, headers=self._auth())
-                if cr.status_code != 200:
-                    QMessageBox.warning(self, "REP", f"Error creando REP:\n{cr.text}"); self.load_credit_info(); return
+                api_call(
+                    "post", f"{API_URL}/ereps/suggest-allocations/{self.customer_id}",
+                    json={"amount": amount, "electronic_invoice_ids": einv_ids}, headers=self._auth(),
+                    on_success=_on_suggest_ok,
+                    on_error=lambda m: (
+                        QMessageBox.warning(self, "REP", f"Error sugiriendo FIFO:\n{m}"),
+                        self.load_credit_info(),
+                    ),
+                )
 
-                QMessageBox.information(self, "Éxito", "✅ REP generado correctamente.")
-                self.load_credit_info()
-
-            except Exception as e:
-                QMessageBox.critical(self, "Error", str(e))
+            api_call(
+                "post", f"{API_URL}/credits/{self.customer_id}/payments",
+                json={"amount": amount, "payment_method": payment_method}, headers=self._auth(),
+                on_success=_on_payment_ok,
+                on_error=lambda m: QMessageBox.warning(self, "Error", f"Error al registrar abono:\n{m}"),
+            )
 
     def export_pdf(self):
         if not self._last_data:
@@ -488,13 +500,25 @@ class CustomerCreditView(QDialog):
             if not os.path.exists(pdf_path):
                 reply = QMessageBox.question(self, "PDF no encontrado", "No existe el PDF para esta venta.\n¿Desea regenerarlo?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
                 if reply != QMessageBox.Yes: return
-                try:
-                    resp = api_request("post", f"{API_URL}/sales/{sale_id}/regenerate-pdf", headers=self._auth(), timeout=20)
+
+                def _do_regen():
+                    import requests as _req
+                    resp = _req.post(f"{API_URL}/sales/{sale_id}/regenerate-pdf", headers=self._auth(), timeout=(5, 20))
                     resp.raise_for_status()
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{e}"); return
-                if not os.path.exists(pdf_path):
-                    QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada."); return
+                    return pdf_path
+
+                def _on_regen_ok(_result):
+                    if os.path.exists(pdf_path):
+                        self._open_file(pdf_path)
+                    else:
+                        QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada.")
+
+                run_async(
+                    _do_regen,
+                    on_success=_on_regen_ok,
+                    on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{msg}"),
+                )
+                return
             self._open_file(pdf_path)
         except Exception as e:
             QMessageBox.critical(self, "Error", str(e))

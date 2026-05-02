@@ -426,11 +426,8 @@ class AddProductDialog(QDialog):
         headers = {"Authorization": f"Bearer {session.token}"}
         params = {"q": keyword}
 
-        try:
-            from ui.utils.http_worker import api_request
-            resp = api_request("get", CABYS_SEARCH_URL, headers=headers, params=params)
-            payload = resp.json()
-            data = payload.get("data", [])
+        def _on_cabys_results(payload):
+            data = payload.get("data", []) if isinstance(payload, dict) else []
 
             if not data:
                 QMessageBox.information(self, "CABYS", "No se encontraron coincidencias.")
@@ -456,8 +453,12 @@ class AddProductDialog(QDialog):
                 label = mapa_iva.get(iva_db, "Tarifa general 13%")
                 self.tax_rate_combo.setCurrentText(label)
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error CABYS", str(e))
+        api_call(
+            "get", CABYS_SEARCH_URL,
+            headers=headers, params=params,
+            on_success=_on_cabys_results,
+            on_error=lambda msg: QMessageBox.critical(self, "Error CABYS", msg),
+        )
 
     def _parse_iva(self):
         label = self.tax_rate_combo.currentText()

@@ -159,14 +159,15 @@ async def lifespan(app: FastAPI):
 
 
 # Crear aplicación
+# ── FASE 3 — Fix 3.1: docs se activan con ENABLE_DOCS=true o APP_DEBUG=true ──
+_show_docs = settings.app_debug or settings.enable_docs
 app = FastAPI(
     title=settings.app_name,
     description="Sistema de Punto de Venta Inteligente - Violette POS",
     version=APP_VERSION,
     lifespan=lifespan,
-    # En producción, ocultar docs
-    docs_url="/docs" if settings.app_debug else None,
-    redoc_url="/redoc" if settings.app_debug else None,
+    docs_url="/docs" if _show_docs else None,
+    redoc_url="/redoc" if _show_docs else None,
 )
 
 

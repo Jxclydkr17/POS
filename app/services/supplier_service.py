@@ -525,41 +525,52 @@ def export_suppliers_csv(db: Session, *, search: Optional[str] = None, is_active
 
 def export_suppliers_excel(db: Session, *, search: Optional[str] = None, is_active: Optional[bool] = None) -> str:
     """Genera Excel de proveedores y retorna la ruta del archivo temporal."""
-    import pandas as pd
+    from openpyxl import Workbook
     import os
     from datetime import datetime as _dt
 
     result = list_suppliers(db, search=search, is_active=is_active, skip=0, limit=999999)
     items = result["items"]
 
-    rows = []
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Proveedores"
+
+    headers = [
+        "ID", "Nombre", "Teléfono", "Email", "Dirección", "Contacto",
+        "Tel. Contacto", "Cargo Contacto", "Productos", "Críticos",
+        "Compras", "Total Comprado", "Última Compra", "Días sin Comprar",
+        "Rotación (uds)", "Score", "Rank", "Dependencia %",
+        "Prom. Días Compra", "Estado", "Notas",
+    ]
+    ws.append(headers)
+
     for s in items:
-        rows.append({
-            "ID": s["id"],
-            "Nombre": s["name"],
-            "Teléfono": s.get("phone") or "",
-            "Email": s.get("email") or "",
-            "Dirección": s.get("address") or "",
-            "Contacto": s.get("contact_name") or "",
-            "Tel. Contacto": s.get("contact_phone") or "",
-            "Cargo Contacto": s.get("contact_position") or "",
-            "Productos": s["products_count"],
-            "Críticos": s["critical_products_count"],
-            "Compras": s["purchases_count"],
-            "Total Comprado": float(s.get("total_purchased", 0) or 0),
-            "Última Compra": str(s["last_purchase_date"]) if s.get("last_purchase_date") else "",
-            "Días sin Comprar": s.get("days_since_last_purchase") if s.get("days_since_last_purchase") is not None else "",
-            "Rotación (uds)": s["rotation_units"],
-            "Score": s.get("supplier_score", 0),
-            "Rank": s.get("supplier_rank", ""),
-            "Dependencia %": s.get("dependency_pct", 0),
-            "Prom. Días Compra": s.get("avg_days_between_purchases") if s.get("avg_days_between_purchases") is not None else "",
-            "Estado": "Activo" if s.get("is_active") else "Inactivo",
-            "Notas": s.get("notes") or "",
-        })
+        ws.append([
+            s["id"],
+            s["name"],
+            s.get("phone") or "",
+            s.get("email") or "",
+            s.get("address") or "",
+            s.get("contact_name") or "",
+            s.get("contact_phone") or "",
+            s.get("contact_position") or "",
+            s["products_count"],
+            s["critical_products_count"],
+            s["purchases_count"],
+            float(s.get("total_purchased", 0) or 0),
+            str(s["last_purchase_date"]) if s.get("last_purchase_date") else "",
+            s.get("days_since_last_purchase") if s.get("days_since_last_purchase") is not None else "",
+            s["rotation_units"],
+            s.get("supplier_score", 0),
+            s.get("supplier_rank", ""),
+            s.get("dependency_pct", 0),
+            s.get("avg_days_between_purchases") if s.get("avg_days_between_purchases") is not None else "",
+            "Activo" if s.get("is_active") else "Inactivo",
+            s.get("notes") or "",
+        ])
 
     os.makedirs("exports", exist_ok=True)
     filepath = f"exports/proveedores_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df = pd.DataFrame(rows)
-    df.to_excel(filepath, index=False)
+    wb.save(filepath)
     return filepath

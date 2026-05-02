@@ -1,3 +1,25 @@
+# app/db/models/__init__.py
+"""
+═══════════════════════════════════════════════════════════════
+FASE 3 — Fix 3.4: Convención de timestamps para modelos
+═══════════════════════════════════════════════════════════════
+
+Al crear un modelo nuevo, elegir el default según la siguiente regla:
+
+  • `default=now_cr`  → Timestamps de NEGOCIO que se comparan con rangos
+    de fecha visibles al usuario (ventas, caja, reportes, movimientos).
+    Se usa en: Sale.created_at, CashSession, InventoryMovement.
+
+  • `default=utcnow`  → Timestamps TÉCNICOS de auditoría, logs, tokens,
+    sincronización con servicios externos (Hacienda).
+    Se usa en: User, Customer, Product, Credit, ElectronicInvoice, etc.
+
+Referencia completa: app/utils/dt.py (docstring principal).
+
+NUNCA usar `datetime.now()` ni `datetime.utcnow()` directamente
+— ambos son naive y generan ambigüedad de zona horaria.
+═══════════════════════════════════════════════════════════════
+"""
 from .user import User
 from .category import Category
 from .supplier import Supplier

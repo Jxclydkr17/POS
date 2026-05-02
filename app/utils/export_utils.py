@@ -1,16 +1,51 @@
-import pandas as pd
+# app/utils/export_utils.py
+"""
+FASE 3 — Fix 3.2: Exportaciones Excel con openpyxl puro.
+
+Se eliminó la dependencia de pandas/numpy (~100MB en el .exe empaquetado).
+openpyxl ya estaba en requirements.txt como dependencia de pandas; ahora
+es la única librería necesaria para generar Excel.
+
+Las funciones de exportación a PDF (reportlab) no cambiaron.
+"""
+from openpyxl import Workbook
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas
 from datetime import datetime
 from app.utils.dt import now_cr
 
+
+# ── Helpers ─────────────────────────────────────────────────
+
+def _write_sheet(ws, rows: list[dict], *, headers: list[str] | None = None):
+    """Escribe una lista de dicts en una hoja openpyxl con headers automáticos."""
+    if not rows:
+        return
+    cols = headers or list(rows[0].keys())
+    ws.append(cols)
+    for row in rows:
+        ws.append([row.get(c, "") for c in cols])
+
+
+def _dicts_to_excel(data: list[dict], filename: str) -> str:
+    """Exporta una lista de dicts a un archivo .xlsx de una sola hoja."""
+    wb = Workbook()
+    ws = wb.active
+    _write_sheet(ws, data)
+    wb.save(filename)
+    return filename
+
+
+# ============================================================
+# VENTAS — Exportaciones
+# ============================================================
+
 def export_sales_history_excel(data, filename=None):
     """Exporta lista de ventas a Excel"""
     if not filename:
         filename = f"historial_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df = pd.DataFrame(data)
-    df.to_excel(filename, index=False)
-    return filename
+    return _dicts_to_excel(data, filename)
+
 
 def export_sales_history_pdf(data, start_date, end_date, filename=None, business_name="Mi Negocio"):
     """Exporta lista de ventas a PDF"""
@@ -57,13 +92,16 @@ def export_sales_history_pdf(data, start_date, end_date, filename=None, business
     c.save()
     return filename
 
+
+# ============================================================
+# GASTOS — Exportaciones
+# ============================================================
+
 def export_expenses_excel(data, filename=None):
     """Exporta lista de gastos a Excel"""
     if not filename:
         filename = f"reporte_gastos_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df = pd.DataFrame(data)
-    df.to_excel(filename, index=False)
-    return filename
+    return _dicts_to_excel(data, filename)
 
 
 def export_expenses_pdf(data, start_date, end_date, total, filename=None, business_name="Mi Negocio"):
@@ -127,9 +165,7 @@ def export_purchases_excel(data, filename=None):
     """Exporta lista de compras/facturas a Excel."""
     if not filename:
         filename = f"reporte_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
-    df = pd.DataFrame(data)
-    df.to_excel(filename, index=False)
-    return filename
+    return _dicts_to_excel(data, filename)
 
 
 def export_purchases_pdf(data, title_extra="", filename=None, business_name="Mi Negocio"):
@@ -213,36 +249,41 @@ def export_sales_analytics_excel(data, filename=None):
     if not filename:
         filename = f"analitica_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-    with pd.ExcelWriter(filename, engine="openpyxl") as writer:
-        kpis = data.get("kpis") or {}
-        compare = data.get("compare") or {}
-        previous = compare.get("previous", {})
-        kpi_rows = [
-            {"Indicador": "Ventas totales", "Actual": kpis.get("total_sales", 0),
-             "Periodo anterior": previous.get("count", "")},
-            {"Indicador": "Monto total (₡)", "Actual": kpis.get("total_amount", 0),
-             "Periodo anterior": previous.get("total_amount", "")},
-            {"Indicador": "Ticket promedio (₡)", "Actual": kpis.get("avg_ticket", 0),
-             "Periodo anterior": previous.get("avg_ticket", "")},
-        ]
-        pd.DataFrame(kpi_rows).to_excel(writer, sheet_name="KPIs", index=False)
+    wb = Workbook()
 
-        daily = data.get("daily") or []
-        if daily:
-            pd.DataFrame(daily).to_excel(writer, sheet_name="Ventas diarias", index=False)
+    # Hoja 1: KPIs
+    ws = wb.active
+    ws.title = "KPIs"
+    kpis = data.get("kpis") or {}
+    compare = data.get("compare") or {}
+    previous = compare.get("previous", {})
+    kpi_rows = [
+        {"Indicador": "Ventas totales", "Actual": kpis.get("total_sales", 0),
+         "Periodo anterior": previous.get("count", "")},
+        {"Indicador": "Monto total (₡)", "Actual": kpis.get("total_amount", 0),
+         "Periodo anterior": previous.get("total_amount", "")},
+        {"Indicador": "Ticket promedio (₡)", "Actual": kpis.get("avg_ticket", 0),
+         "Periodo anterior": previous.get("avg_ticket", "")},
+    ]
+    _write_sheet(ws, kpi_rows)
 
-        cats = data.get("categories") or []
-        if cats:
-            pd.DataFrame(cats).to_excel(writer, sheet_name="Por categoría", index=False)
+    daily = data.get("daily") or []
+    if daily:
+        _write_sheet(wb.create_sheet("Ventas diarias"), daily)
 
-        top = data.get("top_products") or []
-        if top:
-            pd.DataFrame(top).to_excel(writer, sheet_name="Top productos", index=False)
+    cats = data.get("categories") or []
+    if cats:
+        _write_sheet(wb.create_sheet("Por categoría"), cats)
 
-        payments = data.get("payments") or []
-        if payments:
-            pd.DataFrame(payments).to_excel(writer, sheet_name="Métodos de pago", index=False)
+    top = data.get("top_products") or []
+    if top:
+        _write_sheet(wb.create_sheet("Top productos"), top)
 
+    payments = data.get("payments") or []
+    if payments:
+        _write_sheet(wb.create_sheet("Métodos de pago"), payments)
+
+    wb.save(filename)
     return filename
 
 
@@ -334,24 +375,37 @@ def export_purchases_analytics_excel(data, filename=None):
     if not filename:
         filename = f"analitica_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
 
-    with pd.ExcelWriter(filename, engine="openpyxl") as writer:
-        suppliers = data.get("suppliers") or []
-        if suppliers:
-            pd.DataFrame(suppliers).to_excel(writer, sheet_name="Gasto por proveedor", index=False)
+    wb = Workbook()
+    first_sheet_used = False
 
-        evolution = data.get("evolution") or []
-        if evolution:
-            pd.DataFrame(evolution).to_excel(writer, sheet_name="Evolución mensual", index=False)
+    suppliers = data.get("suppliers") or []
+    if suppliers:
+        ws = wb.active
+        ws.title = "Gasto por proveedor"
+        _write_sheet(ws, suppliers)
+        first_sheet_used = True
 
-        days_data = data.get("payment_days") or {}
-        by_supplier = days_data.get("by_supplier") or []
-        if by_supplier:
-            pd.DataFrame(by_supplier).to_excel(writer, sheet_name="Días de pago", index=False)
+    evolution = data.get("evolution") or []
+    if evolution:
+        if not first_sheet_used:
+            ws = wb.active
+            ws.title = "Evolución mensual"
+            first_sheet_used = True
+        else:
+            ws = wb.create_sheet("Evolución mensual")
+        _write_sheet(ws, evolution)
 
-        products = data.get("top_products") or []
-        if products:
-            pd.DataFrame(products).to_excel(writer, sheet_name="Top productos", index=False)
+    days_data = data.get("payment_days") or {}
+    by_supplier = days_data.get("by_supplier") or []
+    if by_supplier:
+        _write_sheet(wb.create_sheet("Días de pago"), by_supplier)
 
+    products = data.get("top_products") or []
+    if products:
+        _write_sheet(wb.create_sheet("Top productos"), products)
+
+    # Si no hubo datos, al menos guardar con la hoja vacía
+    wb.save(filename)
     return filename
 
 

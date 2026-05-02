@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from app.utils.print_ticket import print_pdf
 from ui.api import BASE_URL
 from ui.session_manager import session
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call, run_async
 
 
 API_URL = BASE_URL
@@ -348,108 +348,115 @@ class DaySalesDialog(QDialog):
     # Data
     # ------------------------------------------------------------------
     def load_today_sales(self):
-        try:
-            today = QDate.currentDate().toString("yyyy-MM-dd")
+        today = QDate.currentDate().toString("yyyy-MM-dd")
+        params = {
+            "start_date": today,
+            "end_date": today,
+        }
 
-            params = {
-                "start_date": today,
-                "end_date": today,
-            }
+        def _on_sales_loaded(payload):
+            try:
+                sales = payload.get("sales", []) if isinstance(payload, dict) else []
 
-            from ui.utils.http_worker import api_request
-            response = api_request("get", f"{API_URL}/reports/sales/history", params=params, headers=self._auth_headers())
-            response.raise_for_status()
+                self.sales_data = sales
+                self.tbl_sales.setRowCount(len(sales))
 
-            payload = response.json()
-            sales = payload.get("sales", [])
+                if not sales:
+                    self.tbl_sales.clearSelection()
+                    self.current_sale_id = None
+                    self.tbl_items.setRowCount(0)
+                    self.lbl_header.setText("No hay ventas hoy")
+                    self.lbl_meta.setText("Todavía no se registran ventas en el día actual")
+                    self.lbl_total.setText("Total: ₡0.00")
+                    self.lbl_count.setText("0 ventas")
+                    self._set_detail_enabled(False)
+                    return
 
-            self.sales_data = sales
-            self.tbl_sales.setRowCount(len(sales))
+                for row, sale in enumerate(sales):
+                    sale_id = sale.get("id", "")
+                    created_at = sale.get("created_at", "")
+                    customer_name = sale.get("customer_name") or "Cliente general"
+                    payment_method = sale.get("payment_method") or "-"
+                    total = sale.get("total", 0)
 
-            if not sales:
-                self.tbl_sales.clearSelection()
-                self.current_sale_id = None
-                self.tbl_items.setRowCount(0)
-                self.lbl_header.setText("No hay ventas hoy")
-                self.lbl_meta.setText("Todavía no se registran ventas en el día actual")
-                self.lbl_total.setText("Total: ₡0.00")
-                self.lbl_count.setText("0 ventas")
-                self._set_detail_enabled(False)
-                return
+                    self.tbl_sales.setItem(row, 0, QTableWidgetItem(str(sale_id)))
+                    self.tbl_sales.setItem(row, 1, QTableWidgetItem(self._extract_hour(created_at)))
+                    self.tbl_sales.setItem(row, 2, QTableWidgetItem(str(customer_name)))
+                    self.tbl_sales.setItem(row, 3, QTableWidgetItem(self._payment_label(payment_method)))
+                    self.tbl_sales.setItem(row, 4, QTableWidgetItem(self._money(total)))
 
-            for row, sale in enumerate(sales):
-                sale_id = sale.get("id", "")
-                created_at = sale.get("created_at", "")
-                customer_name = sale.get("customer_name") or "Cliente general"
-                payment_method = sale.get("payment_method") or "-"
-                total = sale.get("total", 0)
+                self.tbl_sales.sortItems(0, Qt.DescendingOrder)
+                self.lbl_count.setText(f"{len(sales)} venta{'s' if len(sales) != 1 else ''} registradas hoy")
 
-                self.tbl_sales.setItem(row, 0, QTableWidgetItem(str(sale_id)))
-                self.tbl_sales.setItem(row, 1, QTableWidgetItem(self._extract_hour(created_at)))
-                self.tbl_sales.setItem(row, 2, QTableWidgetItem(str(customer_name)))
-                self.tbl_sales.setItem(row, 3, QTableWidgetItem(self._payment_label(payment_method)))
-                self.tbl_sales.setItem(row, 4, QTableWidgetItem(self._money(total)))
+                # Seleccionar la primera automáticamente
+                self.tbl_sales.selectRow(0)
+                self.on_row_clicked(0, 0)
 
-            self.tbl_sales.sortItems(0, Qt.DescendingOrder)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudieron cargar las ventas del día:\n{e}")
 
-            self.lbl_count.setText(f"{len(sales)} venta{'s' if len(sales) != 1 else ''} registradas hoy")
-
-            # Seleccionar la primera automáticamente
-            self.tbl_sales.selectRow(0)
-            self.on_row_clicked(0, 0)
-
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudieron cargar las ventas del día:\n{e}")
+        api_call(
+            "get", f"{API_URL}/reports/sales/history",
+            params=params, headers=self._auth_headers(),
+            on_success=_on_sales_loaded,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudieron cargar las ventas del día:\n{msg}"),
+        )
 
     def on_row_clicked(self, row, _column):
-        try:
-            item = self.tbl_sales.item(row, 0)
-            if not item:
-                return
+        item = self.tbl_sales.item(row, 0)
+        if not item:
+            return
 
-            sale_id = int(item.text())
-            self.current_sale_id = sale_id
+        sale_id = int(item.text())
+        self.current_sale_id = sale_id
 
-            response = api_request("get", f"{API_URL}/reports/sales/{sale_id}", headers=self._auth_headers())
-            response.raise_for_status()
+        def _on_detail(data):
+            try:
+                if isinstance(data, dict) and "data" in data:
+                    data = data["data"]
 
-            data = response.json()
+                self.lbl_header.setText(f"Venta #{data['id']} — {data['created_at']}")
+                self.lbl_meta.setText(
+                    f"Cliente: <b>{data.get('customer_name', 'Cliente general')}</b>"
+                    f" &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"Pago: <b>{data.get('payment_method', '-')}</b>"
+                    f" &nbsp;&nbsp;|&nbsp;&nbsp; "
+                    f"Estado: <b>{data.get('status', 'aprobada')}</b>"
+                )
 
-            self.lbl_header.setText(f"Venta #{data['id']} — {data['created_at']}")
-            self.lbl_meta.setText(
-                f"Cliente: <b>{data.get('customer_name', 'Cliente general')}</b>"
-                f" &nbsp;&nbsp;|&nbsp;&nbsp; "
-                f"Pago: <b>{data.get('payment_method', '-')}</b>"
-                f" &nbsp;&nbsp;|&nbsp;&nbsp; "
-                f"Estado: <b>{data.get('status', 'aprobada')}</b>"
-            )
+                items = data.get("items", [])
+                self.tbl_items.setRowCount(len(items))
 
-            items = data.get("items", [])
-            self.tbl_items.setRowCount(len(items))
+                for i, it in enumerate(items):
+                    product_name = str(it.get("product_name", "—"))
+                    quantity = str(it.get("quantity", 0))
+                    price = self._money(it.get("price", 0))
+                    subtotal = self._money(it.get("subtotal", 0))
 
-            for i, it in enumerate(items):
-                product_name = str(it.get("product_name", "—"))
-                quantity = str(it.get("quantity", 0))
-                price = self._money(it.get("price", 0))
-                subtotal = self._money(it.get("subtotal", 0))
+                    name_item = QTableWidgetItem(product_name)
+                    # ✅ PRODUCTO COMÚN: resaltar con color diferente
+                    if it.get("is_common", False):
+                        from PySide6.QtGui import QColor, QBrush
+                        name_item.setForeground(QBrush(QColor("#94a3b8")))
+                        name_item.setToolTip("Producto común — sin inventario")
 
-                name_item = QTableWidgetItem(product_name)
-                # ✅ PRODUCTO COMÚN: resaltar con color diferente
-                if it.get("is_common", False):
-                    from PySide6.QtGui import QColor, QBrush
-                    name_item.setForeground(QBrush(QColor("#94a3b8")))
-                    name_item.setToolTip("Producto común — sin inventario")
+                    self.tbl_items.setItem(i, 0, name_item)
+                    self.tbl_items.setItem(i, 1, QTableWidgetItem(quantity))
+                    self.tbl_items.setItem(i, 2, QTableWidgetItem(price))
+                    self.tbl_items.setItem(i, 3, QTableWidgetItem(subtotal))
 
-                self.tbl_items.setItem(i, 0, name_item)
-                self.tbl_items.setItem(i, 1, QTableWidgetItem(quantity))
-                self.tbl_items.setItem(i, 2, QTableWidgetItem(price))
-                self.tbl_items.setItem(i, 3, QTableWidgetItem(subtotal))
+                self.lbl_total.setText(f"Total: {self._money(data.get('total', 0))}")
+                self._set_detail_enabled(True)
 
-            self.lbl_total.setText(f"Total: {self._money(data.get('total', 0))}")
-            self._set_detail_enabled(True)
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"No se pudo cargar el detalle de la venta:\n{e}")
 
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"No se pudo cargar el detalle de la venta:\n{e}")
+        api_call(
+            "get", f"{API_URL}/reports/sales/{sale_id}",
+            headers=self._auth_headers(),
+            on_success=_on_detail,
+            on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo cargar el detalle de la venta:\n{msg}"),
+        )
 
     # ------------------------------------------------------------------
     # Actions
@@ -473,21 +480,35 @@ class DaySalesDialog(QDialog):
                 if reply != QMessageBox.Yes:
                     return
 
-                try:
-                    resp = api_request(
-                        "post",
-                        f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
-                        timeout=15,
-                        headers=self._auth_headers(),
+                sale_id = self.current_sale_id
+
+                def _do_regen():
+                    import requests as _req
+                    resp = _req.post(
+                        f"{API_URL}/sales/{sale_id}/regenerate-pdf",
+                        timeout=(5, 15), headers=self._auth_headers(),
                     )
                     resp.raise_for_status()
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{e}")
-                    return
+                    return True
 
-                if not os.path.exists(pdf_path):
-                    QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada.")
-                    return
+                def _on_regen_ok(_result):
+                    p = self._pdf_path_for_sale(sale_id)
+                    if not os.path.exists(p):
+                        QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada.")
+                        return
+                    if os.name == "nt":
+                        os.startfile(p)
+                    elif os.name == "posix":
+                        subprocess.Popen(["xdg-open", p])
+                    else:
+                        QMessageBox.information(self, "PDF", f"Ruta del archivo:\n{p}")
+
+                run_async(
+                    _do_regen,
+                    on_success=_on_regen_ok,
+                    on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{msg}"),
+                )
+                return
 
             if os.name == "nt":
                 os.startfile(pdf_path)
@@ -518,21 +539,31 @@ class DaySalesDialog(QDialog):
                 if reply != QMessageBox.Yes:
                     return
 
-                try:
-                    resp = api_request(
-                        "post",
-                        f"{API_URL}/sales/{self.current_sale_id}/regenerate-pdf",
-                        timeout=15,
-                        headers=self._auth_headers(),
+                sale_id = self.current_sale_id
+
+                def _do_regen():
+                    import requests as _req
+                    resp = _req.post(
+                        f"{API_URL}/sales/{sale_id}/regenerate-pdf",
+                        timeout=(5, 15), headers=self._auth_headers(),
                     )
                     resp.raise_for_status()
-                except Exception as e:
-                    QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{e}")
-                    return
+                    return True
 
-                if not os.path.exists(pdf_path):
-                    QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada.")
-                    return
+                def _on_regen_ok(_result):
+                    p = self._pdf_path_for_sale(sale_id)
+                    if not os.path.exists(p):
+                        QMessageBox.warning(self, "Error", "El PDF fue generado pero no se encontró en la ruta esperada.")
+                        return
+                    print_pdf(p)
+                    QMessageBox.information(self, "Éxito", "Se envió el comprobante a impresión.")
+
+                run_async(
+                    _do_regen,
+                    on_success=_on_regen_ok,
+                    on_error=lambda msg: QMessageBox.critical(self, "Error", f"No se pudo regenerar el PDF:\n{msg}"),
+                )
+                return
 
             print_pdf(pdf_path)
             QMessageBox.information(self, "Éxito", "Se envió el comprobante a impresión.")

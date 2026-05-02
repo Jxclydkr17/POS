@@ -8,11 +8,11 @@ FASE 5:
   - Health check extendido
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
-from app.core.dependencies import get_current_user
+from app.core.dependencies import get_current_user, require_role
 from app.utils.responses import success_response
 
 router = APIRouter(prefix="/system", tags=["Sistema"])
@@ -145,3 +145,27 @@ def system_diagnostics(db: Session = Depends(get_db)):
         diag["offline_queue"] = {"error": "No disponible"}
 
     return diag
+
+
+# ══════════════════════════════════════════════════════════════
+# FASE 3 — Fix 3.1: Listado de endpoints (admin)
+# Permite ver los endpoints disponibles en producción sin
+# necesidad de activar /docs.  Solo accesible por admin.
+# ══════════════════════════════════════════════════════════════
+
+@router.get("/routes", dependencies=[Depends(require_role("admin"))])
+def list_routes(request: Request):
+    """Lista todos los endpoints registrados (solo admin)."""
+    routes = []
+    for route in request.app.routes:
+        if hasattr(route, "methods"):
+            routes.append({
+                "path": route.path,
+                "methods": sorted(route.methods),
+                "name": route.name,
+            })
+    routes.sort(key=lambda r: r["path"])
+    return success_response(
+        message=f"{len(routes)} endpoints registrados",
+        data=routes,
+    )

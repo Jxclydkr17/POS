@@ -95,6 +95,11 @@ class Settings(BaseSettings):
     # ── FASE 1 — Fix 1.5: Default seguro (False) para producción ──
     app_debug: bool = False
 
+    # ── FASE 3 — Fix 3.1: Flag independiente para docs API ──
+    # Permite acceder a /docs y /redoc sin activar debug mode completo.
+    # Activar en .env con ENABLE_DOCS=true para diagnóstico en producción.
+    enable_docs: bool = False
+
     # ── FASE 4: Motor de BD ──
     # "sqlite" = standalone (default para .exe)
     # "mysql"  = servidor MySQL externo

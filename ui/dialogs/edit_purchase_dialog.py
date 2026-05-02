@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDate
 from ui.session_manager import session
-from ui.utils.http_worker import api_call, api_request
+from ui.utils.http_worker import api_call, run_async
 from ui.api import BASE_URL
 
 API_URL_PURCHASES = f"{BASE_URL}/purchases"
@@ -393,16 +393,18 @@ class EditPurchaseDialog(QDialog):
 
     def _on_purchase_updated(self, purchase_id, headers):
         if self.pdf_file_path:
-            try:
-                with open(self.pdf_file_path, "rb") as f:
-                    files = {"file": f}
-                    api_request(
-                        "post",
+            pdf_path = self.pdf_file_path
+
+            def _do_upload():
+                import requests as _req
+                with open(pdf_path, "rb") as f:
+                    _req.post(
                         f"{API_URL_PURCHASES}/{purchase_id}/upload-pdf",
-                        files=files, headers=headers,
+                        files={"file": f}, headers=headers,
+                        timeout=(5, 15),
                     )
-            except Exception:
-                pass
+
+            run_async(_do_upload)  # best-effort, sin callbacks
 
         QMessageBox.information(self, "Éxito", "Factura actualizada correctamente.")
         self.accept()

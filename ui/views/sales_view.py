@@ -69,6 +69,9 @@ class SalesView(QWidget):
         self.quick_sale_mode = False
         self.quick_sale_print_ticket = False
 
+        # FASE 2 — Fix 2.2: Flag para evitar doble-conexión de señales
+        self._signals_connected = False
+
         # ✅ PRODUCTO COMÚN: IDs virtuales negativos para no colisionar con IDs reales
         self._common_seq = 0
 
@@ -94,15 +97,55 @@ class SalesView(QWidget):
         # Timer con debounce para la búsqueda por texto
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
-        self.search_timer.timeout.connect(lambda: self.load_products_page(reset=True))
 
-        # Señales de búsqueda y categoría
-        self.search_input.textChanged.connect(self.on_search_text_changed)
-        self.category_combo.currentIndexChanged.connect(self.on_category_changed)
+        # FASE 2 — Fix 2.2: Conectar señales una sola vez
+        self._connect_signals()
 
         self.load_products_page(reset=True)
-        self.search_input.returnPressed.connect(self.handle_barcode_scan)
         self.toggle_amount_input()
+        
+
+    # ------------------------------------------------------------------
+    # FASE 2 — Fix 2.2: Gestión de señales Qt
+    # ------------------------------------------------------------------
+    def _connect_signals(self):
+        """Conecta las señales de búsqueda/categoría una sola vez."""
+        if self._signals_connected:
+            return
+        self._signals_connected = True
+
+        self.search_timer.timeout.connect(lambda: self.load_products_page(reset=True))
+        self.search_input.textChanged.connect(self.on_search_text_changed)
+        self.category_combo.currentIndexChanged.connect(self.on_category_changed)
+        self.search_input.returnPressed.connect(self.handle_barcode_scan)
+
+    def _disconnect_signals(self):
+        """Desconecta señales para evitar acumulación si la vista se recrea."""
+        if not self._signals_connected:
+            return
+        self._signals_connected = False
+
+        try:
+            self.search_timer.timeout.disconnect()
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self.search_input.textChanged.disconnect(self.on_search_text_changed)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self.category_combo.currentIndexChanged.disconnect(self.on_category_changed)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            self.search_input.returnPressed.disconnect(self.handle_barcode_scan)
+        except (RuntimeError, TypeError):
+            pass
+
+    def closeEvent(self, event):
+        """Limpia señales al destruir la vista."""
+        self._disconnect_signals()
+        super().closeEvent(event)
         
 
 

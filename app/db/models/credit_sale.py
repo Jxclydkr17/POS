@@ -9,7 +9,9 @@ class CreditSale(Base):
     __tablename__ = "credit_sales"
 
     id = Column(Integer, primary_key=True, index=True)
-    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False, unique=True)
+    # FASE 1 — Fix 1.3: índice explícito (unique ya crea uno, pero se
+    # documenta la intención para que futuras migraciones no lo omitan)
+    sale_id = Column(Integer, ForeignKey("sales.id"), nullable=False, unique=True, index=True)
     customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False, index=True)
 
     total_amount = Column(Numeric(12, 2), nullable=False)

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from app.utils.dt import today_cr
 from typing import List, Optional
 
 from fastapi import HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload, subqueryload
 
 from app.db.models.purchase import Purchase
@@ -29,6 +31,9 @@ from app.constants.expense_categories import CAT_COMPRAS_PROVEEDORES
 import logging
 
 _logger = logging.getLogger(__name__)
+
+# ── FASE 1 — Fix 1.1: Constantes Decimal para quantize ──
+_Q2 = Decimal("0.01")        # 2 decimales (montos)
 
 
 # ------------------------------------------------------------
@@ -128,15 +133,22 @@ def _build_details(
     db: Session,
     purchase: Purchase,
     items: List[PurchaseItemCreate],
-) -> float:
-    # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+) -> Decimal:
+    """
+    Construye los PurchaseDetail y devuelve el total calculado.
+
+    FASE 1 — Fix 1.1: Toda la aritmética usa Decimal para evitar
+    errores de redondeo IEEE 754 (ej. 3 × ₡1,333.33 = ₡3,999.99
+    exacto, no ₡3,999.98).
+    """
+    # Prefetch productos en UNA query
     product_ids = [item.product_id for item in items if item.product_id]
     products_map = {}
     if product_ids:
         products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
         products_map = {p.id: p for p in products}
 
-    total = 0.0
+    total = Decimal("0")
     for item in items:
         product = products_map.get(item.product_id)
         if not product:
@@ -145,20 +157,35 @@ def _build_details(
                 detail=f"Producto ID {item.product_id} no encontrado.",
             )
 
-        # 📏 quantity es Decimal — convertir a float para multiplicar con unit_cost
-        subtotal = round(float(item.quantity) * item.unit_cost, 2)
+        # quantity ya es Decimal (schema); unit_cost puede ser float → convertir
+        qty = Decimal(str(item.quantity))
+        cost = Decimal(str(item.unit_cost))
+
+        # FASE 3 — Fix 3.3: Validar valores positivos (consistente con sale_crud.py)
+        if qty <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cantidad inválida para '{product.name}': {qty}. Debe ser mayor a 0.",
+            )
+        if cost <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Costo unitario inválido para '{product.name}': {cost}. Debe ser mayor a 0.",
+            )
+
+        subtotal = (qty * cost).quantize(_Q2, rounding=ROUND_HALF_UP)
         total += subtotal
 
         detail = PurchaseDetail(
             purchase_id=purchase.id,
             product_id=item.product_id,
             quantity=item.quantity,
-            unit_cost=item.unit_cost,
+            unit_cost=cost,
             subtotal=subtotal,
         )
         db.add(detail)
 
-    return round(total, 2)
+    return total.quantize(_Q2, rounding=ROUND_HALF_UP)
 
 
 def _sync_payment_status(purchase: Purchase):
@@ -183,6 +210,26 @@ def _sync_payment_status(purchase: Purchase):
             purchase.status = PurchaseStatus.parcial
 
 
+def _check_single_purchase_expiry(purchase: Purchase) -> None:
+    """
+    FASE 1 — Fix 1.2: Verificación on-demand de vencimiento para
+    una compra individual.  Barato (solo evalúa un registro en memoria).
+    """
+    if purchase.due_date is None:
+        return
+    today = today_cr()
+    if (
+        purchase.status == PurchaseStatus.pendiente
+        and purchase.due_date < today
+    ):
+        purchase.status = PurchaseStatus.vencido
+    elif (
+        purchase.status == PurchaseStatus.vencido
+        and purchase.due_date >= today
+    ):
+        purchase.status = PurchaseStatus.pendiente
+
+
 # ------------------------------------------------------------
 # Listar compras
 # ------------------------------------------------------------
@@ -194,32 +241,14 @@ def get_purchases(
     skip: int = 0,
     limit: int = 100,
 ):
-    today = today_cr()
+    """
+    FASE 1 — Fix 1.2: Se eliminó el auto-sync de compras vencidas
+    que ejecutaba dos UPDATE masivos en cada GET.  Ahora eso corre
+    en un task periódico (main.py) y on-demand en get_purchase().
 
-    # Auto-sync vencidas (excluir pagadas, recibidas, parciales)
-    db.query(Purchase).filter(
-        Purchase.status.notin_([
-            PurchaseStatus.pagado,
-            PurchaseStatus.vencido,
-            PurchaseStatus.recibido,
-            PurchaseStatus.parcial,
-        ]),
-        Purchase.due_date < today,
-    ).update(
-        {"status": PurchaseStatus.vencido},
-        synchronize_session=False,
-    )
-
-    db.query(Purchase).filter(
-        Purchase.status == PurchaseStatus.vencido,
-        Purchase.due_date >= today,
-    ).update(
-        {"status": PurchaseStatus.pendiente},
-        synchronize_session=False,
-    )
-
-    db.flush()
-
+    FASE 1 — Fix 1.4: Se eliminó el COUNT(*) separado.  Se usa
+    window function para obtener (datos, total) en una sola query.
+    """
     q = db.query(Purchase).options(
         subqueryload(Purchase.details),
         subqueryload(Purchase.payments),
@@ -237,15 +266,20 @@ def get_purchases(
         safe = escape_like(search)
         q = q.filter(Purchase.invoice_number.ilike(f"%{safe}%"))
 
-    total = q.count()
-
-    items = (
-        q.order_by(Purchase.entry_date.desc(), Purchase.id.desc())
+    # ── Window function: total sin query separada ──
+    rows = (
+        q.add_columns(func.count(Purchase.id).over().label("_total"))
+        .order_by(Purchase.entry_date.desc(), Purchase.id.desc())
         .offset(skip)
         .limit(limit)
         .all()
     )
 
+    if not rows:
+        return [], 0
+
+    total = rows[0]._total
+    items = [row[0] for row in rows]
     return items, total
 
 
@@ -268,6 +302,10 @@ def get_purchase(db: Session, purchase_id: int) -> Purchase:
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Compra no encontrada",
         )
+
+    # FASE 1 — Fix 1.2: verificación on-demand al consultar una compra
+    _check_single_purchase_expiry(purchase)
+
     return purchase
 
 
@@ -385,7 +423,7 @@ def receive_purchase(db: Session, purchase_id: int) -> Purchase:
             detail="La compra no tiene líneas de detalle.",
         )
 
-    # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+    # Prefetch productos en UNA query
     detail_product_ids = [d.product_id for d in purchase.details if d.product_id]
     products_map = {}
     if detail_product_ids:
@@ -415,7 +453,8 @@ def receive_purchase(db: Session, purchase_id: int) -> Purchase:
         db.add(movement)
 
         product.stock = stock_before + qty
-        product.cost = float(detail.unit_cost)
+        # FASE 1 — Fix 1.1: Asignar Decimal directo (columna Numeric(12,2))
+        product.cost = detail.unit_cost
 
     purchase.received_at = today_cr()
 
@@ -479,7 +518,7 @@ def add_payment(
     # Si la compra tiene detalles y NO fue recibida, recibirla automáticamente al saldar
     db.refresh(purchase)
     if purchase.balance <= 0 and purchase.details and not purchase.received_at:
-        # FASE 3 — Fix 3.1: Prefetch productos en UNA query
+        # Prefetch productos en UNA query
         _pids = [d.product_id for d in purchase.details if d.product_id]
         _pmap = {}
         if _pids:
@@ -502,7 +541,8 @@ def add_payment(
                 )
                 db.add(movement)
                 product.stock = stock_before + qty
-                product.cost = float(detail.unit_cost)
+                # FASE 1 — Fix 1.1: Asignar Decimal directo
+                product.cost = detail.unit_cost
         purchase.received_at = today_cr()
 
     # Sincronizar estado de pago

@@ -19,7 +19,8 @@ class InventoryMovement(Base):
     __tablename__ = "inventory_movements"
 
     id           = Column(Integer, primary_key=True, index=True)
-    product_id   = Column(Integer, ForeignKey("products.id"), nullable=False)
+    # FASE 1 — Fix 1.3: índice para JOINs de rotación de inventario
+    product_id   = Column(Integer, ForeignKey("products.id"), nullable=False, index=True)
     type         = Column(Enum(MovementType), nullable=False)
 
     # 📏 Cantidad y stock — Numeric(12,3) para soportar fracciones (kg, metros, litros)

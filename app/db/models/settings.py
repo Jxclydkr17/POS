@@ -23,7 +23,8 @@ class Settings(Base):
 
     # Preferencias del POS
     default_tax = Column(String(10))
-    default_supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True)
+    # FASE 1 — Fix 1.3: índice para JOIN con suppliers
+    default_supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=True, index=True)
     rounding_enabled = Column(Boolean, default=False)
 
     # Fase 6.2: Moneda
