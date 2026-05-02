@@ -87,6 +87,8 @@ class DailyReportView(QWidget):
         self._figures = []
         self._spinner_dots = 0                     # FIX #10: contador para animación
         self._spinner_timer = None                 # FIX #10: timer del spinner
+        self._safety_timer = None                  # Timer de seguridad anti-hang
+        self._is_loading = False                   # Flag de estado de carga
         self.setup_ui()
         self.load_report()
 
@@ -334,13 +336,13 @@ class DailyReportView(QWidget):
                 QPushButton:hover { background-color: #2a6fd3; }
             """)
         else:
-            self.btn_export_pdf.setStyleSheet("""
-                QPushButton {
+            self.btn_export_pdf.setStyleSheet(f"""
+                QPushButton {{
                     background-color: {THEME["disabled_bg"]};
                     color: {THEME["disabled_text"]};
                     border-radius: 10px;
                     padding: 8px;
-                }
+                }}
             """)
 
     def _style_table(self, table):
@@ -401,6 +403,7 @@ class DailyReportView(QWidget):
 
     def _set_loading_state(self, loading: bool):
         """Habilita/deshabilita botones mientras se cargan datos."""
+        self._is_loading = loading
         self.btn_load_date.setEnabled(not loading)
         self.btn_today.setEnabled(not loading)
         self.btn_export_pdf.setEnabled(False if loading else bool(self.data))
@@ -409,9 +412,33 @@ class DailyReportView(QWidget):
         if loading:
             self.btn_load_date.setText("⏳ Cargando...")
             self._start_spinner()
+            self._start_safety_timer()
         else:
             self.btn_load_date.setText("🔍 Cargar")
             self._stop_spinner()
+            self._stop_safety_timer()
+
+    def _start_safety_timer(self):
+        """Inicia un timer de seguridad que fuerza _set_loading_state(False) tras 20s."""
+        self._stop_safety_timer()
+        self._safety_timer = QTimer(self)
+        self._safety_timer.setSingleShot(True)
+        self._safety_timer.timeout.connect(self._on_safety_timeout)
+        self._safety_timer.start(20_000)
+
+    def _stop_safety_timer(self):
+        """Detiene el timer de seguridad."""
+        if self._safety_timer:
+            self._safety_timer.stop()
+            self._safety_timer = None
+
+    def _on_safety_timeout(self):
+        """Callback del timer de seguridad: resetea la UI si sigue cargando."""
+        if self._is_loading:
+            logging.warning("Reporte del día: timeout de seguridad (20s). Reseteando estado de carga.")
+            self.data = None
+            self.show_no_data_message("El servidor tardó demasiado en responder. Intente de nuevo.")
+            self._set_loading_state(False)
 
     def load_report(self):
         try:
@@ -419,20 +446,28 @@ class DailyReportView(QWidget):
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
             url = API_URL.format(date=selected_date)
 
-            logging.debug(f"Cargando reporte para: {selected_date}")
+            logging.info(f"Cargando reporte para: {selected_date}")
             self._set_loading_state(True)
 
             run_async(
                 _fetch_report, url, headers,
                 on_success=lambda data: self._on_report_loaded(data, selected_date),
                 on_error=lambda err: self._on_report_error(err, selected_date),
-                on_finished=lambda: self._set_loading_state(False),
+                on_finished=lambda: self._on_load_finished(),
             )
 
         except Exception as e:
             logging.error(f"Error iniciando carga de reporte: {e}")
             self._set_loading_state(False)
             self.show_no_data_message("Error al cargar el reporte")
+
+    def _on_load_finished(self):
+        """Callback garantizado al finalizar la tarea async (éxito o error).
+        Actúa como red de seguridad: si por algún motivo los callbacks
+        on_success/on_error no lograron resetear el estado, este lo hace."""
+        if self._is_loading:
+            logging.warning("Reporte: on_finished reseteando estado de carga residual.")
+            self._set_loading_state(False)
 
     def _on_report_loaded(self, json_response: dict, selected_date: str):
         """Callback cuando el reporte consolidado termina de cargar."""
@@ -444,7 +479,6 @@ class DailyReportView(QWidget):
 
             if not self.data:
                 self.show_no_data_message(f"No hay datos para {selected_date}")
-                self._set_loading_state(False)
                 return
 
             self._update_status_badge()
@@ -463,18 +497,28 @@ class DailyReportView(QWidget):
                     error_label.setAlignment(Qt.AlignCenter)
                     self.graph_layout.addWidget(error_label)
 
+            logging.info(f"Reporte del {selected_date} cargado correctamente.")
+
         except Exception as e:
-            logging.error(f"Error procesando reporte: {e}")
-            self.show_no_data_message("Error al procesar el reporte")
+            logging.error(f"Error procesando reporte: {e}", exc_info=True)
+            self.data = None
+            try:
+                self.show_no_data_message("Error al procesar el reporte")
+            except Exception:
+                pass
         finally:
             self._set_loading_state(False)
 
     def _on_report_error(self, error_msg: str, selected_date: str):
         """Callback cuando falla la carga del reporte."""
-        logging.error(f"Error al cargar reporte: {error_msg}")
-        self.data = None                           # FIX #14: asegurar sin datos
-        self.show_no_data_message(f"No hay datos para {selected_date}")
-        self._set_loading_state(False)
+        try:
+            logging.error(f"Error al cargar reporte del {selected_date}: {error_msg}")
+            self.data = None                           # FIX #14: asegurar sin datos
+            self.show_no_data_message(f"No hay datos para {selected_date}")
+        except Exception as e:
+            logging.error(f"Error en _on_report_error: {e}", exc_info=True)
+        finally:
+            self._set_loading_state(False)
 
     # ─────────────────────────────────────────────────────────
     # FIX #7: Badge de estado de caja + closing_amount
@@ -1296,4 +1340,5 @@ class DailyReportView(QWidget):
         self._close_all_figures()
         self._cleanup_temp_charts()
         self._stop_spinner()
+        self._stop_safety_timer()
         super().closeEvent(event)
