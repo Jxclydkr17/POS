@@ -5,9 +5,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDate, Signal, QTimer
 from PySide6.QtGui import QColor, QFont
-import requests
 from ui.session_manager import session
-from ui.utils.http_worker import run_async
+from ui.utils.http_worker import api_call
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 from reportlab.lib.pagesizes import letter
@@ -65,16 +64,9 @@ METHOD_COLORS = {
 }
 
 
-
 # ─────────────────────────────────────────────────────────────
-# Worker para llamada HTTP asíncrona (migrado a run_async)
+# Carga de reporte vía api_call (HttpWorker)
 # ─────────────────────────────────────────────────────────────
-def _fetch_report(url: str, headers: dict) -> dict:
-    """Función ejecutada en el thread pool de Qt."""
-    response = requests.get(url, headers=headers, timeout=15)
-    if response.status_code != 200:
-        raise Exception(f"HTTP {response.status_code}: {response.text}")
-    return response.json()
 
 
 class DailyReportView(QWidget):
@@ -89,6 +81,7 @@ class DailyReportView(QWidget):
         self._spinner_timer = None                 # FIX #10: timer del spinner
         self._safety_timer = None                  # Timer de seguridad anti-hang
         self._is_loading = False                   # Flag de estado de carga
+        self._current_worker = None                # Referencia al worker HTTP activo
         self.setup_ui()
         self.load_report()
 
@@ -446,18 +439,20 @@ class DailyReportView(QWidget):
             headers = {"Authorization": f"Bearer {session.token}"} if session.token else {}
             url = API_URL.format(date=selected_date)
 
-            logging.info(f"Cargando reporte para: {selected_date}")
+            logging.info(f"[DailyReport] Cargando reporte para: {selected_date} → {url}")
             self._set_loading_state(True)
 
-            run_async(
-                _fetch_report, url, headers,
+            # Usar api_call (HttpWorker) — mismo patrón que el resto de vistas
+            self._current_worker = api_call(
+                "get", url,
+                headers=headers,
                 on_success=lambda data: self._on_report_loaded(data, selected_date),
                 on_error=lambda err: self._on_report_error(err, selected_date),
                 on_finished=lambda: self._on_load_finished(),
             )
 
         except Exception as e:
-            logging.error(f"Error iniciando carga de reporte: {e}")
+            logging.error(f"[DailyReport] Error iniciando carga: {e}", exc_info=True)
             self._set_loading_state(False)
             self.show_no_data_message("Error al cargar el reporte")
 
@@ -465,22 +460,27 @@ class DailyReportView(QWidget):
         """Callback garantizado al finalizar la tarea async (éxito o error).
         Actúa como red de seguridad: si por algún motivo los callbacks
         on_success/on_error no lograron resetear el estado, este lo hace."""
+        logging.info("[DailyReport] on_finished ejecutado.")
         if self._is_loading:
-            logging.warning("Reporte: on_finished reseteando estado de carga residual.")
+            logging.warning("[DailyReport] on_finished reseteando estado de carga residual.")
             self._set_loading_state(False)
 
     def _on_report_loaded(self, json_response: dict, selected_date: str):
         """Callback cuando el reporte consolidado termina de cargar."""
         try:
-            if "data" in json_response:
+            logging.info(f"[DailyReport] _on_report_loaded para {selected_date}, tipo respuesta: {type(json_response)}")
+
+            if isinstance(json_response, dict) and "data" in json_response:
                 self.data = json_response["data"]
             else:
                 self.data = json_response
 
             if not self.data:
+                logging.info(f"[DailyReport] Sin datos para {selected_date}")
                 self.show_no_data_message(f"No hay datos para {selected_date}")
                 return
 
+            logging.info(f"[DailyReport] Datos recibidos, keys: {list(self.data.keys()) if isinstance(self.data, dict) else 'no-dict'}")
             self._update_status_badge()
             self.fill_summary()
             self._fill_sales_from_data()
@@ -491,16 +491,16 @@ class DailyReportView(QWidget):
                 try:
                     self.plot_payment_graphs(self.data["payment_breakdown"])
                 except Exception as e:
-                    logging.warning(f"⚠️ Error al generar gráficos: {e}")
+                    logging.warning(f"[DailyReport] Error al generar gráficos: {e}")
                     error_label = QLabel("⚠️ Error al generar gráficos de pago")
                     error_label.setStyleSheet("font-size: 14px; color: #ff6b6b; padding: 20px;")
                     error_label.setAlignment(Qt.AlignCenter)
                     self.graph_layout.addWidget(error_label)
 
-            logging.info(f"Reporte del {selected_date} cargado correctamente.")
+            logging.info(f"[DailyReport] Reporte del {selected_date} cargado correctamente.")
 
         except Exception as e:
-            logging.error(f"Error procesando reporte: {e}", exc_info=True)
+            logging.error(f"[DailyReport] Error procesando reporte: {e}", exc_info=True)
             self.data = None
             try:
                 self.show_no_data_message("Error al procesar el reporte")
@@ -512,11 +512,11 @@ class DailyReportView(QWidget):
     def _on_report_error(self, error_msg: str, selected_date: str):
         """Callback cuando falla la carga del reporte."""
         try:
-            logging.error(f"Error al cargar reporte del {selected_date}: {error_msg}")
+            logging.error(f"[DailyReport] Error HTTP para {selected_date}: {error_msg}")
             self.data = None                           # FIX #14: asegurar sin datos
             self.show_no_data_message(f"No hay datos para {selected_date}")
         except Exception as e:
-            logging.error(f"Error en _on_report_error: {e}", exc_info=True)
+            logging.error(f"[DailyReport] Error en _on_report_error: {e}", exc_info=True)
         finally:
             self._set_loading_state(False)
 

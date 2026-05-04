@@ -252,6 +252,13 @@ async def _global_exception_handler(request: Request, exc: Exception):
 
 @app.exception_handler(404)
 async def _not_found_handler(request: Request, exc):
+    # Si el HTTPException tiene un detail dict (viene de error_response / lógica de negocio),
+    # preservar el mensaje original en vez de sobreescribirlo con "Ruta no encontrada".
+    if hasattr(exc, "detail") and isinstance(exc.detail, dict) and "message" in exc.detail:
+        return JSONResponse(
+            status_code=404,
+            content=exc.detail,
+        )
     return JSONResponse(
         status_code=404,
         content={

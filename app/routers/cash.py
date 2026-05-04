@@ -172,7 +172,7 @@ def cash_report_today(
     data = get_cash_report(db, today)
 
     if not data:
-        return error_response("No hay datos de caja para hoy.", 404)
+        return success_response("No hay datos de caja para hoy.", data=None)
 
     return success_response(
         message="Reporte del día.",
@@ -302,7 +302,7 @@ def cash_report(
     data = get_cash_report(db, d)
 
     if not data:
-        return error_response("No hay datos para esa fecha.", 404)
+        return success_response("No hay datos para esa fecha.", data=None)
 
     return success_response(
         message="Reporte de caja por fecha.",

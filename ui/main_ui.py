@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QFrame, QStackedLayout, QDialog
 )
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QPoint
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QPoint, QObject
 from ui.session_manager import session
 from ui.widgets.chat_panel import ChatPanel
 from datetime import date
@@ -602,6 +602,11 @@ class MainWindow(QMainWindow):
     # EVENT FILTER - SIDEBAR HOVER
     # ==========================================================
     def eventFilter(self, obj, event):
+        # ── Guard: PySide6 puede pasar QWidgetItem (no QObject) durante
+        # operaciones de layout, lo cual crashea super().eventFilter().
+        if not isinstance(obj, QObject):
+            return False
+
         # Abrir overlay al entrar al sidebar colapsado
         if obj is self.sidebar_widget and (not self.sidebar_pinned) and (not self.sidebar_in_overlay):
             if event.type() == QEvent.Enter:
