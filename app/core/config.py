@@ -224,3 +224,49 @@ def get_pdf_dir() -> Path:
     pdf_dir = DATA_DIR / "pdfs"
     pdf_dir.mkdir(parents=True, exist_ok=True)
     return pdf_dir
+
+
+# ── FASE 7 — Fix 7.1: Resolución portable de assets ─────────
+# Las rutas relativas como "ui/assets/logo.png" no funcionan
+# cuando la app corre como .exe empaquetado con PyInstaller,
+# porque el CWD puede ser distinto a APP_DIR.
+# Estas funciones resuelven assets relativas a APP_DIR, que ya
+# maneja correctamente tanto el modo dev como el modo .exe
+# (ver get_app_dir() arriba).
+
+def get_asset_path(relative_path: str) -> Path | None:
+    """Resuelve un asset relativo a APP_DIR.
+
+    Args:
+        relative_path: Ruta relativa al directorio de la app
+                       (ej: "ui/assets/logo.png").
+
+    Returns:
+        Path absoluto si el archivo existe, None si no.
+    """
+    full = APP_DIR / relative_path
+    return full if full.exists() else None
+
+
+def get_logo_path() -> str | None:
+    """Busca el logo del negocio en las ubicaciones conocidas.
+
+    Recorre una lista de nombres comunes de logo en ui/assets/.
+    Retorna la ruta absoluta como string (compatible con ReportLab,
+    os.path.exists, etc.), o None si no se encuentra ninguno.
+
+    El usuario puede colocar su logo como cualquiera de estos archivos:
+      - ui/assets/logoferre.jpg  (nombre actual del proyecto)
+      - ui/assets/logo.png
+      - ui/assets/logo.jpg
+    """
+    candidates = [
+        "ui/assets/logoferre.jpg",
+        "ui/assets/logo.png",
+        "ui/assets/logo.jpg",
+    ]
+    for candidate in candidates:
+        path = get_asset_path(candidate)
+        if path:
+            return str(path)
+    return None

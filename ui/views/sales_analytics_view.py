@@ -1,4 +1,3 @@
-import os
 import re
 from datetime import date, timedelta
 import requests
@@ -25,8 +24,6 @@ API_URL = BASE_URL
 def _strip_emoji(text: str) -> str:
     """Elimina emojis de un texto para compatibilidad con Matplotlib."""
     return re.sub(r'[\U00010000-\U0010ffff\u2600-\u27BF\u2B50\uFE0F]', '', text).strip()
-
-_STYLES_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "styles.qss")
 
 # ─────────────────────────────────────────────────────────────
 # Paleta dark para Matplotlib
@@ -128,15 +125,7 @@ class SalesAnalyticsView(QWidget):
         self._last_compare: dict | None = None
 
         self._build_ui()
-        self._load_qss()
         self.refresh_all()
-
-    def _load_qss(self):
-        try:
-            with open(_STYLES_PATH, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
-        except FileNotFoundError:
-            pass
 
     # ------------------------------------------------------------------
     # UI

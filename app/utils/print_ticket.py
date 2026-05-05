@@ -131,13 +131,10 @@ def print_einvoice_ticket(
         Ruta del PDF generado.
     """
     from app.services.einvoice_pdf import generate_einvoice_pdf
+    from app.core.config import get_logo_path
 
-    # Buscar logo
-    logo = None
-    for candidate in ["ui/assets/logoferre.jpg", "ui/assets/logo.png"]:
-        if os.path.exists(candidate):
-            logo = candidate
-            break
+    # Buscar logo (ruta absoluta portable para .exe)
+    logo = get_logo_path()
 
     # Generar PDF
     pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)

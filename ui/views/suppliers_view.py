@@ -1,4 +1,3 @@
-import os
 import requests
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
@@ -13,9 +12,6 @@ from ui.dialogs.add_supplier_dialog import AddSupplierDialog
 from ui.dialogs.edit_supplier_dialog import EditSupplierDialog
 from ui.api import BASE_URL
 from ui.utils.http_worker import api_call
-
-# Ruta al stylesheet compartido
-_STYLES_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "styles.qss")
 
 API_SUPPLIERS = f"{BASE_URL}/suppliers"
 
@@ -68,13 +64,6 @@ class SuppliersView(QWidget):
     # 🧠 INTERFAZ PRINCIPAL
     # --------------------------------------------------------
     def setup_ui(self):
-        # Cargar stylesheet compartido (#12)
-        try:
-            with open(_STYLES_PATH, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
-        except FileNotFoundError:
-            pass
-
         layout = QVBoxLayout()
         layout.setAlignment(Qt.AlignTop)
 

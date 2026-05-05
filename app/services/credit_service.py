@@ -12,6 +12,58 @@ from app.db.crud.cash import get_open_session
 from sqlalchemy import func, case
 
 
+# ── FASE 7 — Fix 7.1: Reconciliación de saldo en escritura ──────
+# customer.credit_balance es un cache incremental que puede divergir
+# del balance real calculado desde la tabla credits (ej: commit parcial,
+# bug, o restauración de backup). Esta función lo corrige ANTES de
+# cualquier operación de escritura, garantizando que las validaciones
+# de límite de crédito y máximo de abono trabajen con datos correctos.
+
+def _reconcile_balance(db: Session, customer: "Customer") -> Decimal:
+    """Recalcula el saldo real del cliente desde la tabla credits.
+
+    Si hay divergencia con customer.credit_balance (drift > ₡0.01),
+    corrige el valor almacenado y lo loguea como WARNING.
+
+    Returns:
+        El saldo real reconciliado como Decimal.
+    """
+    from app.core.logger import logger as _logger
+
+    agg = (
+        db.query(
+            func.coalesce(
+                func.sum(case((Credit.type == "sale", Credit.amount), else_=0)), 0,
+            ).label("total_sales"),
+            func.coalesce(
+                func.sum(case((Credit.type == "payment", Credit.amount), else_=0)), 0,
+            ).label("total_payments"),
+        )
+        .filter(Credit.customer_id == customer.id)
+        .first()
+    )
+
+    real_balance = max(
+        Decimal("0"),
+        Decimal(str(agg.total_sales or 0)) - Decimal(str(agg.total_payments or 0)),
+    )
+
+    stored = Decimal(str(customer.credit_balance or 0))
+    drift = stored - real_balance
+
+    if abs(drift) > Decimal("0.01"):
+        _logger.warning(
+            f"DRIFT CRÉDITO CORREGIDO: Cliente #{customer.id} '{customer.name}' — "
+            f"almacenado: ₡{float(stored):,.2f}, "
+            f"real: ₡{float(real_balance):,.2f}, "
+            f"drift: ₡{float(drift):,.2f}. "
+            f"Se corrigió automáticamente en esta operación de escritura."
+        )
+        customer.credit_balance = real_balance
+
+    return real_balance
+
+
 # ---------------------------------------------------------
 # 1. Registrar venta a crédito
 # ---------------------------------------------------------
@@ -43,7 +95,9 @@ def add_credit_sale(db: Session, customer_id: int, sale_id: int):
     total_amount = Decimal(str(sale.total))
 
     # ── 1. Validar límite ANTES de tocar nada ─────────────────────────────
-    current_balance = Decimal(str(customer.credit_balance or 0))
+    # FASE 7 — Fix 7.1: Reconciliar saldo antes de validar para que el
+    # chequeo de límite use el balance real, no un cache posiblemente drifteado.
+    current_balance = _reconcile_balance(db, customer)
     limit_ = Decimal(str(customer.credit_limit or 0))
 
     if customer.has_credit_limit and limit_ > 0 and (current_balance + total_amount) > limit_:
@@ -100,7 +154,9 @@ def add_credit_payment(db: Session, customer_id: int, amount: float, payment_met
         raise ValueError(f"Cliente con ID {customer_id} no existe.")
 
     # ── FASE 1 — Fix 1.1: Validar que el abono no exceda el saldo ──
-    current_balance = Decimal(str(customer.credit_balance or 0))
+    # FASE 7 — Fix 7.1: Reconciliar saldo antes de validar para que el
+    # chequeo de máximo use el balance real, no un cache posiblemente drifteado.
+    current_balance = _reconcile_balance(db, customer)
     if amount_dec > current_balance:
         raise ValueError(
             f"El abono (₡{float(amount_dec):,.2f}) excede el saldo pendiente "
@@ -220,7 +276,7 @@ def get_credit_info(
     # el balance real calculado desde la tabla credits.
     # NO se corrige aquí: un GET no debe modificar datos (idempotencia).
     # La corrección ocurre automáticamente en la próxima operación de
-    # escritura (abono/venta) que actualiza customer.credit_balance.
+    # escritura (abono/venta) vía _reconcile_balance() (Fix 7.1).
     stored_balance = round(float(customer.credit_balance or 0), 2)
     balance_drift = round(stored_balance - balance, 2)
     if abs(balance_drift) > 0.01:

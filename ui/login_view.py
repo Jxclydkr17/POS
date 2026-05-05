@@ -12,6 +12,7 @@ import logging
 # 🧩 Importar gestor de sesión global
 from ui.session_manager import session
 from app.core.security import decode_token
+from app.core.config import APP_VERSION
 from ui.utils.http_worker import api_call
 
 from ui.api import BASE_URL
@@ -78,7 +79,7 @@ class BrandPanel(QWidget):
 
         # Decoración inferior
         layout.addStretch()
-        deco = QLabel("v1.0  ·  © 2026 Violette")
+        deco = QLabel(f"v{APP_VERSION}  ·  © 2026 Violette")
         deco.setAlignment(Qt.AlignCenter)
         deco.setStyleSheet(
             "font-size: 10px; color: rgba(139,92,246,0.45); background: transparent;"

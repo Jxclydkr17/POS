@@ -9,7 +9,7 @@ Consume los 5 endpoints de /analytics/purchases/* que ya existen en el backend:
   - supplier-comparison (+ multi-supplier-products)
 """
 
-import os
+
 from datetime import date
 import requests
 
@@ -32,8 +32,6 @@ from ui.api import BASE_URL
 from ui.utils.calendar_fix import fix_calendar_colors
 
 API_URL = BASE_URL
-
-_STYLES_PATH = os.path.join(os.path.dirname(__file__), "..", "assets", "styles.qss")
 
 # Paleta dark Matplotlib
 _MPL_BG      = "#1c1c1c"
@@ -123,15 +121,7 @@ class PurchasesAnalyticsView(QWidget):
         self._last_top_products: list | None = None
 
         self._build_ui()
-        self._load_qss()
         self.refresh_all()
-
-    def _load_qss(self):
-        try:
-            with open(_STYLES_PATH, "r", encoding="utf-8") as f:
-                self.setStyleSheet(f.read())
-        except FileNotFoundError:
-            pass
 
     # ------------------------------------------------------------------
     # UI

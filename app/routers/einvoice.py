@@ -19,7 +19,7 @@ from app.einvoice.sequence import build_consecutivo, build_clave, next_sequence_
 from app.einvoice.xsd_validator import validate_xml, get_validation_status
 # FASE 2
 from app.einvoice.xml_signer import sign_xml, is_signing_available
-from app.core.config import settings
+from app.core.config import settings, get_logo_path
 # FASE 3
 from app.utils.hacienda_api import send_einvoice_to_hacienda, check_einvoice_status
 from app.constants.status_enums import InvoiceStatus
@@ -481,12 +481,8 @@ def generate_pdf(einvoice_id: int, db: Session = Depends(get_db)):
     try:
         from app.services.einvoice_pdf import generate_einvoice_pdf
 
-        # Buscar logo del emisor
-        logo = None
-        for candidate in ["ui/assets/logoferre.jpg", "ui/assets/logo.png", "app/static/agromatina_logo.png"]:
-            if os.path.exists(candidate):
-                logo = candidate
-                break
+        # Buscar logo del emisor (ruta absoluta portable para .exe)
+        logo = get_logo_path()
 
         pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
         return FileResponse(
@@ -515,11 +511,7 @@ def print_einvoice_ticket(einvoice_id: int, db: Session = Depends(get_db)):
         from app.utils.print_ticket import print_pdf
 
         # Generar PDF
-        logo = None
-        for candidate in ["ui/assets/logoferre.jpg", "ui/assets/logo.png"]:
-            if os.path.exists(candidate):
-                logo = candidate
-                break
+        logo = get_logo_path()
 
         pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
 
@@ -555,11 +547,7 @@ def full_einvoice_flow(einvoice_id: int, db: Session = Depends(get_db)):
     pdf_path = None
     try:
         from app.services.einvoice_pdf import generate_einvoice_pdf
-        logo = None
-        for candidate in ["ui/assets/logoferre.jpg", "ui/assets/logo.png"]:
-            if os.path.exists(candidate):
-                logo = candidate
-                break
+        logo = get_logo_path()
         pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
     except Exception as e:
         logger.warning(f"PDF no generado para einvoice {einvoice_id}: {e}")

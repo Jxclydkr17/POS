@@ -153,23 +153,55 @@ def _get_open_cash_session(db: Session) -> CashSession:
 
 def _get_or_create_issuer(db: Session) -> IssuerProfile:
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
-    if not issuer:
-        # ── FASE 3 — Fix 3.3: Advertir sobre perfil emisor dummy ──
-        # Facturas electrónicas generadas con estos datos serán rechazadas
-        # por Hacienda. El usuario debe configurar su perfil real en Ajustes.
-        logger.error(
-            "⚠️ PERFIL EMISOR NO CONFIGURADO: Se creó un perfil con datos "
-            "genéricos (legal_name='Mi Negocio', id_number='000000000'). "
-            "Las facturas electrónicas serán RECHAZADAS por Hacienda. "
-            "Configure el perfil del emisor en Ajustes → Facturación Electrónica."
+
+    # ── FASE 7 — Fix 7.3: Bloquear datos ficticios en producción ──
+    # Si estamos en modo producción de Hacienda, el perfil del emisor
+    # DEBE tener datos reales. Enviar datos dummy a Hacienda producción
+    # genera documentos fiscales inválidos que pueden acarrear multas.
+    from app.core.credentials import hacienda_env
+    is_production = hacienda_env() == "production"
+
+    _DUMMY_ID = "000000000"
+
+    if issuer:
+        # Perfil existe pero tiene datos ficticios
+        if is_production and issuer.id_number == _DUMMY_ID:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "El perfil del emisor tiene datos genéricos (cédula '000000000') "
+                    "y Hacienda está en modo PRODUCCIÓN. Las facturas serían rechazadas. "
+                    "Configure el perfil real en Ajustes → Facturación Electrónica "
+                    "antes de realizar ventas."
+                ),
+            )
+        return issuer
+
+    # No existe perfil
+    if is_production:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No hay perfil de emisor configurado y Hacienda está en modo PRODUCCIÓN. "
+                "Configure el perfil del emisor en Ajustes → Facturación Electrónica "
+                "antes de realizar ventas. Necesita: razón social, cédula, email, "
+                "código de sucursal y terminal."
+            ),
         )
-        issuer = IssuerProfile(
-            legal_name="Mi Negocio", id_type="01",
-            id_number="000000000", email="facturacion@tudominio.com",
-            branch_code="101", terminal_code="00001",
-        )
-        db.add(issuer)
-        db.flush()
+
+    # Sandbox: crear perfil dummy para pruebas (comportamiento original)
+    logger.warning(
+        "PERFIL EMISOR NO CONFIGURADO: Se creó un perfil con datos "
+        "genéricos para sandbox (legal_name='Mi Negocio', id_number='000000000'). "
+        "Configure el perfil real antes de cambiar a modo producción."
+    )
+    issuer = IssuerProfile(
+        legal_name="Mi Negocio", id_type="01",
+        id_number=_DUMMY_ID, email="facturacion@tudominio.com",
+        branch_code="101", terminal_code="00001",
+    )
+    db.add(issuer)
+    db.flush()
     return issuer
 
 

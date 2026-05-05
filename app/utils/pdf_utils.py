@@ -7,7 +7,12 @@ from reportlab.lib.styles import getSampleStyleSheet
 import os
 from app.core.logger import logger  # ✅
 
-def generate_invoice_pdf(sale_data, items, logo_path="ui/assets/logo_agromatina.png"):
+def generate_invoice_pdf(sale_data, items, logo_path=None):
+    # ── FASE 7 — Fix 7.1: Resolver logo con ruta absoluta portable ──
+    if logo_path is None:
+        from app.core.config import get_logo_path
+        logo_path = get_logo_path()
+
     output_dir = "generated_pdfs"
     os.makedirs(output_dir, exist_ok=True)
     filename = os.path.join(output_dir, f"venta_{sale_data['id']}.pdf")
@@ -18,7 +23,7 @@ def generate_invoice_pdf(sale_data, items, logo_path="ui/assets/logo_agromatina.
     styles = getSampleStyleSheet()
     story = []
 
-    if os.path.exists(logo_path):
+    if logo_path and os.path.exists(logo_path):
         story.append(Image(logo_path, width=50*mm, height=50*mm))
 
     biz = sale_data.get("business") or {}

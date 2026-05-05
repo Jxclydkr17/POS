@@ -112,9 +112,11 @@ datas = [
     ('VERSION', '.'),
 ]
 
-# Agregar .env si existe (para desarrollo)
-if os.path.exists('.env'):
-    datas.append(('.env', '.'))
+# ── FASE 7 — Fix 7.3: NUNCA empaquetar .env en el .exe ──
+# Si se construye el .exe en una máquina con .env real,
+# las credenciales (SECRET_KEY, HACIENDA_PASSWORD, DB_PASSWORD)
+# quedarían dentro del instalador y se distribuirían a todos.
+# La app crea su propio .env en la primera ejecución (ver _ensure_secret_key).
 
 # ── Análisis ──
 a = Analysis(

@@ -43,6 +43,20 @@ POOL_MAX_THREADS = 6          # hilos concurrentes en el pool
 # Señal especial que indica que el token expiró (401)
 AUTH_EXPIRED_SENTINEL = "__AUTH_EXPIRED__"
 
+# ── FASE 7 — Fix 7.3: Sesión HTTP compartida para reutilizar conexiones ──
+# requests.get/post crean una conexión TCP nueva en cada llamada.
+# Un requests.Session reutiliza conexiones via HTTP keep-alive,
+# evitando el overhead de TCP handshake en cada request a localhost.
+# El pool_maxsize debe coincidir con POOL_MAX_THREADS para que cada
+# hilo del QThreadPool pueda tener su propia conexión keep-alive.
+_http_session = requests.Session()
+_adapter = requests.adapters.HTTPAdapter(
+    pool_connections=1,          # un solo host (127.0.0.1)
+    pool_maxsize=POOL_MAX_THREADS,  # una conexión por hilo del pool
+    max_retries=0,               # sin reintentos automáticos
+)
+_http_session.mount("http://", _adapter)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Signals — deben vivir en un QObject, no en QRunnable
@@ -95,7 +109,7 @@ class HttpWorker(QRunnable):
     def run(self):
         """Ejecutado en un hilo del pool — NUNCA tocar widgets Qt aquí."""
         try:
-            fn = getattr(requests, self.method, None)
+            fn = getattr(_http_session, self.method, None)
             if fn is None:
                 self.signals.error.emit(f"Método HTTP inválido: {self.method}")
                 return
@@ -352,5 +366,5 @@ def api_request(
     explícitamente (click en botón). Para carga de datos usar api_call().
     """
     kwargs["timeout"] = (CONNECT_TIMEOUT, timeout)
-    fn = getattr(requests, method.lower())
+    fn = getattr(_http_session, method.lower())
     return fn(url, **kwargs)

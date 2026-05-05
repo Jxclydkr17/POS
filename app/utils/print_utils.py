@@ -5,11 +5,15 @@ from reportlab.pdfgen import canvas
 from reportlab.lib import colors
 from reportlab.lib.units import cm
 from app.utils.dt import now_cr
-from app.core.config import get_pdf_dir
+from app.core.config import get_pdf_dir, get_logo_path
 
 # ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
 PDF_DIR = str(get_pdf_dir())
-LOGO_PATH = "ui/assets/logoferre.jpg"  # ⚠️ Asegúrate de colocar aquí tu logo
+
+# ── FASE 7 — Fix 7.1: Logo con ruta absoluta portable ──
+# get_logo_path() resuelve relativo a APP_DIR, funciona en .exe.
+# Retorna None si no se encuentra ningún logo.
+LOGO_PATH = get_logo_path()
 
 
 def generate_invoice_pdf(sale_data, items):
@@ -38,7 +42,7 @@ def generate_invoice_pdf(sale_data, items):
     # -------------------------------
     # 🏪 ENCABEZADO
     # -------------------------------
-    if os.path.exists(LOGO_PATH):
+    if LOGO_PATH and os.path.exists(LOGO_PATH):
         pdf.drawImage(LOGO_PATH, width - 6 * cm, y - 1.5 * cm, width=4.5 * cm, preserveAspectRatio=True, mask="auto")
 
     pdf.setFont("Helvetica-Bold", 14)
