@@ -11,6 +11,7 @@ from app.db.models.customer import Customer
 from app.db.models.user import User
 
 from app.utils.dt import TZ_CR
+from app.utils.db_compat import escape_like
 
 # ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
 from app.core.dependencies import get_current_user
@@ -38,6 +39,8 @@ def sales_history(
     payment: Optional[str] = Query(None, description="efectivo|tarjeta|sinpe|crédito"),
     status: Optional[str] = Query(None, description="aprobada|pendiente|anulada"),
     q: Optional[str] = Query(None, description="número de venta o nombre cliente"),
+    limit: int = Query(500, ge=1, le=2000, description="Máximo de resultados"),
+    skip: int = Query(0, ge=0, description="Registros a saltar (paginación)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -51,29 +54,30 @@ def sales_history(
 
     # 🔹 Método de pago
     if payment:
-        p = payment.lower()
-        if p == "sinpe":
-            qset = qset.filter(Sale.payment_method.ilike("%sinpe%"))
+        p = escape_like(payment.lower())
+        if "sinpe" in p:
+            qset = qset.filter(Sale.payment_method.ilike(f"%{p}%"))
         else:
             qset = qset.filter(Sale.payment_method.ilike(p))
 
-    # 🔹 Estado (si existe campo status en Sale)
-    # Nota: El modelo Sale no tiene 'status', asumo que lo agregaste o lo estás simulando.
-    # Usando getattr para evitar errores si no existe.
+    # 🔹 Estado
     if status:
-        qset = qset.filter(getattr(Sale, "status", None).ilike(status))
+        qset = qset.filter(Sale.status.ilike(escape_like(status)))
 
     # 🔹 Buscar por ID o nombre de cliente
     if q:
         try:
             qset = qset.filter(Sale.customer_id == int(q))
         except ValueError:
-            qset = qset.join(Customer, isouter=True).filter(Customer.name.ilike(f"%{q}%"))
+            safe_q = escape_like(q)
+            qset = qset.join(Customer, isouter=True).filter(Customer.name.ilike(f"%{safe_q}%"))
 
-
+    # ── FASE 2 — Fix 2.4: Paginación con limit/skip ──
+    # Antes: sin límite, podía devolver miles de ventas de golpe.
+    # La UI (einvoice_monitor) ya enviaba limit=200 pero se ignoraba.
     qset = qset.order_by(Sale.created_at.desc())
     # FASE 1 — Fix 1.4: joinedload para eliminar N+1 (antes: 1 query por venta)
-    sales = qset.options(joinedload(Sale.customer)).all()
+    sales = qset.options(joinedload(Sale.customer)).offset(skip).limit(limit).all()
 
     result = []
     for s in sales:
@@ -84,7 +88,7 @@ def sales_history(
             "customer_name": cust_name,
             "total": float(s.total),
             "payment_method": s.payment_method,
-            "status": getattr(s, "status", "aprobada"),
+            "status": s.status,
         })
 
     return {"sales": result}
@@ -139,7 +143,7 @@ def get_sale_detail(
         "created_at": sale.created_at.strftime("%Y-%m-%d %H:%M"),
         "customer_name": customer_name,
         "payment_method": sale.payment_method,
-        "status": getattr(sale, "status", "aprobada"),
+        "status": sale.status,
         "total": sale.total,
         "items": item_data,
     }

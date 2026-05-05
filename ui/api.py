@@ -18,6 +18,7 @@ Uso legacy (sigue funcionando):
     url = API["product_by_id"](42)       # lambda
 """
 import os
+from urllib.parse import quote
 
 BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 
@@ -111,7 +112,11 @@ class ApiUrls:
 
     # ── Actividades económicas ──
     def economic_activity_search(self, q: str) -> str:
-        return f"{self._base}/economic-activities/search?q={q}"
+        return f"{self._base}/economic-activities/search?q={quote(q)}"
+
+    # ── Lookup cédula (Hacienda) ──
+    def lookup_cedula(self, identificacion: str) -> str:
+        return f"{self._base}/customers/lookup-cedula?identificacion={quote(identificacion)}"
 
     # ── Analytics ──
     @property

@@ -7,7 +7,7 @@ class SaleDetail(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     sale_id = Column(Integer, ForeignKey("sales.id", ondelete="CASCADE"), index=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
 
     # 📏 Cantidad
     quantity = Column(Numeric(12, 3), nullable=False)

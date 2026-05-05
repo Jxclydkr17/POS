@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QMessageBox, QListWidget, QScrollArea, QWidget,
     QTextEdit, QDateEdit, QCheckBox
 )
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt, QDate, QTimer
 from ui.session_manager import session
 from ui.utils.http_worker import api_call, run_async
 from ui.api import API
@@ -61,6 +61,19 @@ class EditCustomerDialog(QDialog):
 
         # Establecer número de ID guardado
         self.id_number_input.setText(customer_data.get("id_number", ""))
+
+        # ── FASE 5: Debounce para lookup de cédula en Hacienda ──
+        # Se conecta DESPUÉS del setText para no disparar lookup al abrir.
+        self._lookup_timer = QTimer()
+        self._lookup_timer.setSingleShot(True)
+        self._lookup_timer.setInterval(600)
+        self._lookup_timer.timeout.connect(self._do_cedula_lookup)
+        self.id_number_input.textChanged.connect(lambda: self._lookup_timer.start())
+
+        # Label de estado del lookup
+        self.cedula_status_label = QLabel("")
+        self.cedula_status_label.setWordWrap(True)
+        self.cedula_status_label.setStyleSheet("font-size: 11px; padding: 2px 0;")
 
         # Campo de límite de crédito
         self.credit_limit_input = QLineEdit(str(customer_data.get("credit_limit", 0.0)))
@@ -185,6 +198,7 @@ class EditCustomerDialog(QDialog):
 
         left_col.addWidget(QLabel("Número de identificación:"))
         left_col.addWidget(self.id_number_input)
+        left_col.addWidget(self.cedula_status_label)
 
         left_col.addWidget(QLabel("Tipo de cliente:"))
         left_col.addWidget(self.customer_type_combo)
@@ -264,6 +278,14 @@ class EditCustomerDialog(QDialog):
             QMessageBox.warning(self, "Error", "El nombre es obligatorio.")
             return
 
+        # Validar email (formato básico si se ingresó)
+        email = self.email_input.text().strip()
+        if email:
+            import re
+            if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+                QMessageBox.warning(self, "Error", "El correo electrónico no tiene un formato válido.")
+                return
+
         # Validar teléfono CR (8 dígitos si se ingresó)
         phone = self.phone_input.text().strip()
         if phone and not phone.isdigit():
@@ -307,7 +329,7 @@ class EditCustomerDialog(QDialog):
 
         payload = {
             "name": name,
-            "email": self.email_input.text().strip() or None,
+            "email": email or None,
             "phone": phone or None,
             "secondary_phone": sec_phone or None,
             "address": self.address_input.text().strip() or None,
@@ -379,6 +401,70 @@ class EditCustomerDialog(QDialog):
             self.id_number_input.setStyleSheet(INVALID_STYLE)
         else:
             self.id_number_input.setStyleSheet(VALID_STYLE)
+
+    # ------------------------------------------------------
+    # LOOKUP CÉDULA EN HACIENDA
+    # ------------------------------------------------------
+    def _do_cedula_lookup(self):
+        """Se dispara 600ms después de que el usuario deja de escribir."""
+        text = self.id_number_input.text().replace("_", "")
+        if self.required_length == 0 or len(text) != self.required_length:
+            self.cedula_status_label.setText("")
+            return
+
+        self.cedula_status_label.setText("🔍 Consultando Hacienda...")
+        self.cedula_status_label.setStyleSheet("font-size: 11px; color: #aaa; padding: 2px 0;")
+
+        url = API["lookup_cedula"](text)
+        api_call(
+            "get", url, headers=_auth_headers(),
+            on_success=self._on_cedula_found,
+            on_error=self._on_cedula_error,
+        )
+
+    def _on_cedula_found(self, response):
+        """Callback: datos del contribuyente recibidos de Hacienda."""
+        data = response.get("data", {}) if isinstance(response, dict) else {}
+        if not data:
+            self.cedula_status_label.setText("")
+            return
+
+        nombre = data.get("nombre", "")
+        tipo_nombre = data.get("tipoIdentificacionNombre", "")
+        actividades = data.get("actividades", [])
+
+        # ── Auto-seleccionar tipo de identificación ──
+        if tipo_nombre:
+            idx = self.id_type_combo.findText(tipo_nombre)
+            if idx >= 0:
+                self.id_type_combo.blockSignals(True)
+                self.id_type_combo.setCurrentIndex(idx)
+                self.id_type_combo.blockSignals(False)
+
+        # ── Cargar actividades económicas ──
+        if actividades:
+            self.activities_list.clear()
+            for act in actividades:
+                label = f'{act["code"]} - {act["description"][:60]}'
+                self.activities_list.addItem(label)
+
+        # ── Mostrar feedback ──
+        n_act = len(actividades)
+        self.cedula_status_label.setText(
+            f"✅ {nombre}  —  {n_act} actividad(es) cargada(s)"
+        )
+        self.cedula_status_label.setStyleSheet("font-size: 11px; color: #28a745; padding: 2px 0;")
+
+    def _on_cedula_error(self, msg):
+        """Callback: error en la consulta."""
+        if "404" in msg or "no encontrada" in msg.lower():
+            self.cedula_status_label.setText("⚠️ Identificación no encontrada en Hacienda")
+            self.cedula_status_label.setStyleSheet("font-size: 11px; color: #ffc107; padding: 2px 0;")
+        elif "429" in msg:
+            self.cedula_status_label.setText("⏳ Límite de consultas alcanzado, intente en unos minutos")
+            self.cedula_status_label.setStyleSheet("font-size: 11px; color: #ffc107; padding: 2px 0;")
+        else:
+            self.cedula_status_label.setText("")
 
     # ------------------------------------------------------
     # MÉTODOS PARA UBICACIÓN GEOGRÁFICA

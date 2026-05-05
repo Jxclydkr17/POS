@@ -1,13 +1,16 @@
 # app/routers/customers.py
 
 import logging
-from fastapi import APIRouter, Depends, UploadFile, File
+import time
+import threading
+from fastapi import APIRouter, Depends, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import date, datetime, timedelta
 from app.utils.dt import today_cr
 import io, csv
+import requests as http_requests
 
 from app.db.database import get_db
 from app.schemas.customer import CustomerCreate, CustomerUpdate, CustomerOut
@@ -29,6 +32,7 @@ from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
 from app.db.models.credit import Credit
 from app.db.models.credit_sale import CreditSale
+from app.db.models.economic_activity import EconomicActivity
 from app.utils.responses import success_response, error_response
 
 logger = logging.getLogger(__name__)
@@ -323,24 +327,45 @@ def aging_report(
         .all()
     )
 
+    if not customers_with_debt:
+        return success_response("Reporte de aging", data={
+            "items": [],
+            "totals": {"0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0, "total": 0},
+        })
+
+    # ── FASE 2 — Fix 2.2: Cargar TODOS los movimientos en 2 queries ──
+    # Antes: 2 queries por cada cliente (N+1). Con 50 clientes = 100 queries.
+    # Ahora: 2 queries totales sin importar cuántos clientes haya.
+    customer_ids = [c.id for c in customers_with_debt]
+
+    all_sale_movs = (
+        db.query(Credit)
+        .filter(Credit.customer_id.in_(customer_ids), Credit.type == "sale")
+        .order_by(Credit.customer_id, Credit.created_at.asc())
+        .all()
+    )
+    all_pay_movs = (
+        db.query(Credit)
+        .filter(Credit.customer_id.in_(customer_ids), Credit.type == "payment")
+        .all()
+    )
+
+    # Agrupar por customer_id en Python
+    from collections import defaultdict
+    sales_by_cust = defaultdict(list)
+    for m in all_sale_movs:
+        sales_by_cust[m.customer_id].append(m)
+
+    payments_by_cust = defaultdict(float)
+    for m in all_pay_movs:
+        payments_by_cust[m.customer_id] += float(m.amount or 0)
+
     report = []
     totals = {"0_30": 0, "31_60": 0, "61_90": 0, "90_plus": 0, "total": 0}
 
     for cust in customers_with_debt:
-        # Ventas a crédito del cliente
-        sale_movs = (
-            db.query(Credit)
-            .filter(Credit.customer_id == cust.id, Credit.type == "sale")
-            .order_by(Credit.created_at.asc())
-            .all()
-        )
-        pay_movs = (
-            db.query(Credit)
-            .filter(Credit.customer_id == cust.id, Credit.type == "payment")
-            .all()
-        )
-
-        remaining_pay = sum(float(m.amount or 0) for m in pay_movs)
+        sale_movs = sales_by_cust.get(cust.id, [])
+        remaining_pay = payments_by_cust.get(cust.id, 0.0)
         aging = {"0_30": 0.0, "31_60": 0.0, "61_90": 0.0, "90_plus": 0.0}
 
         for sm in sale_movs:
@@ -491,3 +516,129 @@ async def import_customers_csv(
         f"{created} clientes importados correctamente.",
         data={"created": created, "errors": errors}
     )
+
+
+# ----------------------------------------------------------
+# LOOKUP CÉDULA VÍA API DE HACIENDA
+# ----------------------------------------------------------
+# ── FASE 5: Consulta contribuyente por cédula ──
+# API pública de Hacienda: https://api.hacienda.go.cr/fe/ae
+# Rate limits: 20 req/seg burst, bloqueo de IP por 10 min.
+# Caché local 24h (el estado tributario no cambia en tiempo real).
+
+_HACIENDA_AE_URL = "https://api.hacienda.go.cr/fe/ae"
+_cedula_cache: dict[str, tuple[float, dict]] = {}
+_cedula_cache_lock = threading.Lock()
+_CEDULA_CACHE_TTL = 86400  # 24 horas
+
+# Mapeo de tipo de identificación Hacienda → display name
+_ID_TYPE_MAP = {"01": "Física", "02": "Jurídica", "03": "DIMEX", "04": "NITE"}
+
+
+@router.get("/lookup-cedula")
+def lookup_cedula(
+    identificacion: str = Query(..., min_length=9, max_length=12),
+    db: Session = Depends(get_db),
+    user: dict = Depends(get_current_user),
+):
+    """
+    Consulta datos de un contribuyente en el API público de Hacienda CR.
+
+    Retorna nombre, tipo de identificación y actividades económicas.
+    Los códigos de actividad se insertan/actualizan automáticamente
+    en la tabla economic_activities (upsert).
+
+    Caché local de 24h para respetar los rate limits de Hacienda.
+    """
+    # Validar que sea numérico
+    cedula = identificacion.strip()
+    if not cedula.isdigit():
+        raise HTTPException(status_code=400, detail="La identificación debe contener solo dígitos.")
+
+    # ── Verificar caché ──
+    now = time.monotonic()
+    with _cedula_cache_lock:
+        if cedula in _cedula_cache:
+            cached_at, cached_data = _cedula_cache[cedula]
+            if (now - cached_at) < _CEDULA_CACHE_TTL:
+                return success_response("Contribuyente encontrado (caché)", data=cached_data)
+
+    # ── Consultar API de Hacienda ──
+    try:
+        resp = http_requests.get(
+            _HACIENDA_AE_URL,
+            params={"identificacion": cedula},
+            timeout=10,
+        )
+    except http_requests.ConnectionError:
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo conectar al API de Hacienda. Verifique la conexión a internet.",
+        )
+    except http_requests.Timeout:
+        raise HTTPException(
+            status_code=504,
+            detail="El API de Hacienda no respondió a tiempo. Intente de nuevo.",
+        )
+
+    if resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail="Identificación no encontrada en los registros de Hacienda.",
+        )
+    if resp.status_code == 429:
+        raise HTTPException(
+            status_code=429,
+            detail="Límite de consultas a Hacienda alcanzado. Espere unos minutos e intente de nuevo.",
+        )
+    if resp.status_code != 200:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error del API de Hacienda (HTTP {resp.status_code}).",
+        )
+
+    hacienda_data = resp.json()
+
+    # ── Parsear respuesta ──
+    tipo_id_code = hacienda_data.get("tipoIdentificacion", "")
+    tipo_id_name = _ID_TYPE_MAP.get(tipo_id_code, tipo_id_code)
+
+    actividades_raw = hacienda_data.get("actividades", [])
+    actividades = []
+    for act in actividades_raw:
+        code = str(act.get("codigo", "")).zfill(6)
+        desc = act.get("descripcion", "").strip()
+        estado = act.get("estado", "")
+        if code and desc:
+            actividades.append({"code": code, "description": desc, "estado": estado})
+
+    result = {
+        "nombre": hacienda_data.get("nombre", ""),
+        "tipoIdentificacion": tipo_id_code,
+        "tipoIdentificacionNombre": tipo_id_name,
+        "regimen": hacienda_data.get("regimen", {}),
+        "actividades": actividades,
+    }
+
+    # ── Upsert actividades en la tabla local ──
+    # Esto hace que el CSV sea innecesario a largo plazo:
+    # la tabla se llena orgánicamente conforme se consultan cédulas.
+    if actividades:
+        try:
+            for act in actividades:
+                existing = db.query(EconomicActivity).filter_by(code=act["code"]).first()
+                if existing:
+                    if existing.description != act["description"]:
+                        existing.description = act["description"]
+                else:
+                    db.add(EconomicActivity(code=act["code"], description=act["description"]))
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"No se pudieron guardar actividades económicas: {e}")
+
+    # ── Guardar en caché ──
+    with _cedula_cache_lock:
+        _cedula_cache[cedula] = (now, result)
+
+    return success_response("Contribuyente encontrado", data=result)

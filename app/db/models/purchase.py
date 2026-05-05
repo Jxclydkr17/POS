@@ -21,7 +21,7 @@ class Purchase(Base):
 
     invoice_number = Column(String(50), nullable=False, unique=True)
 
-    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
+    supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False, index=True)
 
     entry_date = Column(Date, nullable=False)
     due_date = Column(Date, nullable=False)

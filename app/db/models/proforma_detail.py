@@ -9,8 +9,8 @@ class ProformaDetail(Base):
     __tablename__ = "proforma_details"
 
     id = Column(Integer, primary_key=True, index=True)
-    proforma_id = Column(Integer, ForeignKey("proformas.id", ondelete="CASCADE"))
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    proforma_id = Column(Integer, ForeignKey("proformas.id", ondelete="CASCADE"), index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
 
     # 📏 Cantidad — Numeric(12,3) para soportar fracciones (0.500 kg, 1.750 m)
     quantity = Column(Numeric(12, 3), nullable=False)

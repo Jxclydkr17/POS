@@ -37,7 +37,8 @@ def _fmt(val) -> str:
 def _find_product_by_query(db: Session, query: str):
     """Busca un producto por nombre, código o barcode. Retorna (product, match_count)."""
     from app.db.models.product import Product
-    from sqlalchemy import or_ as sa_or, func as sa_func
+    from sqlalchemy import or_ as sa_or
+    from app.utils.db_compat import escape_like
 
     q = (query or "").strip()
     if not q:
@@ -52,13 +53,14 @@ def _find_product_by_query(db: Session, query: str):
     if exact:
         return exact, 1
 
-    # ILIKE name
+    # ILIKE name/code
+    safe_q = escape_like(q)
     rows = (
         db.query(Product)
         .filter(
             sa_or(
-                sa_func.lower(Product.name).like(sa_func.lower(f"%{q}%")),
-                sa_func.lower(Product.code).like(sa_func.lower(f"%{q}%")),
+                Product.name.ilike(f"%{safe_q}%"),
+                Product.code.ilike(f"%{safe_q}%"),
             )
         )
         .filter(Product.is_active == True)
@@ -287,11 +289,12 @@ def create_customer_quick(db: Session, name: str, phone: str = None,
         }
 
     from app.db.models.customer import Customer
+    from app.utils.db_compat import escape_like
 
     # Check duplicado
     existing = (
         db.query(Customer)
-        .filter(Customer.name.ilike(name.strip()))
+        .filter(Customer.name.ilike(escape_like(name.strip())))
         .first()
     )
     if existing:
@@ -511,15 +514,16 @@ def resolve_navigation(text: str) -> Optional[dict]:
 def _find_customer_by_query(db: Session, query: str):
     """Busca un cliente por nombre (ILIKE). Retorna (customer, match_count)."""
     from app.db.models.customer import Customer
-    from sqlalchemy import func as sa_func
+    from app.utils.db_compat import escape_like
 
     q = (query or "").strip()
     if not q:
         return None, 0
 
+    safe_q = escape_like(q)
     rows = (
         db.query(Customer)
-        .filter(sa_func.lower(Customer.name).like(sa_func.lower(f"%{q}%")))
+        .filter(Customer.name.ilike(f"%{safe_q}%"))
         .filter(Customer.is_active == True)
         .order_by(Customer.name.asc())
         .limit(5)

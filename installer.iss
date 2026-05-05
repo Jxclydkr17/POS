@@ -27,7 +27,14 @@ AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-DefaultDirName={autopf}\{#MyAppName}
+; ── FASE 4 — Fix 4.3: Directorio de instalación writable ──
+; Antes: {autopf} = C:\Program Files (read-only para usuarios normales).
+; La app no podía escribir .env, SQLite DB, PDFs ni backups.
+; Ahora: {localappdata} = C:\Users\<user>\AppData\Local\Violette POS
+; (siempre writable, estándar para apps modernas como VS Code, Discord).
+; NOTA: Si ya tenés una instalación anterior en C:\Program Files,
+; copiá manualmente .env y violette_pos.db al nuevo directorio.
+DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
@@ -35,7 +42,8 @@ OutputBaseFilename=ViolettePOS_Setup_{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-PrivilegesRequired=admin
+; Ya no se requiere admin: la app se instala en espacio del usuario.
+PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 

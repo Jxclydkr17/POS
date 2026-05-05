@@ -12,10 +12,10 @@ class Proforma(Base):
 
     id = Column(Integer, primary_key=True, index=True)
 
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
     customer = relationship("Customer")
 
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     user = relationship("User")
 
     # Numeración propia: PRO-000001, PRO-000002, etc.
@@ -38,7 +38,7 @@ class Proforma(Base):
     valid_until = Column(DateTime, nullable=False)
 
     # Si se convirtió a venta, referencia a la venta creada
-    converted_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True)
+    converted_sale_id = Column(Integer, ForeignKey("sales.id"), nullable=True, index=True)
     converted_sale = relationship("Sale")
 
     created_at = Column(DateTime, default=utcnow)

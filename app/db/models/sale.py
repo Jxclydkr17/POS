@@ -32,7 +32,7 @@ class Sale(Base):
 
     # ── FASE 2 — Auditoría de ediciones ──
     updated_at = Column(DateTime, nullable=True)
-    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    updated_by = Column(Integer, ForeignKey("users.id"), nullable=True, index=True)
     
     # OPCIONAL: Si quieres acceder al objeto usuario que editó, añade esto:
     editor = relationship("User", foreign_keys=[updated_by])

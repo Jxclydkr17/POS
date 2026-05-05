@@ -22,7 +22,7 @@ class PurchaseCreditNote(Base):
     date = Column(Date, nullable=False)
 
     # Si aplica devolución de productos al proveedor
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=True, index=True)
 
     # 📏 Cantidad devuelta — DECIMAL(12,3) para soportar fracciones (kg, metros, litros)
     quantity_returned = Column(DECIMAL(12, 3), nullable=True, default=0)
