@@ -68,6 +68,7 @@ class SalesView(QWidget):
         self._perma_focus_installed = False
         self.quick_sale_mode = False
         self.quick_sale_print_ticket = False
+        self._sale_in_progress = False          # ← guardia anti doble-submit
 
         # FASE 2 — Fix 2.2: Flag para evitar doble-conexión de señales
         self._signals_connected = False
@@ -1791,7 +1792,25 @@ class SalesView(QWidget):
         
         # Actualizar el recuadro de info del cliente (lo ocultará)
         self.update_customer_info_box()
-        
+
+        # ── Resetear estado de totales explícitamente ──
+        self._current_subtotal = 0.0
+        self._current_discount = 0.0
+        self._current_iva = 0.0
+        self._current_total = 0.0
+
+        # ── Resetear tipo de documento y días de crédito ──
+        try:
+            if hasattr(self, "doc_type_combo") and self.doc_type_combo.count() > 0:
+                self.doc_type_combo.setCurrentIndex(0)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "credit_days_input"):
+                self.credit_days_input.setValue(0)
+        except Exception:
+            pass
+
         show_toast("🧹 Carrito limpiado", success=True, parent=self)
         self._focus_product_search()
 
@@ -1922,22 +1941,26 @@ class SalesView(QWidget):
                 parent=self
             )
 
-    def _show_post_sale_stock_alerts(self):
+    def _show_post_sale_stock_alerts(self, cart_snapshot: dict | None = None):
         """
         Muestra alertas rápidas de stock después de registrar una venta.
-        Usa el stock que estaba cargado en UI antes de vender y calcula el restante.
+        Usa el snapshot del carrito capturado ANTES de limpiar.
         Ignora productos que ya estaban en 0 o sin stock válido.
         """
+        source = cart_snapshot if cart_snapshot is not None else self.cart
         alerts = []
 
-        for pid, item in self.cart.items():
+        for pid, item in source.items():
             # Producto común → no tiene stock
             if item.get("is_common", False):
                 continue
             product = item.get("product", {}) or {}
             name = product.get("name", "Producto")
-            stock_before = float(product.get("stock") or 0)
-            sold_qty = float(item.get("quantity") or 0)
+            try:
+                stock_before = float(product.get("stock") or 0)
+                sold_qty = float(item.get("quantity") or 0)
+            except (ValueError, TypeError):
+                continue
 
             if stock_before <= 0:
                 continue
@@ -1957,16 +1980,62 @@ class SalesView(QWidget):
 
     def _submit_sale(self, payload: dict, print_ticket: bool = False):
         # ── FASE 2: Async + protección doble-submit ──
+        self._sale_in_progress = True
         self.confirm_btn.setEnabled(False)
 
+        # ── Capturar snapshot del carrito ANTES del async ──
+        # Así las alertas de stock funcionan incluso si el carrito ya se limpió.
+        import copy
+        cart_snapshot = copy.deepcopy(self.cart)
+
         def on_success(json_data):
-            show_toast("✅ Venta registrada correctamente", success=True, parent=self)
-            self._show_post_sale_stock_alerts()
-            if print_ticket:
-                self.print_ticket(json_data, payload)
-            self.clear_cart()
-            self.load_products_page(reset=True)
-            self.load_favorite_products()
+            # ═══════════════════════════════════════════════════════
+            # PASO 1 — Limpiar carrito PRIMERO (acción crítica).
+            #           Si algo falla después, al menos no queda
+            #           un carrito "zombie" que bloquea el flujo.
+            # ═══════════════════════════════════════════════════════
+            try:
+                self.clear_cart()
+            except Exception as exc:
+                import logging
+                logging.error(f"Error limpiando carrito post-venta: {exc}")
+                # Fallback: limpiar manualmente lo esencial
+                try:
+                    self.cart.clear()
+                    self.cart_table.setRowCount(0)
+                except Exception:
+                    pass
+
+            # ═══════════════════════════════════════════════════════
+            # PASO 2 — Todo lo demás es "nice to have": toasts,
+            #           alertas de stock, ticket, recarga de productos.
+            #           Nada de esto debe impedir una nueva venta.
+            # ═══════════════════════════════════════════════════════
+            try:
+                show_toast("✅ Venta registrada correctamente", success=True, parent=self)
+            except Exception:
+                pass
+
+            try:
+                self._show_post_sale_stock_alerts(cart_snapshot)
+            except Exception as exc:
+                import logging
+                logging.error(f"Error mostrando alertas de stock: {exc}")
+
+            try:
+                if print_ticket:
+                    self.print_ticket(json_data, payload)
+            except Exception as exc:
+                import logging
+                logging.error(f"Error imprimiendo ticket: {exc}")
+
+            try:
+                self.load_products_page(reset=True)
+                self.load_favorite_products()
+            except Exception as exc:
+                import logging
+                logging.error(f"Error recargando productos: {exc}")
+
             QTimer.singleShot(0, self._focus_product_search)
 
         def on_error(msg):
@@ -1977,6 +2046,10 @@ class SalesView(QWidget):
             )
 
         def on_finished():
+            # ═══════════════════════════════════════════════════════
+            # SIEMPRE se ejecuta (éxito o error).  Restaurar estado.
+            # ═══════════════════════════════════════════════════════
+            self._sale_in_progress = False
             self.confirm_btn.setEnabled(True)
 
         api_call("post", SALES_URL,
@@ -1989,6 +2062,11 @@ class SalesView(QWidget):
         )
 
     def confirm_sale(self):
+        # ── Guardia: evitar doble-submit (F5, chat, botón) ──
+        if self._sale_in_progress:
+            show_toast("⏳ Ya hay una venta en proceso…", success=False, parent=self)
+            return
+
         if not self.cart:
             show_toast("No hay productos en el carrito.", success=False, parent=self)
             return
@@ -2121,19 +2199,25 @@ class SalesView(QWidget):
 
         # =========================================================
         # 🧾 ARMAR INFO PARA DIÁLOGO DE CONFIRMACIÓN (UI)
+        # ✅ Calcula subtotal desde self.cart (fuente de verdad),
+        #    NO desde self.cart_table (puede estar desincronizada).
         # =========================================================
         items = []
 
-        for row_idx, (pid, item) in enumerate(self.cart.items()):
+        for pid, item in self.cart.items():
             product = item["product"]
             is_common = item.get("is_common", False)
             display_name = f"📦 {item.get('common_description', '')}" if is_common else product.get("name", "")
+            qty = float(item["quantity"])
+            price = float(item["unit_price"])
+            disc = float(item.get("discount_percent") or 0)
+            line_subtotal = price * qty * (1 - disc / 100.0)
             items.append({
                 "name": display_name,
-                "qty": float(item["quantity"]),
-                "unit_price": float(item["unit_price"]),
-                "discount_percent": float(item.get("discount_percent") or 0),   # ✅ FASE 2.4
-                "subtotal": float(self.cart_table.item(row_idx, 3).text())
+                "qty": qty,
+                "unit_price": price,
+                "discount_percent": disc,
+                "subtotal": round(line_subtotal, 2),
             })
 
         received = None
