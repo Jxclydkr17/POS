@@ -1792,6 +1792,20 @@ class MainWindow(QMainWindow):
 
             show_toast("✅ Sesión cerrada correctamente", success=True, parent=self)
 
+            # ──────────────────────────────────────────────────────────
+            # FIX CRÍTICO: cleanup de event filters globales antes de
+            # destruir MainWindow.
+            #
+            # Tanto MainWindow como SalesView instalan event filters
+            # globales en QApplication (para hover tracking del sidebar
+            # y para mantener foco en barra de búsqueda respectivamente).
+            # Si se hace deleteLater() sin remover esos filters, Qt
+            # sigue invocándolos en widgets C++ destruidos, produciendo
+            # un Windows fatal exception: access violation cuando el
+            # usuario hace login de nuevo o interactúa con la app.
+            # ──────────────────────────────────────────────────────────
+            self._cleanup_before_destruction()
+
             # Abrir ventana de login
             self.login_window = LoginWindow()
             self.login_window.show()
@@ -1803,6 +1817,52 @@ class MainWindow(QMainWindow):
             self.deleteLater()
         else:
             show_toast("⏎ Cancelado", success=False, parent=self)
+
+    def _cleanup_before_destruction(self):
+        """
+        Limpia event filters globales y libera recursos antes de que
+        MainWindow se destruya (deleteLater).
+
+        Es defensivo: cada paso se envuelve en try/except porque se
+        ejecuta durante un flow de destrucción y no debe propagar
+        excepciones que podrían cancelar el cleanup.
+        """
+        from PySide6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is None:
+            return
+
+        # 1. Remover el event filter de MainWindow (instalado en _unpin_sidebar)
+        try:
+            if getattr(self, "_hover_tracking_enabled", False):
+                app.removeEventFilter(self)
+                self._hover_tracking_enabled = False
+        except Exception:
+            pass
+
+        # 2. Hacer cleanup en TODAS las views del stacked widget.
+        # Cada view puede tener su propio cleanup (ej. SalesView removeEventFilter).
+        try:
+            if hasattr(self, "stacked"):
+                for i in range(self.stacked.count()):
+                    widget = self.stacked.widget(i)
+                    if widget is None:
+                        continue
+                    # Llamar closeEvent manualmente para gatillar el cleanup
+                    # de la view (que remueve sus event filters globales).
+                    try:
+                        widget.close()
+                    except Exception:
+                        pass
+                    # También llamar _cleanup_global_event_filter si existe,
+                    # como red de seguridad por si closeEvent no se invocó.
+                    if hasattr(widget, "_cleanup_global_event_filter"):
+                        try:
+                            widget._cleanup_global_event_filter()
+                        except Exception:
+                            pass
+        except Exception:
+            pass
             
     def _ensure_placeholder(self):
         if self.sidebar_placeholder is None:

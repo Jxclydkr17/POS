@@ -2321,6 +2321,7 @@ class SettingsView(QWidget):
             on_success=self._on_users_loaded,
             on_error=self._on_users_load_error,
             on_finished=lambda: self.btn_refresh_users.setEnabled(True),
+            owner=self,
         )
 
     def _on_users_loaded(self, data):
@@ -2435,6 +2436,7 @@ class SettingsView(QWidget):
                 on_success=self._on_user_created,
                 on_error=lambda msg: QMessageBox.critical(self, "Error al crear usuario", msg),
                 on_finished=lambda: self._set_users_buttons_enabled(True),
+                owner=self,
             )
 
     def _do_create_user(self, create_data, perms):
@@ -2512,6 +2514,7 @@ class SettingsView(QWidget):
                 on_success=lambda _: self._on_user_updated(),
                 on_error=lambda msg: QMessageBox.critical(self, "Error al actualizar", msg),
                 on_finished=lambda: self._set_users_buttons_enabled(True),
+                owner=self,
             )
 
     def _do_edit_user(self, user_id, user_data, update_payload, perms, role):
@@ -2598,6 +2601,7 @@ class SettingsView(QWidget):
             on_success=self._on_user_deleted,
             on_error=lambda msg: QMessageBox.critical(self, "Error al eliminar", msg),
             on_finished=lambda: self._set_users_buttons_enabled(True),
+            owner=self,
         )
 
     def _on_user_deleted(self, username):

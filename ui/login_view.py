@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QSizePolicy,
     QDialog, QDialogButtonBox
 )
-from PySide6.QtCore import Qt, QSize, QThread, Signal, QObject
+from PySide6.QtCore import Qt, QSize, QThread, QTimer, Signal, QObject
 from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush
 import requests
 import sys
@@ -13,7 +13,8 @@ import logging
 from ui.session_manager import session
 from app.core.security import decode_token
 from app.core.config import APP_VERSION
-from ui.utils.http_worker import api_call
+from ui.utils.http_worker import api_call, configure_thread_pool
+from ui.utils.exception_hooks import install_global_exception_hooks
 
 from ui.api import BASE_URL
 
@@ -621,12 +622,67 @@ class LoginWindow(QWidget):
 
         logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
 
-        QMessageBox.information(self, "Bienvenido", f"Acceso concedido, {username}.")
+        # ──────────────────────────────────────────────────────────────
+        # FIX: diferir la apertura de MainWindow al siguiente tick del
+        # event loop. Razón: estamos dentro de un slot conectado al
+        # signal `success` del _LoginWorker. El worker thread aún no se
+        # completó (su `thread.quit()` está en cola detrás de nosotros).
+        # Crear MainWindow + close() de LoginWindow DENTRO del mismo
+        # slot, con el worker thread aún vivo y signals pendientes
+        # apuntando a `self`, es un patrón conocido por causar access
+        # violations en PySide6.
+        #
+        # Diferir con singleShot(0) garantiza que el worker termine
+        # ANTES de tocar las ventanas.
+        # ──────────────────────────────────────────────────────────────
+        QTimer.singleShot(0, lambda u=username: self._open_main_window(u))
 
-        from ui.main_ui import MainWindow
-        self.main_window = MainWindow(username)
-        self.main_window.show()
-        self.close()
+    def _open_main_window(self, username: str):
+        """
+        Crea y muestra MainWindow. Llamado vía QTimer.singleShot desde
+        _on_login_success para que el worker de login termine antes.
+        Tiene checkpoints de log para diagnosticar dónde crashea, si
+        es que sigue crasheando.
+        """
+        _log = logging.getLogger(__name__)
+        try:
+            _log.debug("CHECKPOINT 1/6: limpiando referencias al worker de login")
+            # Liberar refs al worker — su C++ ya fue/será eliminado vía
+            # deleteLater y mantener punteros vivos a un objeto destruido
+            # es la causa típica de access violations al construir la
+            # ventana siguiente.
+            if hasattr(self, "_login_worker"):
+                self._login_worker = None
+            if hasattr(self, "_login_thread"):
+                self._login_thread = None
+
+            _log.debug("CHECKPOINT 2/6: mostrando MessageBox 'Bienvenido'")
+            QMessageBox.information(
+                self, "Bienvenido", f"Acceso concedido, {username}."
+            )
+
+            _log.debug("CHECKPOINT 3/6: importando MainWindow")
+            from ui.main_ui import MainWindow
+
+            _log.debug("CHECKPOINT 4/6: construyendo MainWindow")
+            self.main_window = MainWindow(username)
+
+            _log.debug("CHECKPOINT 5/6: llamando main_window.show()")
+            self.main_window.show()
+
+            _log.debug("CHECKPOINT 6/6: cerrando LoginWindow")
+            self.close()
+
+            _log.debug("✅ Apertura de MainWindow completada sin excepciones.")
+
+        except Exception as e:
+            _log.error(
+                f"❌ Excepción en _open_main_window: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+            # Re-raise: el sys.excepthook global lo capturará y mostrará
+            # un QMessageBox en lugar de cerrar la app silenciosamente.
+            raise
 
     def _on_login_failed(self, error_msg: str):
         """Callback en hilo principal tras login fallido."""
@@ -637,6 +693,19 @@ class LoginWindow(QWidget):
 # ── Entrypoint ───────────────────────────────────────────────────────
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+
+    # ── FIX CRÍTICO: instalar manejadores globales de excepciones ──
+    # Sin esto, cualquier excepción no manejada dentro de un slot de Qt
+    # (clicked.connect, on_success del HttpWorker, timers, etc.) cierra
+    # la app silenciosamente en PySide6 6.6+. Esto debe llamarse JUSTO
+    # DESPUÉS de crear QApplication y ANTES de cualquier otro código UI.
+    install_global_exception_hooks()
+
+    # ── Configurar el QThreadPool con el límite definido en http_worker.py.
+    # Sin esta llamada, QThreadPool usa el default del SO (que en Windows
+    # puede ser 8+ hilos), permitiendo concurrencia que actualmente
+    # estamos diagnosticando como causa de crashes binarios.
+    configure_thread_pool()
 
     if session.is_logged_in():
         logging.debug(f"🔁 Sesión restaurada - Usuario: {session.username}, Rol: {session.role}")

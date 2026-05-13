@@ -163,6 +163,7 @@ class EditProductDialog(QDialog):
             "get", API_CATEGORIES, headers=headers,
             on_success=self._on_categories_loaded,
             on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{msg}"),
+            owner=self,
         )
 
     def _on_categories_loaded(self, payload):
@@ -177,6 +178,7 @@ class EditProductDialog(QDialog):
             "get", API_SUPPLIERS, headers=headers,
             on_success=self._on_suppliers_loaded,
             on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar proveedores:\n{msg}"),
+            owner=self,
         )
 
     def _on_suppliers_loaded(self, raw):
@@ -353,6 +355,7 @@ class EditProductDialog(QDialog):
             headers=headers, params={"q": keyword},
             on_success=_on_cabys_results,
             on_error=lambda msg: QMessageBox.critical(self, "Error CABYS", msg),
+            owner=self,
         )
 
     def save_changes(self):
@@ -421,11 +424,40 @@ class EditProductDialog(QDialog):
 
             url = f"{API_PRODUCTS}/{self.product['id']}"
             self.btn_save.setEnabled(False)
+
+            # ──────────────────────────────────────────────────────────
+            # FIX (access violation al guardar):
+            # El patrón anterior usaba `on_finished=lambda: self.btn_save.setEnabled(True)`,
+            # que se invocaba DESPUÉS del flujo on_success → self.accept() →
+            # dialog.exec() retorna → Python GC destruye el QDialog (y su
+            # btn_save). Cuando Qt finalmente procesaba on_finished, tocaba
+            # un puntero C++ a memoria liberada → access violation en
+            # Windows (no RuntimeError limpio, sino crash binario).
+            #
+            # Solución:
+            #  - on_success cierra el dialog (no necesita re-habilitar
+            #    el botón porque el widget se va a destruir).
+            #  - on_error muestra el mensaje y SÍ re-habilita el botón
+            #    (el dialog sigue abierto para reintentar).
+            #  - Eliminado el on_finished problemático.
+            #  - Se pasa owner=self para que safe_slot ignore los
+            #    callbacks si el dialog ya fue destruido (defensa
+            #    adicional).
+            # ──────────────────────────────────────────────────────────
+            def _on_save_success(_data):
+                QMessageBox.information(self, "OK", "Producto actualizado correctamente.")
+                self.accept()
+
+            def _on_save_error(msg):
+                QMessageBox.critical(self, "Error", msg)
+                # Re-habilitar SOLO en error; en éxito el dialog ya se cerró.
+                self.btn_save.setEnabled(True)
+
             api_call(
                 "put", url, json=payload, headers=headers,
-                on_success=lambda data: (QMessageBox.information(self, "OK", "Producto actualizado correctamente."), self.accept()),
-                on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
-                on_finished=lambda: self.btn_save.setEnabled(True),
+                on_success=_on_save_success,
+                on_error=_on_save_error,
+                owner=self,
             )
             return
 

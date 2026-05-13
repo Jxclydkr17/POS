@@ -145,8 +145,38 @@ class SalesView(QWidget):
 
     def closeEvent(self, event):
         """Limpia señales al destruir la vista."""
+        # ──────────────────────────────────────────────────────────────
+        # FIX CRÍTICO: remover event filter global instalado en
+        # _apply_focus_policy.
+        #
+        # _apply_focus_policy() llama a app.installEventFilter(self) para
+        # mantener el foco en la caja de búsqueda mientras la caja está
+        # abierta. Si NO removemos este event filter al cerrar la vista,
+        # Qt sigue invocando self.eventFilter() en este widget después
+        # de que C++ lo destruyó (cuando MainWindow.deleteLater() limpia
+        # toda la jerarquía tras logout), produciendo un Windows fatal
+        # exception: access violation en el siguiente evento que Qt
+        # procese (paint, mouse, key).
+        # ──────────────────────────────────────────────────────────────
+        self._cleanup_global_event_filter()
         self._disconnect_signals()
         super().closeEvent(event)
+
+    def _cleanup_global_event_filter(self):
+        """
+        Remueve el event filter global de QApplication si está instalado.
+        Idempotente y defensivo: nunca debe lanzar excepciones (se llama
+        durante destrucción).
+        """
+        try:
+            if getattr(self, "_perma_focus_installed", False):
+                app = QApplication.instance()
+                if app is not None:
+                    app.removeEventFilter(self)
+                self._perma_focus_installed = False
+        except Exception:
+            # Durante destrucción, cualquier error se traga silenciosamente.
+            pass
         
 
 

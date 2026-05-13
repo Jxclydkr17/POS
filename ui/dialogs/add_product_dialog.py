@@ -264,6 +264,7 @@ class AddProductDialog(QDialog):
             "get", CATEGORIES_URL, headers=headers,
             on_success=self._on_categories_loaded,
             on_error=lambda msg: QMessageBox.warning(self, "Error", f"No se pudieron cargar categorías:\n{msg}"),
+            owner=self,
         )
 
     def _on_categories_loaded(self, payload):
@@ -284,6 +285,7 @@ class AddProductDialog(QDialog):
             "get", SUPPLIERS_URL, headers=headers,
             on_success=self._on_suppliers_loaded,
             on_error=lambda msg: QMessageBox.critical(self, "Error", f"Error al cargar proveedores:\n{msg}"),
+            owner=self,
         )
 
     def _on_suppliers_loaded(self, payload):
@@ -361,11 +363,24 @@ class AddProductDialog(QDialog):
 
             headers = {"Authorization": f"Bearer {session.token}"}
             self.btn_save.setEnabled(False)
+
+            # ──────────────────────────────────────────────────────────
+            # FIX (access violation al guardar):
+            # Mismo patrón que en EditProductDialog. on_success cierra el
+            # dialog vía self.accept() (dentro de _on_product_saved), y
+            # un on_finished que intentara `setEnabled(True)` tocaría un
+            # botón ya destruido por el GC tras dialog.exec().
+            # En su lugar, re-habilitamos el botón únicamente en error.
+            # ──────────────────────────────────────────────────────────
+            def _on_save_error(msg):
+                QMessageBox.critical(self, "Error", msg)
+                self.btn_save.setEnabled(True)
+
             api_call(
                 "post", API_URL, json=data, headers=headers,
                 on_success=self._on_product_saved,
-                on_error=lambda msg: QMessageBox.critical(self, "Error", msg),
-                on_finished=lambda: self.btn_save.setEnabled(True),
+                on_error=_on_save_error,
+                owner=self,
             )
 
         except Exception as e:
@@ -458,6 +473,7 @@ class AddProductDialog(QDialog):
             headers=headers, params=params,
             on_success=_on_cabys_results,
             on_error=lambda msg: QMessageBox.critical(self, "Error CABYS", msg),
+            owner=self,
         )
 
     def _parse_iva(self):

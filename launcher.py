@@ -344,6 +344,14 @@ def _start_ui():
     app.setApplicationName("Violette POS")
     app.setOrganizationName("Violette")
 
+    # ── FIX CRÍTICO: instalar manejadores globales de excepciones ──
+    # Sin esto, cualquier excepción no manejada dentro de un slot de Qt
+    # (clicked.connect, on_success del HttpWorker, timers, etc.) cierra
+    # la app silenciosamente en PySide6 6.6+. Debe llamarse después de
+    # crear QApplication.
+    from ui.utils.exception_hooks import install_global_exception_hooks
+    install_global_exception_hooks()
+
     # ── FASE 1 — Fix 1.5: Solo buscar el archivo QSS correcto ──
     # Eliminada la referencia a "styles (1).qss" que era un artefacto
     # de desarrollo (archivo duplicado por Windows).

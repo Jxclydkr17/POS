@@ -1,29 +1,50 @@
 # ui/utils/http_worker.py
 """
-FASE 1 — Fix 1.1 / 1.2: Infraestructura HTTP asíncrona para la capa UI.
+HTTP síncrono en el main thread — SIN threading.
 
-Problema:
-  Las vistas PySide6 hacían requests.get/post directamente en el hilo principal
-  de Qt, congelando la interfaz hasta que el servidor respondiera. Además,
-  117 llamadas no tenían timeout, arriesgando congelamientos indefinidos.
+═══════════════════════════════════════════════════════════════
+HISTORIA Y RAZÓN DEL CAMBIO
+═══════════════════════════════════════════════════════════════
 
-Solución:
-  Este módulo provee dos mecanismos:
+Versiones anteriores usaban QThreadPool + QRunnable + WorkerSignals
+para ejecutar HTTP requests en background. El patrón es estándar en
+Qt, pero en este entorno específico:
 
-  1. HttpWorker (QRunnable) — Para control granular:
-       worker = HttpWorker("get", url, headers=h)
-       worker.signals.success.connect(self._on_data)
-       worker.signals.error.connect(self._on_error)
-       QThreadPool.globalInstance().start(worker)
+  - PySide6 6.8.1
+  - Python 3.12
+  - Windows
+  - requests 2.33.1 / urllib3 2.6.3
 
-  2. api_call() — Función de conveniencia (cubre el 90% de los casos):
-       api_call("get", url, headers=h,
-                on_success=self._on_data,
-                on_error=self._on_error)
+produjo crashes binarios ("Windows fatal exception: access violation")
+intermitentes y difíciles de diagnosticar, originados en distintos
+patrones: race conditions en sockets, signals pendientes a QObjects
+ya destruidos, event filters globales sobrevivientes a sus dueños,
+WorkerSignals GC'd antes de que su emit se procesara, etc. Se
+parchearon varios pero la lista parecía infinita.
 
-Todas las llamadas incluyen timeout por defecto (15s).
-Los signals se entregan al hilo principal de Qt automáticamente,
-así que los callbacks pueden actualizar la UI sin problemas.
+Como el backend corre en localhost (127.0.0.1:8000) y cada request
+tarda ~10-50ms, el costo de hacerlo síncrono en el main thread es
+imperceptible para el usuario y elimina TODA la categoría de bugs
+relacionada con threading.
+
+═══════════════════════════════════════════════════════════════
+API PÚBLICA — IDÉNTICA A LA VERSIÓN ASYNC
+═══════════════════════════════════════════════════════════════
+
+Para que ningún otro archivo del proyecto necesite cambiar, este
+módulo mantiene las mismas funciones con las mismas firmas:
+
+  - api_call(method, url, ..., on_success, on_error, on_finished,
+             on_auth_expired, owner, **kwargs)
+  - run_async(fn, *args, on_success, on_error, on_finished, owner,
+              **kwargs)
+  - api_request(method, url, *, timeout, **kwargs)
+  - configure_thread_pool()   ← no-op, queda por compatibilidad
+
+La única diferencia visible es que los callbacks se invocan ANTES
+de que `api_call` retorne, no después. Como casi todo el código
+del proyecto sólo espera resultados vía callbacks, esto es
+transparente.
 """
 from __future__ import annotations
 
@@ -31,155 +52,118 @@ import logging
 from typing import Any, Callable, Optional
 
 import requests
-from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal, Slot
+from PySide6.QtCore import QObject
+
+from ui.utils.exception_hooks import safe_slot
 
 logger = logging.getLogger(__name__)
 
 # ─── Configuración ─────────────────────────────────────────────
-DEFAULT_TIMEOUT = 15          # segundos — suficiente para localhost
-CONNECT_TIMEOUT = 5           # tiempo máximo para establecer conexión
-POOL_MAX_THREADS = 6          # hilos concurrentes en el pool
+DEFAULT_TIMEOUT = 15
+CONNECT_TIMEOUT = 5
 
 # Señal especial que indica que el token expiró (401)
 AUTH_EXPIRED_SENTINEL = "__AUTH_EXPIRED__"
 
-# ── FASE 7 — Fix 7.3: Sesión HTTP compartida para reutilizar conexiones ──
-# requests.get/post crean una conexión TCP nueva en cada llamada.
-# Un requests.Session reutiliza conexiones via HTTP keep-alive,
-# evitando el overhead de TCP handshake en cada request a localhost.
-# El pool_maxsize debe coincidir con POOL_MAX_THREADS para que cada
-# hilo del QThreadPool pueda tener su propia conexión keep-alive.
+# Una única Session global. Como TODAS las requests corren en el
+# main thread (síncronas), no hay race condition de threads.
+# Mantenemos keep-alive porque seguimos hablando con el mismo host.
 _http_session = requests.Session()
 _adapter = requests.adapters.HTTPAdapter(
-    pool_connections=1,          # un solo host (127.0.0.1)
-    pool_maxsize=POOL_MAX_THREADS,  # una conexión por hilo del pool
-    max_retries=0,               # sin reintentos automáticos
+    pool_connections=2,
+    pool_maxsize=2,
+    max_retries=0,
 )
 _http_session.mount("http://", _adapter)
+_http_session.mount("https://", _adapter)
 
 
 # ═══════════════════════════════════════════════════════════════
-# Signals — deben vivir en un QObject, no en QRunnable
+# Helpers internos
 # ═══════════════════════════════════════════════════════════════
-class WorkerSignals(QObject):
+def _extract_error_detail(resp) -> str:
+    """Extrae el mensaje de error de una respuesta FastAPI."""
+    try:
+        err_data = resp.json()
+        detail = err_data.get("detail") or err_data.get("message") or ""
+        if isinstance(detail, list):
+            msgs = [d.get("msg", str(d)) for d in detail]
+            return "; ".join(msgs)
+        if detail:
+            return str(detail)
+    except Exception:
+        pass
+    return f"Error del servidor (código {resp.status_code})"
+
+
+def _do_request(method: str, url: str, **kwargs):
     """
-    Signals emitidos por HttpWorker.
-    Qt garantiza que los slots conectados se ejecuten en el hilo
-    del receptor (el hilo principal de la UI) si la conexión es
-    Qt.AutoConnection (default).
+    Ejecuta el request HTTP y devuelve (success, payload_or_msg, status_code, auth_expired).
+
+    success=True  → payload es el JSON parseado (o texto si no JSON).
+    success=False → payload es el mensaje de error legible.
+
+    No lanza excepciones: todas se capturan y se traducen.
     """
-    success = Signal(object)    # datos parseados (dict, list, str)
-    error = Signal(str)         # mensaje de error legible
-    finished = Signal()         # siempre emitido al final (éxito o error)
-    auth_expired = Signal()     # emitido cuando el servidor responde 401
+    # Timeout obligatorio
+    if "timeout" not in kwargs:
+        kwargs["timeout"] = (CONNECT_TIMEOUT, DEFAULT_TIMEOUT)
 
+    try:
+        fn = getattr(_http_session, method.lower(), None)
+        if fn is None:
+            return False, f"Método HTTP inválido: {method}", 0, False
 
-# ═══════════════════════════════════════════════════════════════
-# HttpWorker — Ejecuta un request HTTP en el thread pool de Qt
-# ═══════════════════════════════════════════════════════════════
-class HttpWorker(QRunnable):
-    """
-    Ejecuta un request HTTP en un hilo del QThreadPool.
+        resp = fn(url, **kwargs)
 
-    Uso:
-        worker = HttpWorker("get", "http://127.0.0.1:8000/products", headers={...})
-        worker.signals.success.connect(self._on_products_loaded)
-        worker.signals.error.connect(self._show_error)
-        worker.signals.finished.connect(lambda: self._set_loading(False))
-        QThreadPool.globalInstance().start(worker)
-    """
+        # Auth expirado
+        if resp.status_code == 401:
+            return False, AUTH_EXPIRED_SENTINEL, 401, True
 
-    def __init__(self, method: str, url: str, **kwargs):
-        super().__init__()
-        self.signals = WorkerSignals()
-        self.method = method.lower()
-        self.url = url
-        self.kwargs = kwargs
+        # Error HTTP
+        if not resp.ok:
+            return False, _extract_error_detail(resp), resp.status_code, False
 
-        # ── FASE 1 — Fix 1.2: Timeout obligatorio ──
-        # Si no se pasó timeout, usar (CONNECT_TIMEOUT, DEFAULT_TIMEOUT)
-        # El primero es para establecer conexión, el segundo para leer respuesta.
-        if "timeout" not in self.kwargs:
-            self.kwargs["timeout"] = (CONNECT_TIMEOUT, DEFAULT_TIMEOUT)
-
-        # Auto-eliminar del pool al terminar
-        self.setAutoDelete(True)
-
-    @Slot()
-    def run(self):
-        """Ejecutado en un hilo del pool — NUNCA tocar widgets Qt aquí."""
+        # Éxito: parsear JSON o devolver texto
         try:
-            fn = getattr(_http_session, self.method, None)
-            if fn is None:
-                self.signals.error.emit(f"Método HTTP inválido: {self.method}")
-                return
+            data = resp.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            data = resp.text
 
-            resp = fn(self.url, **self.kwargs)
+        return True, data, resp.status_code, False
 
-            # ── Auth expirado ──
-            if resp.status_code == 401:
-                self.signals.auth_expired.emit()
-                self.signals.error.emit(AUTH_EXPIRED_SENTINEL)
-                return
+    except requests.exceptions.ConnectTimeout:
+        return False, ("No se pudo conectar al servidor (timeout de conexión). "
+                       "Verifique que el sistema esté iniciado."), 0, False
+    except requests.exceptions.ReadTimeout:
+        return False, ("El servidor tardó demasiado en responder. "
+                       "Intente de nuevo en unos segundos."), 0, False
+    except requests.exceptions.ConnectionError:
+        return False, ("No se pudo conectar al servidor. "
+                       "¿Está Violette POS iniciado correctamente?"), 0, False
+    except requests.exceptions.HTTPError as e:
+        detail = _extract_error_detail(e.response) if e.response else str(e)
+        return False, detail, 0, False
+    except Exception as e:
+        logger.error(f"Error HTTP inesperado: {e}", exc_info=True)
+        return False, f"Error inesperado: {e}", 0, False
 
-            # ── Error HTTP (4xx/5xx) ──
-            if not resp.ok:
-                detail = self._extract_error_detail(resp)
-                self.signals.error.emit(detail)
-                return
 
-            # ── Éxito: parsear JSON o devolver texto ──
-            try:
-                data = resp.json()
-            except (ValueError, requests.exceptions.JSONDecodeError):
-                data = resp.text
-
-            self.signals.success.emit(data)
-
-        except requests.exceptions.ConnectTimeout:
-            self.signals.error.emit(
-                "No se pudo conectar al servidor (timeout de conexión). "
-                "Verifique que el sistema esté iniciado."
-            )
-        except requests.exceptions.ReadTimeout:
-            self.signals.error.emit(
-                "El servidor tardó demasiado en responder. "
-                "Intente de nuevo en unos segundos."
-            )
-        except requests.exceptions.ConnectionError:
-            self.signals.error.emit(
-                "No se pudo conectar al servidor. "
-                "¿Está Violette POS iniciado correctamente?"
-            )
-        except requests.exceptions.HTTPError as e:
-            detail = self._extract_error_detail(e.response) if e.response else str(e)
-            self.signals.error.emit(detail)
-        except Exception as e:
-            logger.error(f"Error HTTP inesperado: {e}", exc_info=True)
-            self.signals.error.emit(f"Error inesperado: {e}")
-        finally:
-            self.signals.finished.emit()
-
-    @staticmethod
-    def _extract_error_detail(resp) -> str:
-        """Extrae el mensaje de error de una respuesta FastAPI."""
-        try:
-            err_data = resp.json()
-            # FastAPI usa "detail" para errores
-            detail = err_data.get("detail") or err_data.get("message") or ""
-            if isinstance(detail, list):
-                # Pydantic validation errors
-                msgs = [d.get("msg", str(d)) for d in detail]
-                return "; ".join(msgs)
-            if detail:
-                return str(detail)
-        except Exception:
-            pass
-        return f"Error del servidor (código {resp.status_code})"
+def _invoke_callback(cb: Optional[Callable], *args, label: str = "") -> None:
+    """
+    Invoca un callback con manejo defensivo. Cualquier excepción se
+    loguea pero no se propaga.
+    """
+    if cb is None:
+        return
+    # Envolver con safe_slot para uniformidad con el patrón anterior
+    # (logs ▶ / ◀ y captura de excepciones).
+    wrapped = safe_slot(cb, label=label)
+    wrapped(*args)
 
 
 # ═══════════════════════════════════════════════════════════════
-# api_call() — Función de conveniencia
+# API pública — equivalente a la versión async pero síncrona
 # ═══════════════════════════════════════════════════════════════
 def api_call(
     method: str,
@@ -189,97 +173,40 @@ def api_call(
     on_error: Optional[Callable[[str], None]] = None,
     on_finished: Optional[Callable[[], None]] = None,
     on_auth_expired: Optional[Callable[[], None]] = None,
+    owner: Optional[QObject] = None,
     **kwargs,
-) -> HttpWorker:
+) -> None:
     """
-    Lanza un request HTTP asíncrono y conecta callbacks.
+    Ejecuta un request HTTP SÍNCRONO en el main thread y dispara
+    los callbacks correspondientes antes de retornar.
 
-    Todos los callbacks se ejecutan en el hilo principal de Qt,
-    así que es seguro actualizar la UI desde ellos.
+    Misma firma que la versión async para retrocompatibilidad. El
+    parámetro `owner` ya no se usa (no hay threading), pero se
+    acepta para no romper llamadores existentes.
 
-    Args:
-        method: "get", "post", "put", "delete", "patch"
-        url: URL completa del endpoint
-        on_success: callback(data) — datos parseados (dict/list/str)
-        on_error: callback(msg) — mensaje de error legible
-        on_finished: callback() — siempre se ejecuta al final
-        on_auth_expired: callback() — token expirado (401)
-        **kwargs: argumentos adicionales para requests (headers, json, params, etc.)
-
-    Returns:
-        HttpWorker — por si se necesita inspeccionar o cancelar
-
-    Ejemplo:
-        api_call(
-            "get",
-            f"{BASE_URL}/products",
-            headers=self._auth_headers(),
-            params={"search": "tornillo"},
-            on_success=self._on_products_loaded,
-            on_error=self._show_error,
-            on_finished=lambda: self.loading_spinner.hide(),
-        )
+    Orden de invocación:
+      1. Si éxito → on_success(data)
+      2. Si error → on_error(msg)
+      3. Si 401   → on_auth_expired() + on_error(AUTH_EXPIRED_SENTINEL)
+      4. Siempre  → on_finished()
     """
-    worker = HttpWorker(method, url, **kwargs)
+    _label = f"{method.upper()} {url}"
+    logger.debug("api_call ⇒ %s", _label)
 
-    if on_success:
-        worker.signals.success.connect(on_success)
-    if on_error:
-        worker.signals.error.connect(on_error)
-    if on_finished:
-        worker.signals.finished.connect(on_finished)
-    if on_auth_expired:
-        worker.signals.auth_expired.connect(on_auth_expired)
+    success, payload, status, auth_expired = _do_request(method, url, **kwargs)
 
-    QThreadPool.globalInstance().start(worker)
-    return worker
-
-
-# ═══════════════════════════════════════════════════════════════
-# Inicialización del pool
-# ═══════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════
-# FnWorker — Ejecuta CUALQUIER función en el thread pool
-# ═══════════════════════════════════════════════════════════════
-class FnWorker(QRunnable):
-    """
-    Ejecuta una función arbitraria en un hilo del QThreadPool.
-    Ideal para funciones de servicio que ya hacen requests internamente.
-
-    Uso:
-        worker = FnWorker(fetch_dashboard_summary)
-        worker.signals.success.connect(self._on_summary)
-        QThreadPool.globalInstance().start(worker)
-    """
-
-    def __init__(self, fn: Callable, *args, **kwargs):
-        super().__init__()
-        self.signals = WorkerSignals()
-        self.fn = fn
-        self.args = args
-        self.kwargs = kwargs
-        self.setAutoDelete(True)
-
-    @Slot()
-    def run(self):
-        """Ejecutado en un hilo del pool."""
-        try:
-            result = self.fn(*self.args, **self.kwargs)
-            self.signals.success.emit(result)
-        except requests.exceptions.ConnectionError:
-            self.signals.error.emit(
-                "No se pudo conectar al servidor. "
-                "¿Está Violette POS iniciado correctamente?"
-            )
-        except requests.exceptions.Timeout:
-            self.signals.error.emit(
-                "El servidor tardó demasiado en responder."
-            )
-        except Exception as e:
-            logger.error(f"Error en FnWorker: {e}", exc_info=True)
-            self.signals.error.emit(str(e))
-        finally:
-            self.signals.finished.emit()
+    try:
+        if auth_expired:
+            _invoke_callback(on_auth_expired, label=f"{_label} auth_expired")
+            _invoke_callback(on_error, AUTH_EXPIRED_SENTINEL, label=f"{_label} error")
+        elif success:
+            logger.debug("api_call ◄ %s → %s", _label, status)
+            _invoke_callback(on_success, payload, label=f"{_label} success")
+        else:
+            logger.debug("api_call ✖ %s → %s", _label, status)
+            _invoke_callback(on_error, payload, label=f"{_label} error")
+    finally:
+        _invoke_callback(on_finished, label=f"{_label} finished")
 
 
 def run_async(
@@ -288,62 +215,45 @@ def run_async(
     on_success: Optional[Callable[[Any], None]] = None,
     on_error: Optional[Callable[[str], None]] = None,
     on_finished: Optional[Callable[[], None]] = None,
+    owner: Optional[QObject] = None,
     **kwargs,
-) -> FnWorker:
+) -> None:
     """
-    Ejecuta una función en el thread pool de Qt con callbacks.
+    Ejecuta una función SÍNCRONAMENTE en el main thread y dispara
+    los callbacks. Misma firma que la versión async para
+    retrocompatibilidad.
+    """
+    _label = getattr(fn, "__name__", "fn")
+    logger.debug("run_async ⇒ %s", _label)
 
-    Perfecto para funciones de servicio que ya hacen HTTP internamente
-    (como fetch_dashboard_summary, fetch_sales_today_total, etc.).
-
-    Args:
-        fn: función a ejecutar en background
-        *args: argumentos posicionales para fn
-        on_success: callback(result) — resultado de fn()
-        on_error: callback(msg) — mensaje de error
-        on_finished: callback() — siempre se ejecuta al final
-        **kwargs: argumentos con nombre para fn
-
-    Ejemplo:
-        run_async(
-            fetch_dashboard_summary,
-            on_success=self._on_summary_loaded,
-            on_error=lambda msg: show_toast(msg, success=False, parent=self),
+    try:
+        result = fn(*args, **kwargs)
+    except requests.exceptions.ConnectionError:
+        _invoke_callback(
+            on_error,
+            "No se pudo conectar al servidor. ¿Está Violette POS iniciado correctamente?",
+            label=f"{_label} error",
         )
-    """
-    worker = FnWorker(fn, *args, **kwargs)
+        _invoke_callback(on_finished, label=f"{_label} finished")
+        return
+    except requests.exceptions.Timeout:
+        _invoke_callback(
+            on_error,
+            "El servidor tardó demasiado en responder.",
+            label=f"{_label} error",
+        )
+        _invoke_callback(on_finished, label=f"{_label} finished")
+        return
+    except Exception as e:
+        logger.error(f"Error en run_async({_label}): {e}", exc_info=True)
+        _invoke_callback(on_error, str(e), label=f"{_label} error")
+        _invoke_callback(on_finished, label=f"{_label} finished")
+        return
 
-    if on_success:
-        worker.signals.success.connect(on_success)
-    if on_error:
-        worker.signals.error.connect(on_error)
-    if on_finished:
-        worker.signals.finished.connect(on_finished)
-
-    QThreadPool.globalInstance().start(worker)
-    return worker
-
-
-# ═══════════════════════════════════════════════════════════════
-# Inicialización del pool
-# ═══════════════════════════════════════════════════════════════
-def configure_thread_pool():
-    """
-    Configura el QThreadPool global con límites razonables.
-    Llamar una vez al inicio de la app (antes de usar api_call).
-    """
-    pool = QThreadPool.globalInstance()
-    pool.setMaxThreadCount(POOL_MAX_THREADS)
-    logger.debug(f"QThreadPool configurado: max {POOL_MAX_THREADS} hilos")
+    _invoke_callback(on_success, result, label=f"{_label} success")
+    _invoke_callback(on_finished, label=f"{_label} finished")
 
 
-# ═══════════════════════════════════════════════════════════════
-# api_request() — Wrapper síncrono con timeout obligatorio
-#
-# Para acciones rápidas iniciadas por botones (crear, editar,
-# eliminar) donde el usuario espera el resultado inmediato.
-# NO usar para carga de datos — usar api_call() en su lugar.
-# ═══════════════════════════════════════════════════════════════
 def api_request(
     method: str,
     url: str,
@@ -354,17 +264,22 @@ def api_request(
     """
     Wrapper síncrono de requests con timeout garantizado.
 
-    Uso para acciones de botón:
-        try:
-            resp = api_request("delete", f"{API_URL}/{id}", headers=h)
-            if resp.status_code == 200:
-                self.load_data()
-        except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-
-    IMPORTANTE: Solo para acciones rápidas que el usuario inicia
-    explícitamente (click en botón). Para carga de datos usar api_call().
+    Devuelve el Response directamente — el caller maneja status_code
+    y excepciones. Mantiene la misma firma que la versión anterior.
     """
     kwargs["timeout"] = (CONNECT_TIMEOUT, timeout)
     fn = getattr(_http_session, method.lower())
     return fn(url, **kwargs)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Compatibilidad: configure_thread_pool ya no hace nada útil
+# pero se mantiene para que los llamadores existentes no rompan.
+# ═══════════════════════════════════════════════════════════════
+def configure_thread_pool():
+    """
+    No-op. Antes configuraba el QThreadPool global, ahora todas las
+    requests son síncronas en el main thread. Se mantiene la función
+    por retrocompatibilidad con login_view.py y launcher.py.
+    """
+    logger.debug("configure_thread_pool: HTTP es síncrono, nada que configurar.")

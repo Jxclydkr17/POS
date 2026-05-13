@@ -655,11 +655,27 @@ class ChatPanel(QWidget):
         self.send_btn.clicked.connect(self.send)
         self.input.returnPressed.connect(self.send)
 
+        # ──────────────────────────────────────────────────────────────
+        # TEMPORAL — DIAGNÓSTICO DE CRASH (2026-05-11)
+        #
+        # Estas dos llamadas diferidas crean trabajo HTTP en background
+        # 500ms y 800ms después de construir el ChatPanel. Su patrón de
+        # threading manual (QThread + worker sin parent + asignar None
+        # al worker durante el callback) es un sospechoso fuerte de los
+        # access violations que estamos diagnosticando.
+        #
+        # Comentado SOLO para confirmar si son la causa raíz. Si tras
+        # comentarlas la app deja de crashear, hay que reescribirlas
+        # usando `api_call` (que ya pasa por `safe_slot`) y eliminando
+        # el manejo manual de QThread. Si la app sigue crasheando, el
+        # culpable está en otro lado y descomentaremos esto.
+        # ──────────────────────────────────────────────────────────────
+
         # FASE 7: Cargar alertas proactivas al iniciar (con delay)
-        QTimer.singleShot(500, self._load_proactive_alerts)
+        # QTimer.singleShot(500, self._load_proactive_alerts)
 
         # FASE 5 AI: Cargar indicador de proveedor
-        QTimer.singleShot(800, self._load_ai_provider_indicator)
+        # QTimer.singleShot(800, self._load_ai_provider_indicator)
 
     # ══════════════════════════════════════════════
     # FASE 7: Alertas proactivas
