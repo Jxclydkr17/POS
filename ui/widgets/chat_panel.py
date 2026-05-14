@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QFrame, QLabel, QGraphicsDropShadowEffect,
     QSpacerItem, QFileDialog, QApplication,
 )
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor, QFont, QPixmap, QPainter
 
 from ui.api import BASE_URL
 
@@ -479,12 +479,19 @@ def _generate_suggestions(reply_text: str, actions: list, cards: list) -> list[s
 # ChatPanel — Widget principal
 # ═══════════════════════════════════════════════════════
 
+_BG_IMAGE_PATH = "ui/assets/violette_a.png"
+
+
 class ChatPanel(QWidget):
     action_requested = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(f"background-color: {_C['bg']}; border: none;")
+        self.setAttribute(Qt.WA_StyledBackground, False)
+        self.setStyleSheet("background: transparent; border: none;")
+
+        # Cargar imagen de fondo
+        self._bg_pixmap = QPixmap(_BG_IMAGE_PATH)
 
         # Estado
         self.session_id: str = str(uuid.uuid4())
@@ -566,7 +573,7 @@ class ChatPanel(QWidget):
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.scroll_area.setStyleSheet(f"""
             QScrollArea {{
-                background-color: {_C['bg']};
+                background: transparent;
                 border: none;
             }}
             QScrollBar:vertical {{
@@ -585,7 +592,8 @@ class ChatPanel(QWidget):
         """)
 
         self.messages_container = QWidget()
-        self.messages_container.setStyleSheet(f"background-color: {_C['bg']}; border: none;")
+        self.messages_container.setAttribute(Qt.WA_TranslucentBackground)
+        self.messages_container.setStyleSheet("background: transparent; border: none;")
         self.messages_layout = QVBoxLayout(self.messages_container)
         self.messages_layout.setContentsMargins(6, 6, 6, 6)
         self.messages_layout.setSpacing(6)
@@ -676,6 +684,32 @@ class ChatPanel(QWidget):
 
         # FASE 5 AI: Cargar indicador de proveedor
         # QTimer.singleShot(800, self._load_ai_provider_indicator)
+
+    # ══════════════════════════════════════════════
+    # Fondo con imagen
+    # ══════════════════════════════════════════════
+
+    def paintEvent(self, event):
+        """Dibuja el fondo oscuro + imagen de Violette en la esquina inferior."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        # Fondo base sólido
+        painter.fillRect(self.rect(), QColor(_C["bg"]))
+
+        # Imagen de fondo si se cargó correctamente
+        if not self._bg_pixmap.isNull():
+            img_h = int(self.height() * 0.72)
+            img_w = int(self._bg_pixmap.width() * img_h / self._bg_pixmap.height())
+
+            x = self.width() - img_w + int(img_w * 0.12)  # ligeramente recortada a la derecha
+            y = self.height() - img_h                       # pegada al fondo
+
+            painter.setOpacity(0.35)
+            painter.drawPixmap(x, y, img_w, img_h, self._bg_pixmap)
+            painter.setOpacity(1.0)
+
+        painter.end()
 
     # ══════════════════════════════════════════════
     # FASE 7: Alertas proactivas

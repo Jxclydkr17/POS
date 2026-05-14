@@ -9,7 +9,7 @@ from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
 from app.constants.status_enums import SaleStatus
 from app.schemas.products import ProductCreate, ProductUpdate
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 from app.utils.dt import utcnow
 
@@ -108,6 +108,17 @@ def log_inventory_movement(
     Tipos que RESTAN stock: venta, devolucion_proveedor
     Tipos que SUMAN stock:  entrada, devolucion (cliente), ajuste, anulacion
     """
+    # ── Bugfix: normalizar quantity a Decimal ──────────────────────
+    # product.stock es Numeric(12,3) → Decimal en memoria. Si un caller
+    # pasa un float (p.ej. quantity: float del endpoint /add-stock),
+    # `Decimal + float` lanza TypeError. Casteamos defensivamente para
+    # que el helper sea robusto frente a int / float / str / Decimal.
+    if not isinstance(quantity, Decimal):
+        try:
+            quantity = Decimal(str(quantity))
+        except (InvalidOperation, TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Cantidad inválida")
+
     # Movimientos que sacan producto del inventario
     if type in (MovementType.venta, MovementType.devolucion_proveedor):
         stock_after = product.stock - quantity
@@ -489,6 +500,14 @@ def toggle_pos_favorite(db: Session, product_id: int, is_pos_favorite: bool):
 # -----------------------------
 def add_stock(db: Session, product_id: int, quantity, reference: str = None, notes: str = None):
     """📏 quantity acepta int, float o Decimal (soporta fracciones para kg/m/L)."""
+    # ── Bugfix: product.stock es Numeric (Decimal) y el router declara
+    # quantity: float. `Decimal + float` lanza TypeError, así que
+    # normalizamos a Decimal antes de cualquier operación aritmética.
+    try:
+        quantity = Decimal(str(quantity))
+    except (InvalidOperation, TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Cantidad inválida")
+
     if quantity <= 0:
         raise HTTPException(status_code=400, detail="La cantidad debe ser mayor a cero")
 

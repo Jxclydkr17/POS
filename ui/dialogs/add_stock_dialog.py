@@ -13,6 +13,26 @@ API_URL = f"{BASE_URL}/products"
 
 
 # ──────────────────────────────────────────────────────────────
+# Helper de casteo defensivo
+# ──────────────────────────────────────────────────────────────
+# Los campos numéricos del producto (stock, min_stock, reorder_suggestion)
+# se declaran como Decimal en ProductOut y Pydantic v2 los serializa a JSON
+# **como string**. Si los usamos crudo en comparaciones (`<=`, `>`, `==`)
+# o aritmética, explota con TypeError. Castear a float aquí da una sola
+# fuente de verdad para todo el diálogo.
+def _to_float(value, default: float = 0.0) -> float:
+    """Convierte str / int / float / Decimal / None a float, devolviendo
+    `default` si la conversión falla. Pensado para valores que vienen
+    del backend ya sea como número nativo o como string serializado."""
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# ──────────────────────────────────────────────────────────────
 # Panel de sugerencia de reposición — FASE 4: con datos de rotación
 # ──────────────────────────────────────────────────────────────
 class ReorderSuggestionPanel(QFrame):
@@ -83,7 +103,7 @@ class ReorderSuggestionPanel(QFrame):
 
         self.hide()
 
-    def update_suggestion(self, stock: int, min_stock: int, suggestion: int,
+    def update_suggestion(self, stock: float, min_stock: float, suggestion: float,
                           rotation: dict = None):
         """
         Actualiza el panel con los datos de sugerencia.
@@ -96,9 +116,9 @@ class ReorderSuggestionPanel(QFrame):
 
         target = 2 * min_stock
         self.detail_label.setText(
-            f"  Stock actual: <b>{stock}</b> &nbsp;|&nbsp; "
-            f"Mínimo: <b>{min_stock}</b> &nbsp;|&nbsp; "
-            f"Recomendado a comprar: <b>{suggestion}</b>"
+            f"  Stock actual: <b>{stock:g}</b> &nbsp;|&nbsp; "
+            f"Mínimo: <b>{min_stock:g}</b> &nbsp;|&nbsp; "
+            f"Recomendado a comprar: <b>{suggestion:g}</b>"
         )
         self.detail_label.setTextFormat(Qt.RichText)
 
@@ -149,7 +169,7 @@ class ReorderSuggestionPanel(QFrame):
         else:
             # Sin datos de rotación: mostrar fórmula clásica
             self.formula_label.setText(
-                f"  (objetivo: 2 × {min_stock} = {target} unidades)"
+                f"  (objetivo: 2 × {min_stock:g} = {target:g} unidades)"
             )
             self.rotation_label.hide()
             self.urgency_label.hide()
@@ -228,23 +248,30 @@ class AddStockDialog(QDialog):
 
     def _apply_suggestion(self):
         if self._reorder_suggestion > 0:
-            self.qty_input.setValue(self._reorder_suggestion)
+            # qty_input es QSpinBox (int-only). Si la sugerencia es
+            # fraccionaria (productos por kg/L/m), redondeamos al entero
+            # más cercano para no perder valores como 3.5 → 4.
+            self.qty_input.setValue(int(round(self._reorder_suggestion)))
 
     def _update_suggestion_ui(self, product: dict):
-        stock = product.get("stock", 0) or 0
-        min_stock = product.get("min_stock", 0) or 0
-        suggestion = product.get("reorder_suggestion", 0) or 0
+        # ── Bugfix: estos campos vienen como string desde el backend ──
+        # ProductOut los tipa como Decimal y Pydantic v2 los serializa
+        # a JSON como string ("11.5", "3", "0"). Sin castear, las
+        # comparaciones `<=`, `>`, `==` revientan con TypeError.
+        stock = _to_float(product.get("stock"))
+        min_stock = _to_float(product.get("min_stock"))
+        suggestion = _to_float(product.get("reorder_suggestion"))
 
         # Fase 4: datos de rotación del backend
         rotation = product.get("rotation", None)
 
         # Si hay smart_reorder en rotation, usarlo
-        if rotation and rotation.get("smart_reorder", 0) > 0:
-            suggestion = rotation["smart_reorder"]
+        if rotation and _to_float(rotation.get("smart_reorder")) > 0:
+            suggestion = _to_float(rotation["smart_reorder"])
 
         # Calcular localmente si el backend no lo incluyó
         if suggestion == 0 and min_stock > 0:
-            suggestion = max(0, 2 * min_stock - stock)
+            suggestion = max(0.0, 2 * min_stock - stock)
 
         self._reorder_suggestion = suggestion
         self.suggestion_panel.update_suggestion(stock, min_stock, suggestion, rotation)

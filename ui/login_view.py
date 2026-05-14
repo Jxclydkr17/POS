@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox
 )
 from PySide6.QtCore import Qt, QSize, QThread, QTimer, Signal, QObject
-from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush
+from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush, QPixmap
 import requests
 import sys
 import logging
@@ -48,10 +48,18 @@ class BrandPanel(QWidget):
         layout.setSpacing(10)
         layout.setContentsMargins(30, 40, 30, 40)
 
-        # Logo SVG-like usando texto + emoji
-        logo_icon = QLabel("💜")
+        # Logo: imagen de Violette
+        import os
+        logo_icon = QLabel()
         logo_icon.setAlignment(Qt.AlignCenter)
-        logo_icon.setStyleSheet("font-size: 52px; background: transparent;")
+        logo_icon.setStyleSheet("background: transparent;")
+        _img_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "violette_assistant_icon.png")
+        _pixmap = QPixmap(_img_path)
+        if not _pixmap.isNull():
+            logo_icon.setPixmap(_pixmap.scaled(90, 90, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            logo_icon.setText("💜")
+            logo_icon.setStyleSheet("font-size: 52px; background: transparent;")
         layout.addWidget(logo_icon)
 
         brand_name = QLabel("Violette POS")
