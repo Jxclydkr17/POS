@@ -705,7 +705,7 @@ class ChatPanel(QWidget):
             x = self.width() - img_w + int(img_w * 0.12)  # ligeramente recortada a la derecha
             y = self.height() - img_h                       # pegada al fondo
 
-            painter.setOpacity(0.35)
+            painter.setOpacity(0.50)
             painter.drawPixmap(x, y, img_w, img_h, self._bg_pixmap)
             painter.setOpacity(1.0)
 
