@@ -1535,9 +1535,19 @@ class SettingsView(QWidget):
         layout.setSpacing(16)
 
         # ── Mapa de proveedores → modelos (se actualiza al cargar) ──
+        # Este mapa es solo un fallback inicial mientras el backend responde.
+        # El método `_on_ai_config_loaded` lo sobrescribe con los modelos
+        # reales que devuelve el backend (provider.supported_models).
+        # FASE 1.2 — Fix 1.2: modelos vigentes de Anthropic (mayo 2026).
         self._ai_provider_models = {
             "none": [],
-            "anthropic": ["claude-sonnet-4-20250514"],
+            "anthropic": [
+                "claude-sonnet-4-6",
+                "claude-opus-4-7",
+                "claude-haiku-4-5-20251001",
+                "claude-sonnet-4-5-20250929",
+                "claude-opus-4-1-20250805",
+            ],
             "openai": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
             "google": ["gemini-2.0-flash"],
         }

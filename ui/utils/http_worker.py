@@ -52,7 +52,8 @@ import logging
 from typing import Any, Callable, Optional
 
 import requests
-from PySide6.QtCore import QObject
+from PySide6.QtCore import QEventLoop, Qt, QObject
+from PySide6.QtWidgets import QApplication
 
 from ui.utils.exception_hooks import safe_slot
 
@@ -76,6 +77,49 @@ _adapter = requests.adapters.HTTPAdapter(
 )
 _http_session.mount("http://", _adapter)
 _http_session.mount("https://", _adapter)
+
+
+# ═══════════════════════════════════════════════════════════════
+# FASE 2.8 — Fix 2.8 (Camino A): Feedback visual sin tocar threading
+# ═══════════════════════════════════════════════════════════════
+#
+# Estrategia conservadora: NO migramos a QThread+QObject (eso ya falló
+# antes — ver el comment al inicio del archivo). En su lugar damos al
+# usuario señal clara de que la app está trabajando:
+#
+#   1. Cursor de espera durante la request (Qt.WaitCursor).
+#   2. processEvents(ExcludeUserInputEvents) para que el cambio de
+#      cursor se renderice antes de iniciar la request bloqueante.
+#      `ExcludeUserInputEvents` previene re-entrancia (clicks
+#      durante el processEvents no se procesan, evitando que el
+#      usuario dispare otra request mientras la actual está en vuelo).
+#   3. Restauración garantizada del cursor en `finally` para que un
+#      error en el callback no deje el cursor pegado.
+#
+# Para una operación de 1-3s en una ferretería en Costa Rica, esto
+# convierte "la app se cuelga" en "la app muestra reloj de arena",
+# que es expectativa estándar para POS de escritorio.
+# ═══════════════════════════════════════════════════════════════
+def _set_busy(busy: bool) -> None:
+    """
+    Muestra/restaura el cursor de espera del cursor de Qt.
+
+    Defensivo:
+      - Si no hay QApplication (modo headless / tests), no-op.
+      - El stack interno de Qt maneja anidamiento (calls anidados
+        de api_call → api_call funcionan correctamente).
+    """
+    app = QApplication.instance()
+    if app is None:
+        return
+    if busy:
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        # Forzar render inmediato del cambio de cursor SIN procesar
+        # input del usuario (re-entrancia → otro click → otro api_call
+        # → stack potencialmente sin fondo). Solo paint/timer events.
+        app.processEvents(QEventLoop.ExcludeUserInputEvents)
+    else:
+        QApplication.restoreOverrideCursor()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -193,20 +237,25 @@ def api_call(
     _label = f"{method.upper()} {url}"
     logger.debug("api_call ⇒ %s", _label)
 
-    success, payload, status, auth_expired = _do_request(method, url, **kwargs)
-
+    # FASE 2.8 — Fix 2.8: cursor de espera durante la request bloqueante.
+    _set_busy(True)
     try:
-        if auth_expired:
-            _invoke_callback(on_auth_expired, label=f"{_label} auth_expired")
-            _invoke_callback(on_error, AUTH_EXPIRED_SENTINEL, label=f"{_label} error")
-        elif success:
-            logger.debug("api_call ◄ %s → %s", _label, status)
-            _invoke_callback(on_success, payload, label=f"{_label} success")
-        else:
-            logger.debug("api_call ✖ %s → %s", _label, status)
-            _invoke_callback(on_error, payload, label=f"{_label} error")
+        success, payload, status, auth_expired = _do_request(method, url, **kwargs)
+
+        try:
+            if auth_expired:
+                _invoke_callback(on_auth_expired, label=f"{_label} auth_expired")
+                _invoke_callback(on_error, AUTH_EXPIRED_SENTINEL, label=f"{_label} error")
+            elif success:
+                logger.debug("api_call ◄ %s → %s", _label, status)
+                _invoke_callback(on_success, payload, label=f"{_label} success")
+            else:
+                logger.debug("api_call ✖ %s → %s", _label, status)
+                _invoke_callback(on_error, payload, label=f"{_label} error")
+        finally:
+            _invoke_callback(on_finished, label=f"{_label} finished")
     finally:
-        _invoke_callback(on_finished, label=f"{_label} finished")
+        _set_busy(False)
 
 
 def run_async(
@@ -226,32 +275,37 @@ def run_async(
     _label = getattr(fn, "__name__", "fn")
     logger.debug("run_async ⇒ %s", _label)
 
+    # FASE 2.8 — Fix 2.8: cursor de espera durante la ejecución bloqueante.
+    _set_busy(True)
     try:
-        result = fn(*args, **kwargs)
-    except requests.exceptions.ConnectionError:
-        _invoke_callback(
-            on_error,
-            "No se pudo conectar al servidor. ¿Está Violette POS iniciado correctamente?",
-            label=f"{_label} error",
-        )
-        _invoke_callback(on_finished, label=f"{_label} finished")
-        return
-    except requests.exceptions.Timeout:
-        _invoke_callback(
-            on_error,
-            "El servidor tardó demasiado en responder.",
-            label=f"{_label} error",
-        )
-        _invoke_callback(on_finished, label=f"{_label} finished")
-        return
-    except Exception as e:
-        logger.error(f"Error en run_async({_label}): {e}", exc_info=True)
-        _invoke_callback(on_error, str(e), label=f"{_label} error")
-        _invoke_callback(on_finished, label=f"{_label} finished")
-        return
+        try:
+            result = fn(*args, **kwargs)
+        except requests.exceptions.ConnectionError:
+            _invoke_callback(
+                on_error,
+                "No se pudo conectar al servidor. ¿Está Violette POS iniciado correctamente?",
+                label=f"{_label} error",
+            )
+            _invoke_callback(on_finished, label=f"{_label} finished")
+            return
+        except requests.exceptions.Timeout:
+            _invoke_callback(
+                on_error,
+                "El servidor tardó demasiado en responder.",
+                label=f"{_label} error",
+            )
+            _invoke_callback(on_finished, label=f"{_label} finished")
+            return
+        except Exception as e:
+            logger.error(f"Error en run_async({_label}): {e}", exc_info=True)
+            _invoke_callback(on_error, str(e), label=f"{_label} error")
+            _invoke_callback(on_finished, label=f"{_label} finished")
+            return
 
-    _invoke_callback(on_success, result, label=f"{_label} success")
-    _invoke_callback(on_finished, label=f"{_label} finished")
+        _invoke_callback(on_success, result, label=f"{_label} success")
+        _invoke_callback(on_finished, label=f"{_label} finished")
+    finally:
+        _set_busy(False)
 
 
 def api_request(
@@ -266,10 +320,19 @@ def api_request(
 
     Devuelve el Response directamente — el caller maneja status_code
     y excepciones. Mantiene la misma firma que la versión anterior.
+
+    FASE 2.8 — Fix 2.8: muestra cursor de espera durante la llamada,
+    aunque sea bloqueante, para que el cajero vea que la app está
+    trabajando y no piense que se colgó.
     """
     kwargs["timeout"] = (CONNECT_TIMEOUT, timeout)
     fn = getattr(_http_session, method.lower())
-    return fn(url, **kwargs)
+
+    _set_busy(True)
+    try:
+        return fn(url, **kwargs)
+    finally:
+        _set_busy(False)
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -90,7 +90,7 @@ def system_diagnostics(db: Session = Depends(get_db)):
     import platform
     import os
     from pathlib import Path
-    from app.core.config import settings, is_sqlite, APP_DIR
+    from app.core.config import settings, is_sqlite, APP_DIR, DATA_DIR
     from app.core.credentials import (
         hacienda_user as _fn_hac_user, hacienda_password as _fn_hac_pass,
         hacienda_env as _fn_hac_env, hacienda_cert_path as _fn_hac_cert,
@@ -124,8 +124,15 @@ def system_diagnostics(db: Session = Depends(get_db)):
         },
         "storage": {
             "app_dir": str(APP_DIR),
-            "logs_dir_exists": (APP_DIR / "logs").exists(),
-            "backups_dir_exists": (APP_DIR / "app" / "backups").exists(),
+            # ── FASE 3.2 — Fix 3.2: paths corregidos ──
+            # Antes se reportaba (APP_DIR/"logs") y (APP_DIR/"app"/"backups"),
+            # pero los paths reales son DATA_DIR/"logs" (app/core/logger.py)
+            # y DATA_DIR/"backups" (app/services/backup_service.py).
+            # La página de diagnóstico siempre decía "no existen" aunque
+            # sí existieran.
+            "data_dir": str(DATA_DIR),
+            "logs_dir_exists": (DATA_DIR / "logs").exists(),
+            "backups_dir_exists": (DATA_DIR / "backups").exists(),
         },
     }
 

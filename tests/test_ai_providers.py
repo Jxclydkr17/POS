@@ -60,7 +60,31 @@ class TestAnthropicProvider:
     def test_metadata(self):
         assert self.provider.name == "anthropic"
         assert self.provider.display_name == "Claude (Anthropic)"
-        assert "claude-sonnet-4-20250514" in self.provider.supported_models
+        # FASE 1.2 — Fix 1.2: el default debe ser un modelo vigente
+        assert self.provider.default_model in self.provider.supported_models
+        # Sonnet 4.6 es el default actual recomendado para POS
+        assert "claude-sonnet-4-6" in self.provider.supported_models
+
+    def test_no_deprecated_models_in_supported(self):
+        """FASE 1.2 — Fix 1.2: ningún modelo deprecado en supported_models."""
+        deprecated = getattr(self.provider, "deprecated_models", frozenset())
+        for m in deprecated:
+            assert m not in self.provider.supported_models, (
+                f"Modelo deprecado '{m}' no debe estar en supported_models"
+            )
+
+    def test_safe_model_falls_back_on_deprecated(self):
+        """FASE 1.2 — Fix 1.2: si el modelo está deprecado, cae al default."""
+        # Asumimos que _safe_model existe (es helper interno pero estable)
+        result = self.provider._safe_model("claude-sonnet-4-20250514")
+        assert result == self.provider.default_model
+        # Modelo vigente se mantiene
+        result = self.provider._safe_model("claude-haiku-4-5-20251001")
+        assert result == "claude-haiku-4-5-20251001"
+        # Vacío/None cae al default
+        assert self.provider._safe_model(None) == self.provider.default_model
+        assert self.provider._safe_model("") == self.provider.default_model
+        assert self.provider._safe_model("   ") == self.provider.default_model
 
     def test_format_system_prompt(self):
         result = self.provider.format_system_prompt("Eres Violette")

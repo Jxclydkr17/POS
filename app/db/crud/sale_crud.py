@@ -32,8 +32,10 @@ from app.services.pdf_reports import generate_sale_pdf
 from app.utils.email_utils import send_sale_email
 from app.services.cash_movement_service import register_cash_movement
 from app.core.logger import logger
-from app.einvoice.sequence import next_sequence_number, build_consecutivo, build_clave
-from app.utils.dt import today_cr, utcnow
+# ── FASE 1.1 — Fix 1.1: imports de secuencia movidos a routers/einvoice.py ──
+# next_sequence_number, build_consecutivo y build_clave ya no se usan aquí
+# porque la asignación de consecutivo ocurre solo en build-xml.
+from app.utils.dt import today_cr, utcnow, format_cr, to_cr_iso
 from app.constants.status_enums import SaleStatus, InvoiceStatus
 
 # 📏 Helper de unidades de medida
@@ -152,56 +154,62 @@ def _get_open_cash_session(db: Session) -> CashSession:
 
 
 def _get_or_create_issuer(db: Session) -> IssuerProfile:
+    """
+    FASE 2.4 — Fix 2.4: Bloqueo total del emisor placeholder.
+
+    Antes: en sandbox, si no había emisor o era el placeholder genérico
+    ("000000000"), la función creaba/devolvía el dummy silenciosamente
+    y permitía hacer ventas. Resultado: la ferretería podía operar con
+    cédula falsa durante semanas; al cambiar a producción, todas esas
+    ventas históricas quedaban sin posibilidad de re-facturar a Hacienda.
+
+    Ahora: bloqueamos en CUALQUIER ambiente (sandbox o producción) si:
+      - no existe IssuerProfile, o
+      - id_number == "000000000" (placeholder seedeado), o
+      - legal_name está en estado "por configurar".
+
+    La excepción HTTP 400 indica claramente al cajero qué hacer.
+    El UI tiene un gate proactivo adicional que previene llegar acá.
+    """
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
 
-    # ── FASE 7 — Fix 7.3: Bloquear datos ficticios en producción ──
-    # Si estamos en modo producción de Hacienda, el perfil del emisor
-    # DEBE tener datos reales. Enviar datos dummy a Hacienda producción
-    # genera documentos fiscales inválidos que pueden acarrear multas.
-    from app.core.credentials import hacienda_env
-    is_production = hacienda_env() == "production"
-
     _DUMMY_ID = "000000000"
+    _DUMMY_LEGAL_NAME_PREFIX = "NOMBRE LEGAL POR CONFIGURAR"
 
-    if issuer:
-        # Perfil existe pero tiene datos ficticios
-        if is_production and issuer.id_number == _DUMMY_ID:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "El perfil del emisor tiene datos genéricos (cédula '000000000') "
-                    "y Hacienda está en modo PRODUCCIÓN. Las facturas serían rechazadas. "
-                    "Configure el perfil real en Ajustes → Facturación Electrónica "
-                    "antes de realizar ventas."
-                ),
-            )
-        return issuer
-
-    # No existe perfil
-    if is_production:
+    if issuer is None:
+        # No hay perfil. Antes en sandbox se creaba dummy automáticamente;
+        # ahora bloqueamos para forzar configuración explícita.
         raise HTTPException(
             status_code=400,
             detail=(
-                "No hay perfil de emisor configurado y Hacienda está en modo PRODUCCIÓN. "
-                "Configure el perfil del emisor en Ajustes → Facturación Electrónica "
-                "antes de realizar ventas. Necesita: razón social, cédula, email, "
-                "código de sucursal y terminal."
+                "No hay perfil de emisor configurado. "
+                "Configure los datos del emisor (razón social, cédula, email, "
+                "sucursal y terminal) en Ajustes → Facturación Electrónica "
+                "antes de hacer su primera venta."
             ),
         )
 
-    # Sandbox: crear perfil dummy para pruebas (comportamiento original)
-    logger.warning(
-        "PERFIL EMISOR NO CONFIGURADO: Se creó un perfil con datos "
-        "genéricos para sandbox (legal_name='Mi Negocio', id_number='000000000'). "
-        "Configure el perfil real antes de cambiar a modo producción."
-    )
-    issuer = IssuerProfile(
-        legal_name="Mi Negocio", id_type="01",
-        id_number=_DUMMY_ID, email="facturacion@tudominio.com",
-        branch_code="101", terminal_code="00001",
-    )
-    db.add(issuer)
-    db.flush()
+    # Perfil existe pero contiene datos placeholder
+    if issuer.id_number == _DUMMY_ID:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El perfil del emisor tiene datos genéricos (cédula '000000000'). "
+                "Configure los datos del emisor antes de hacer su primera venta. "
+                "Vaya a Ajustes → Facturación Electrónica."
+            ),
+        )
+
+    if issuer.legal_name and issuer.legal_name.upper().startswith(_DUMMY_LEGAL_NAME_PREFIX):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "El perfil del emisor tiene la razón social en estado por configurar. "
+                "Configure los datos del emisor antes de hacer su primera venta. "
+                "Vaya a Ajustes → Facturación Electrónica."
+            ),
+        )
+
     return issuer
 
 
@@ -283,8 +291,29 @@ def _process_sale_lines(
         if not product.is_active:
             raise HTTPException(status_code=400, detail=f"El producto '{product.name}' está desactivado.")
 
-        # 📏 Convertir cantidad a Decimal
+        # ── FASE 2.7 — Fix 2.7: Validar cantidad y precio positivos ──
+        # Antes esta validación SOLO se hacía para productos comunes
+        # (is_common=True). Para productos del inventario, una cantidad
+        # negativa pasaba la validación de stock (`stock < -5` es False)
+        # y terminaba SUMANDO al stock al ejecutar `product.stock -= qty_dec`,
+        # creando stock fantasma. Posible vector de fraude o error de UI.
+        #
+        # El schema Pydantic ya valida `gt=0` en requests HTTP, pero el
+        # CRUD puede llamarse desde otros caminos (scripts, tests, futuras
+        # integraciones). Defensa en profundidad.
         qty_dec = Decimal(str(item.quantity))
+        if qty_dec <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"La cantidad de '{product.name}' debe ser mayor a cero.",
+            )
+
+        unit_price_check = Decimal(str(item.unit_price or 0))
+        if unit_price_check <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"El precio de '{product.name}' debe ser mayor a cero.",
+            )
 
         # 📏 VALIDACIÓN: productos tipo "Unid" no aceptan fracciones
         if is_unit_based(product.unit_type or "Unid"):
@@ -505,20 +534,32 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
             raise HTTPException(status_code=404, detail="Cliente no encontrado.")
         add_credit_sale(db, customer_id, new_sale.id)
 
+    # ── FASE 1.1 — Fix 1.1: NO asignar consecutivo/clave aquí ──
+    # Antes, esta función llamaba `next_sequence_number()` y asignaba
+    # el consecutivo y la clave al ElectronicInvoice ANTES de construir
+    # el XML. Si después el XML fallaba (ej. productos comunes, datos
+    # inconsistentes, error XSD), el consecutivo quedaba gastado en la
+    # tabla `document_sequences` sin posibilidad de re-uso, creando
+    # huecos en la secuencia que Hacienda audita.
+    #
+    # Ahora la asignación atómica del consecutivo se hace en el endpoint
+    # `/einvoices/{id}/build-xml` SOLO después de que el XML pasa la
+    # validación XSD (ver app/routers/einvoice.py).
+    #
+    # El ElectronicInvoice queda en status=PENDING con consecutivo=None
+    # y clave=None hasta que se llame a build-xml.
+
     # Factura electrónica
     einv = ElectronicInvoice(sale_id=new_sale.id, document_type=document_type, status=InvoiceStatus.PENDING)
     db.add(einv)
     db.flush()
 
-    issuer = _get_or_create_issuer(db)
-    branch = (issuer.branch_code or "101").zfill(3)
-    terminal = (issuer.terminal_code or "00001").zfill(5)
-
-    seq_num = next_sequence_number(db, branch, terminal, document_type)
-    consecutivo = build_consecutivo(branch, terminal, document_type, seq_num)
-    clave = build_clave(issuer.id_number, consecutivo, situation="1")
-    einv.consecutivo = consecutivo
-    einv.clave = clave
+    # Verificar / preparar emisor (preserva la validación de configuración:
+    # en producción, si no hay emisor configurado, esta función lanza HTTP
+    # 400; en sandbox crea un dummy para no bloquear pruebas). La validación
+    # se mantiene aquí para que el cajero vea el error al crear la venta
+    # en vez de descubrirlo después en build-xml.
+    _get_or_create_issuer(db)
 
     # Caja
     if is_efectivo(payment_method):
@@ -552,7 +593,7 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
             "id": new_sale.id, "customer": customer_name,
             "total": _display(total), "payment_method": payment_method,
             "document_type": document_type, "user_id": current_user.id,
-            "created_at": new_sale.created_at.isoformat(),
+            "created_at": to_cr_iso(new_sale.created_at),  # FASE 2.2: CR display
         },
         "pdf_path": None,
         "pdf_note": "El PDF se está generando en segundo plano.",
@@ -580,7 +621,7 @@ def _build_sale_pdf_data(db, sale, customer_name, payment_method, document_type,
         "total": float(total),
         "payment_method": payment_method,
         "document_type": document_type,
-        "created_at": sale.created_at.strftime("%Y-%m-%d %H:%M"),
+        "created_at": format_cr(sale.created_at, "%Y-%m-%d %H:%M"),  # FASE 2.2
         "business": biz,
     }
 
@@ -764,7 +805,7 @@ def get_sales_by_range(
             "payment_method": s.payment_method or "Efectivo",
             "total": _display(s.total), "status": s.status,
             "user_id": s.user_id,
-            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "created_at": format_cr(s.created_at, "%Y-%m-%d %H:%M:%S"),  # FASE 2.2
         })
     return result
 
@@ -775,11 +816,12 @@ def get_sale_detail(db: Session, sale_id: int) -> dict:
         raise HTTPException(status_code=404, detail="Venta no encontrada")
 
     details = db.query(SaleDetail).filter(SaleDetail.sale_id == sale.id).all()
+    from app.utils.dt import to_cr  # local import por concisión
     return {
         "id": sale.id, "customer_id": sale.customer_id,
         "user_id": sale.user_id, "total": _display(sale.total),
         "payment_method": sale.payment_method, "status": sale.status,
-        "created_at": sale.created_at,
+        "created_at": to_cr(sale.created_at),  # FASE 2.2: aware CR para serialización
         "details": [
             {
                 "product_id": d.product_id, "quantity": float(d.quantity),
@@ -938,17 +980,16 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     _revert_credit(db, sale, "Nota de Crédito")
 
     # Generar NC
-    issuer = _get_or_create_issuer(db)
-    branch = (issuer.branch_code or "101").zfill(3)
-    terminal = (issuer.terminal_code or "00001").zfill(5)
-
-    seq_num = next_sequence_number(db, branch, terminal, "03")
-    consecutivo = build_consecutivo(branch, terminal, "03", seq_num)
-    clave = build_clave(issuer.id_number, consecutivo, situation="1")
+    # ── FASE 1.1 — Fix 1.1: NO asignar consecutivo aquí ──
+    # Mismo patrón que `create_sale`: el consecutivo de la NC se reserva
+    # atómicamente en `/einvoices/{id}/build-xml` solo si el XML pasa
+    # validación XSD. Aquí solo creamos el ElectronicInvoice en estado
+    # PENDING. La validación de issuer se mantiene para detectar config
+    # incompleta antes de seguir.
+    _get_or_create_issuer(db)
 
     nc_einv = ElectronicInvoice(
         sale_id=sale.id, document_type="03", status=InvoiceStatus.PENDING,
-        consecutivo=consecutivo, clave=clave,
     )
     db.add(nc_einv)
 
@@ -959,7 +1000,14 @@ def cancel_sale_with_nc(db: Session, sale_id: int, razon: str = "Anulación de c
     return {
         "message": f"Nota de Crédito generada para Venta #{sale_id}.",
         "sale_id": sale_id, "status": SaleStatus.ANULADA,
-        "nc": {"document_type": "03", "clave": clave, "consecutivo": consecutivo, "status": InvoiceStatus.PENDING},
+        "nc": {
+            "id": nc_einv.id,
+            "document_type": "03",
+            "status": InvoiceStatus.PENDING,
+            # consecutivo y clave se asignarán cuando se llame a build-xml
+            "clave": None,
+            "consecutivo": None,
+        },
     }
 
 

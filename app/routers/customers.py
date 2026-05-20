@@ -6,9 +6,9 @@ import threading
 from fastapi import APIRouter, Depends, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from datetime import date, datetime, timedelta
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 import io, csv
 import requests as http_requests
 
@@ -304,7 +304,7 @@ def customer_profile(
                 "id": s.id,
                 "total": float(s.total),
                 "payment_method": s.payment_method,
-                "date": s.created_at.strftime("%Y-%m-%d %H:%M"),
+                "date": format_cr(s.created_at, "%Y-%m-%d %H:%M"),  # FASE 2.2
             }
             for s in recent_sales
         ],
@@ -527,9 +527,42 @@ async def import_customers_csv(
 # Caché local 24h (el estado tributario no cambia en tiempo real).
 
 _HACIENDA_AE_URL = "https://api.hacienda.go.cr/fe/ae"
-_cedula_cache: dict[str, tuple[float, dict]] = {}
+
+# ── FASE 3.7 — Fix 3.7: caché LRU con tope ──
+# Antes era un `dict` sin límite. En una ferretería real es marginal
+# (5000 entradas × ~1KB ≈ 5MB), pero un OrderedDict acotado lo hace
+# constante: ~1MB en memoria como peor caso, sin riesgo si en algún
+# momento alguien empieza a consultar cédulas en bucle.
+from collections import OrderedDict
+_CEDULA_CACHE_MAX_ENTRIES = 1000
+_cedula_cache: "OrderedDict[str, tuple[float, dict]]" = OrderedDict()
 _cedula_cache_lock = threading.Lock()
 _CEDULA_CACHE_TTL = 86400  # 24 horas
+
+
+def _cedula_cache_set(cedula: str, now: float, data: dict) -> None:
+    """Inserción LRU: si llegamos al tope, descartamos la entrada más vieja."""
+    with _cedula_cache_lock:
+        if cedula in _cedula_cache:
+            _cedula_cache.move_to_end(cedula)
+        _cedula_cache[cedula] = (now, data)
+        while len(_cedula_cache) > _CEDULA_CACHE_MAX_ENTRIES:
+            _cedula_cache.popitem(last=False)
+
+
+def _cedula_cache_get(cedula: str, now: float) -> Optional[dict]:
+    """Lookup LRU con TTL. Si está vigente, lo mueve al final (más reciente)."""
+    with _cedula_cache_lock:
+        entry = _cedula_cache.get(cedula)
+        if entry is None:
+            return None
+        cached_at, cached_data = entry
+        if (now - cached_at) >= _CEDULA_CACHE_TTL:
+            # Vencido: limpiar y reportar miss
+            _cedula_cache.pop(cedula, None)
+            return None
+        _cedula_cache.move_to_end(cedula)
+        return cached_data
 
 # Mapeo de tipo de identificación Hacienda → display name
 _ID_TYPE_MAP = {"01": "Física", "02": "Jurídica", "03": "DIMEX", "04": "NITE"}
@@ -555,13 +588,11 @@ def lookup_cedula(
     if not cedula.isdigit():
         raise HTTPException(status_code=400, detail="La identificación debe contener solo dígitos.")
 
-    # ── Verificar caché ──
+    # ── Verificar caché (FASE 3.7 — Fix 3.7: helper LRU) ──
     now = time.monotonic()
-    with _cedula_cache_lock:
-        if cedula in _cedula_cache:
-            cached_at, cached_data = _cedula_cache[cedula]
-            if (now - cached_at) < _CEDULA_CACHE_TTL:
-                return success_response("Contribuyente encontrado (caché)", data=cached_data)
+    cached_data = _cedula_cache_get(cedula, now)
+    if cached_data is not None:
+        return success_response("Contribuyente encontrado (caché)", data=cached_data)
 
     # ── Consultar API de Hacienda ──
     try:
@@ -637,8 +668,7 @@ def lookup_cedula(
             db.rollback()
             logger.warning(f"No se pudieron guardar actividades económicas: {e}")
 
-    # ── Guardar en caché ──
-    with _cedula_cache_lock:
-        _cedula_cache[cedula] = (now, result)
+    # ── Guardar en caché (FASE 3.7 — Fix 3.7: helper LRU acotado) ──
+    _cedula_cache_set(cedula, now, result)
 
     return success_response("Contribuyente encontrado", data=result)

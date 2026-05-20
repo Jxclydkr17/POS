@@ -49,6 +49,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from app.utils.dt import now_cr
+# FASE 4.2 — Fix 4.2: declaración XML estándar (comillas dobles)
+from app.einvoice._xml_emit import xml_to_bytes
 
 # Namespace del MensajeReceptor (v4.4)
 NS_MR = "https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/mensajeReceptor"
@@ -196,5 +198,5 @@ def build_mensaje_receptor(
 
     # Nota: ds:Signature se agrega después con xml_signer.sign_xml()
 
-    xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_bytes = xml_to_bytes(root)
     return xml_bytes.decode("utf-8")

@@ -10,7 +10,7 @@ from app.db.models.product import Product
 from app.db.models.customer import Customer
 from app.db.models.user import User
 
-from app.utils.dt import TZ_CR
+from app.utils.dt import TZ_CR, format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.utils.db_compat import escape_like
 
 # ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
@@ -84,7 +84,7 @@ def sales_history(
         cust_name = s.customer.name if s.customer else "Cliente general"
         result.append({
             "id": s.id,
-            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M"),
+            "created_at": format_cr(s.created_at, "%Y-%m-%d %H:%M"),  # FASE 2.2
             "customer_name": cust_name,
             "total": float(s.total),
             "payment_method": s.payment_method,
@@ -140,7 +140,7 @@ def get_sale_detail(
 
     return {
         "id": sale.id,
-        "created_at": sale.created_at.strftime("%Y-%m-%d %H:%M"),
+        "created_at": format_cr(sale.created_at, "%Y-%m-%d %H:%M"),  # FASE 2.2
         "customer_name": customer_name,
         "payment_method": sale.payment_method,
         "status": sale.status,

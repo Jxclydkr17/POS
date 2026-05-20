@@ -2,19 +2,24 @@
 app/scripts/seed_db.py — Inicialización de datos obligatorios
 
 Crea los datos mínimos para que el POS funcione en una instalación nueva:
-  1. Usuario admin inicial
-  2. Métodos de pago (catálogo oficial Hacienda)
-  3. Fila de configuración (settings) vacía
-  4. Perfil emisor placeholder
-  5. Actividades económicas (catálogo Hacienda, 203 registros)
+  1. Métodos de pago (catálogo oficial Hacienda)
+  2. Fila de configuración (settings) vacía
+  3. Perfil emisor placeholder
+  4. Actividades económicas (catálogo Hacienda, 203 registros)
+
+NO crea ningún usuario administrador. La creación del admin se hace
+desde la UI mediante el wizard "Primera ejecución" que se dispara
+automáticamente cuando la BD tiene cero usuarios (ver
+`ui/login_view.py:_check_needs_setup`).
 
 USO:
     python -m app.scripts.seed_db          → Ejecutar seed
-    python -m app.scripts.seed_db --force  → Re-crear admin aunque exista
 
 SEGURIDAD:
-    - El admin se crea con contraseña "admin123" que DEBE cambiarse
-      en el primer inicio de sesión.
+    - FASE 3.1 — Fix 3.1: ya NO se crea un admin con contraseña
+      conocida (antes "admin/admin123"). El dueño de la ferretería
+      crea su propio admin con su propia contraseña la primera vez
+      que abre la app, gracias al wizard de primera ejecución.
     - El script es IDEMPOTENTE: si los datos ya existen no los duplica.
 
 AUDITORÍA FIX 1.2: Agregada llamada a import_economic_activities para
@@ -31,11 +36,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
-from app.db.models.user import User
+# FASE 3.1 — Fix 3.1: imports de User y hash_password removidos.
+# La creación del usuario admin ya no ocurre desde el seed; la hace
+# el wizard de la UI vía POST /users/setup.
 from app.db.models.payment_method import PaymentMethod
 from app.db.models.settings import Settings
 from app.db.models.issuer_profile import IssuerProfile
-from app.core.security import hash_password
 
 logger = logging.getLogger(__name__)
 
@@ -52,38 +58,6 @@ PAYMENT_METHODS = [
     ("06", "Otros"),
     ("99", "Otros medios"),
 ]
-
-
-def seed_admin(db: Session, force: bool = False) -> None:
-    """Crea el usuario administrador inicial."""
-    existing = db.query(User).filter(User.username == "admin").first()
-
-    if existing and not force:
-        logger.info("Usuario 'admin' ya existe. Use --force para recrearlo.")
-        return
-
-    if existing and force:
-        existing.password = hash_password("admin123")
-        existing.role = "admin"
-        existing.is_active = True
-        existing.full_name = "Administrador"
-        existing.must_change_password = True
-        db.commit()
-        logger.info("Usuario 'admin' actualizado (contraseña: admin123).")
-        return
-
-    admin = User(
-        username="admin",
-        password=hash_password("admin123"),
-        full_name="Administrador",
-        role="admin",
-        is_active=True,
-        must_change_password=True,
-    )
-    db.add(admin)
-    db.commit()
-    logger.info("Usuario 'admin' creado (contraseña: admin123).")
-    logger.warning("CAMBIE la contraseña en el primer inicio de sesión.")
 
 
 def seed_payment_methods(db: Session) -> None:
@@ -154,12 +128,19 @@ def seed_economic_activities(db: Session) -> None:
 
 
 def run(force: bool = False) -> None:
-    """Ejecuta todos los seeds."""
+    """
+    Ejecuta todos los seeds.
+
+    FASE 3.1 — Fix 3.1: ya no se crea admin automáticamente. El argumento
+    `force` se mantiene por retrocompatibilidad pero no hace nada
+    (antes forzaba la re-creación del admin con contraseña conocida).
+    """
     logger.info("Violette POS — Seed de datos iniciales")
 
     db = SessionLocal()
     try:
-        seed_admin(db, force=force)
+        # NO seed_admin: el wizard de UI crea el admin con la contraseña
+        # del dueño cuando la BD tiene cero usuarios.
         seed_payment_methods(db)
         seed_settings(db)
         seed_issuer_profile(db)
@@ -175,6 +156,8 @@ def run(force: bool = False) -> None:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Seed de datos iniciales para Violette POS")
-    parser.add_argument("--force", action="store_true", help="Forzar recreación del admin")
+    # `--force` queda como flag aceptado pero ya no afecta (no hay admin que recrear)
+    parser.add_argument("--force", action="store_true",
+                        help="(Obsoleto en Fase 3.1; antes recreaba el admin con contraseña conocida)")
     args = parser.parse_args()
     run(force=args.force)

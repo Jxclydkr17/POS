@@ -18,6 +18,7 @@ from app.db.models.sale import Sale
 from app.db.models.credit_sale import CreditSale
 
 from app.db.models.electronic_rep import ElectronicRep
+from app.utils.dt import format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.db.models.electronic_rep_reference import ElectronicRepReference
 
 from app.schemas.electronic_rep import CreateRepFromPaymentIn, SuggestRepAllocationsIn
@@ -300,7 +301,7 @@ def get_pending_docs_by_customer(
             "document_type": doc_type,  # 01 FE, 04 TE, etc (según tu tabla)
             "clave": getattr(einv, "clave", None),
             "consecutivo": getattr(einv, "consecutivo", None),
-            "sale_date": sale.created_at.strftime("%Y-%m-%d %H:%M") if getattr(sale, "created_at", None) else None,
+            "sale_date": format_cr(sale.created_at, "%Y-%m-%d %H:%M") or None,  # FASE 2.2
             "total": round(total_doc, 2),
             "applied": round(applied, 2),
             "pending": pending,
@@ -408,7 +409,7 @@ def suggest_allocations(
             "pending_before": pending,
             "amount_applied": use,
             "pending_after": round(pending - use, 2),
-            "sale_date": sale.created_at.strftime("%Y-%m-%d %H:%M") if getattr(sale, "created_at", None) else None,
+            "sale_date": format_cr(sale.created_at, "%Y-%m-%d %H:%M") or None,  # FASE 2.2
         })
 
         remaining = round(remaining - use, 2)

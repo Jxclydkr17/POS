@@ -3,7 +3,13 @@
 from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric, Index, Boolean
 from sqlalchemy.orm import relationship
 from app.db.database import Base
-from app.utils.dt import now_cr
+# FASE 2.2 — Fix 2.2: cambio de now_cr a utcnow.
+# Antes Sale.created_at usaba `default=now_cr` (CR aware), lo que generaba
+# inconsistencia con el resto de modelos (que usan utcnow). En SQLite el
+# offset se preservaba pero en MySQL se truncaba silenciosamente, causando
+# comparaciones de rango con resultados distintos entre motores.
+# Migración Alembic relacionada: alembic/versions/f6a7b8c9d0e1_normalize_sale_created_at_to_utc.py
+from app.utils.dt import utcnow
 from app.constants.status_enums import SaleStatus
 
 
@@ -28,7 +34,7 @@ class Sale(Base):
     document_type = Column(String(2), nullable=False, default='04')
     status = Column(String(20), nullable=False, default=SaleStatus.ACTIVA)
 
-    created_at = Column(DateTime, default=now_cr, index=True)
+    created_at = Column(DateTime, default=utcnow, index=True)
 
     # ── FASE 2 — Auditoría de ediciones ──
     updated_at = Column(DateTime, nullable=True)

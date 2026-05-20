@@ -81,15 +81,20 @@ class _ChatWorker(QObject):
     finished = Signal(dict)
     failed   = Signal(str)
 
-    def __init__(self, payload: dict, parent=None):
+    def __init__(self, payload: dict, headers: dict = None, parent=None):
         super().__init__(parent)
         self._payload = payload
+        # FASE 1.5 — Fix 1.5: endpoint /ai/chat ahora requiere token JWT.
+        # El header se construye en el caller (donde tiene acceso a la
+        # sesión) y se pasa al worker para que la llamada HTTP lo envíe.
+        self._headers = headers or {}
 
     def run(self):
         try:
             r = requests.post(
                 f"{API_URL}/ai/chat",
                 json=self._payload,
+                headers=self._headers,
                 timeout=20,
             )
             r.raise_for_status()
@@ -103,9 +108,18 @@ class _AlertsWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
 
+    def __init__(self, headers: dict = None, parent=None):
+        super().__init__(parent)
+        # FASE 1.5 — Fix 1.5: /ai/proactive-alerts ahora requiere token.
+        self._headers = headers or {}
+
     def run(self):
         try:
-            r = requests.get(f"{API_URL}/ai/proactive-alerts", timeout=10)
+            r = requests.get(
+                f"{API_URL}/ai/proactive-alerts",
+                headers=self._headers,
+                timeout=10,
+            )
             r.raise_for_status()
             self.finished.emit(r.json())
         except Exception as e:
@@ -705,7 +719,7 @@ class ChatPanel(QWidget):
             x = self.width() - img_w + int(img_w * 0.12)  # ligeramente recortada a la derecha
             y = self.height() - img_h                       # pegada al fondo
 
-            painter.setOpacity(0.50)
+            painter.setOpacity(0.35)
             painter.drawPixmap(x, y, img_w, img_h, self._bg_pixmap)
             painter.setOpacity(1.0)
 
@@ -722,7 +736,9 @@ class ChatPanel(QWidget):
         self._alerts_loaded = True
 
         self._alerts_thread = QThread(self)
-        self._alerts_worker = _AlertsWorker()
+        # FASE 1.5 — Fix 1.5: pasar token JWT al worker.
+        _alerts_headers = {"Authorization": f"Bearer {self._get_token()}"} if self._get_token() else {}
+        self._alerts_worker = _AlertsWorker(headers=_alerts_headers)
         self._alerts_worker.moveToThread(self._alerts_thread)
 
         self._alerts_thread.started.connect(self._alerts_worker.run)
@@ -1027,7 +1043,9 @@ class ChatPanel(QWidget):
         }
 
         self._thread = QThread(self)
-        self._worker = _ChatWorker(payload)
+        # FASE 1.5 — Fix 1.5: pasar token JWT al worker.
+        _chat_headers = {"Authorization": f"Bearer {self._get_token()}"} if self._get_token() else {}
+        self._worker = _ChatWorker(payload, headers=_chat_headers)
         self._worker.moveToThread(self._thread)
 
         self._thread.started.connect(self._worker.run)

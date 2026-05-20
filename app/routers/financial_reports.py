@@ -10,7 +10,7 @@ from app.db.models.expense import Expense
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.customer import Customer
 from app.core.dependencies import get_current_user
-from app.utils.dt import now_cr
+from app.utils.dt import now_cr, format_cr
 from app.constants.expense_categories import CAT_COMPRAS_PROVEEDORES
 from app.constants.status_enums import SaleStatus
 
@@ -175,7 +175,9 @@ def _compute_period(db: Session, start_day, end_day):
         current_day += timedelta(days=1)
 
     for s in sales:
-        day = s.created_at.strftime("%Y-%m-%d")
+        # FASE 2.2 — Fix 2.2: agrupar por día CR (no UTC) para que las
+        # ventas nocturnas (CR ≥ 18h) no caigan al día siguiente UTC.
+        day = format_cr(s.created_at, "%Y-%m-%d")
         if day in daily_data:
             daily_data[day]["ventas"] += float(s.total)
 

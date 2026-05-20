@@ -89,6 +89,27 @@ def hacienda_cert_path() -> Optional[str]:
 def hacienda_cert_pass() -> Optional[str]:
     return get_credential("hacienda_cert_pass")
 
+
+def hacienda_callback_secret() -> Optional[str]:
+    """
+    FASE 3.6 — Fix 3.6: Secret para autenticar callbacks de Hacienda.
+
+    Se configura en `.env` como:
+        HACIENDA_CALLBACK_SECRET=<string aleatorio largo>
+
+    Cuando esté presente, el endpoint /einvoice/callback exige que el
+    request incluya el mismo valor en:
+      - header `X-Callback-Token: <secret>`, o
+      - query param `?token=<secret>`
+
+    Si NO está configurado, el endpoint permite callbacks desde localhost
+    (compat con instalaciones existentes) pero loguea warning si la
+    petición llega de cualquier otro host.
+
+    Recomendado: generar con `python -c "import secrets; print(secrets.token_urlsafe(32))"`.
+    """
+    return get_credential("hacienda_callback_secret")
+
 def email_user() -> Optional[str]:
     return get_credential("email_user")
 

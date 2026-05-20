@@ -230,16 +230,27 @@ def install_global_exception_hooks() -> None:
             for h in root.handlers
         )
         if not has_console:
-            console = _logging.StreamHandler(sys.stdout)
-            console.setLevel(_logging.DEBUG)
+            # ── FASE 3.4 — Fix 3.4: NO contaminar root logger ──
+            # Antes: console.setLevel(DEBUG) + root.setLevel(DEBUG).
+            # Eso forzaba al root a DEBUG, inundando los archivos de log
+            # con tráfico de SQLAlchemy, urllib3, etc., antes de que
+            # `app/core/logger.py` tuviera oportunidad de silenciarlos.
+            #
+            # Ahora: handler a WARNING (suficiente para ver crashes en
+            # consola si la app se levanta sin GUI) y NO tocamos
+            # root.setLevel. El nivel del root lo decide `logger.py`.
+            console = _logging.StreamHandler(sys.stderr)
+            console.setLevel(_logging.WARNING)
             console.setFormatter(_logging.Formatter(
                 "%(asctime)s [%(levelname)s] %(name)s | %(message)s",
                 datefmt="%H:%M:%S",
             ))
             root.addHandler(console)
-            root.setLevel(_logging.DEBUG)
-        # Silenciar loggers ruidosos para que no tapen las pistas
-        for noisy in ("urllib3", "httpcore", "httpx", "asyncio", "PIL"):
+        # Silenciar loggers ruidosos como defensa por si exception_hooks
+        # se instala ANTES que logger.py (orden de imports). Si logger.py
+        # corre después, los re-aplica con el mismo nivel.
+        for noisy in ("urllib3", "httpcore", "httpx", "asyncio", "PIL",
+                      "sqlalchemy.engine", "uvicorn.access", "uvicorn.error"):
             _logging.getLogger(noisy).setLevel(_logging.WARNING)
     except Exception as e:
         sys.stderr.write(f"No se pudo configurar logging a consola: {e}\n")
@@ -254,8 +265,24 @@ def install_global_exception_hooks() -> None:
         # Adicional: dump a archivo. faulthandler.register sería para señales
         # específicas; usamos enable con un archivo extra abierto en append.
         try:
-            from pathlib import Path
-            crash_dir = Path("data") / "logs"
+            # ── FASE 3.3 — Fix 3.3: path absoluto, no relativo al CWD ──
+            # Antes: `Path("data") / "logs"` (relativo). Funcionaba si
+            # `launcher.py` hacía `os.chdir`, pero si alguien lanzaba el
+            # módulo directo (ej. `python -m app.main` desde otro dir,
+            # o pytest desde subdir), el crash.log terminaba en lugares
+            # impredecibles.
+            #
+            # Ahora: usar DATA_DIR absoluto desde la config (apunta a
+            # APP_DIR/data, calculado al cargar config.py).
+            try:
+                from app.core.config import DATA_DIR as _DATA_DIR
+                crash_dir = _DATA_DIR / "logs"
+            except Exception:
+                # Fallback defensivo si config.py no se pudo cargar
+                # (caso extremo: error muy temprano en el arranque).
+                # Usamos la ruta relativa al archivo del módulo.
+                from pathlib import Path
+                crash_dir = Path(__file__).resolve().parent.parent.parent / "data" / "logs"
             crash_dir.mkdir(parents=True, exist_ok=True)
             crash_log = open(crash_dir / "crash.log", "a", encoding="utf-8", buffering=1)
             crash_log.write(

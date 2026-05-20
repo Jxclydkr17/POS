@@ -20,7 +20,31 @@ logger = logging.getLogger(__name__)
 
 _API_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_VERSION = "2023-06-01"
-_DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+# ── FASE 1.2 — Fix 1.2: Modelos vigentes en la API de Anthropic ──
+# Default: Sonnet 4.6 — mantiene continuidad con el Sonnet 4 anterior
+# (mismo tier, mismo precio $3/$15 por millón de tokens), pero con
+# mejor calidad. Recomendado para uso general en un POS.
+# Para reducir costos, el usuario puede cambiar a Haiku 4.5 desde
+# Configuración > Asistente IA (es ~3x más barato y suficiente para
+# la mayoría de consultas del POS).
+_DEFAULT_MODEL = "claude-sonnet-4-6"
+
+# ── FASE 1.2 — Fix 1.2: Modelos deprecados ──
+# Anthropic anunció el 14-abr-2026 la deprecación de claude-sonnet-4
+# y claude-opus-4 (originales de mayo 2025), con retiro en la API el
+# 15-jun-2026. Después de esa fecha, las llamadas devuelven error.
+#
+# Si una instalación existente tiene uno de estos modelos guardado en
+# `ai_config.model`, el flujo de auto-migración en provider_registry
+# lo reemplaza por el default actual la primera vez que se invoca el
+# asistente. Esta lista es la red de seguridad para evitar 100% que
+# se llame a un modelo retirado.
+_DEPRECATED_MODELS: frozenset[str] = frozenset({
+    "claude-sonnet-4-20250514",
+    "claude-opus-4-20250514",
+})
+
 _REQUEST_TIMEOUT = 30
 
 
@@ -30,10 +54,45 @@ class AnthropicProvider(BaseLLMProvider):
     name = "anthropic"
     display_name = "Claude (Anthropic)"
     requires_api_key = True
+
+    # Lista de modelos seleccionables desde la UI.
+    # Orden = orden en que aparecen en el dropdown (default primero).
+    # Mantener sincronizado con https://platform.claude.com/docs/en/about-claude/models
     supported_models = [
-        "claude-sonnet-4-20250514",
+        "claude-sonnet-4-6",          # Default — mejor balance precio/calidad
+        "claude-opus-4-7",            # Flagship — máxima capacidad
+        "claude-haiku-4-5-20251001",  # Más rápido y barato ($1/$5)
+        "claude-sonnet-4-5-20250929", # Sonnet generación anterior
+        "claude-opus-4-1-20250805",   # Opus generación anterior
     ]
     default_model = _DEFAULT_MODEL
+
+    # Atributo de clase — usado por provider_registry para auto-migrar
+    # `ai_config.model` cuando una instalación existente tiene un
+    # modelo deprecado guardado.
+    deprecated_models = _DEPRECATED_MODELS
+
+    # ── FASE 1.2: Helper para sanear modelo en tiempo de ejecución ──
+
+    def _safe_model(self, requested: Optional[str]) -> str:
+        """
+        Devuelve un model_id seguro para enviar a la API.
+
+        Si `requested` está vacío o es uno de los modelos deprecados,
+        cae al `default_model` actual. Esto previene 100% que una
+        configuración vieja en BD o un .env con un modelo retirado
+        rompa el chat del POS.
+        """
+        if not requested or not requested.strip():
+            return self.default_model
+        if requested in _DEPRECATED_MODELS:
+            logger.warning(
+                "Modelo Claude '%s' está deprecado (retira 15-jun-2026). "
+                "Usando '%s' en su lugar. Actualice ai_config.model.",
+                requested, self.default_model,
+            )
+            return self.default_model
+        return requested
 
     # ── Validación de API key ──
 
@@ -143,8 +202,12 @@ class AnthropicProvider(BaseLLMProvider):
             "content-type": "application/json",
         }
 
+        # FASE 1.2: sanitizar el modelo — si está deprecated o vacío,
+        # cae al default vigente. Evita errores 4xx por modelo retirado.
+        effective_model = self._safe_model(model)
+
         payload = {
-            "model": model or self.default_model,
+            "model": effective_model,
             "max_tokens": max_tokens,
             "system": system,
             "messages": messages,

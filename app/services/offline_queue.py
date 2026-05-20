@@ -26,9 +26,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import requests
+from sqlalchemy import or_, and_
 from sqlalchemy.orm import Session
 
 from app.db.models.electronic_invoice import ElectronicInvoice
@@ -44,6 +45,31 @@ CONNECTIVITY_TIMEOUT = 5    # Segundos
 
 # Status que indican "en cola offline"
 OFFLINE_STATUSES = ("QUEUED", "OFFLINE_RETRY")
+
+# ── FASE 2.3 — Fix 2.3: Recovery de orphans ──
+# Si un einv está en XML_READY pero nunca pasó a SENT (sent_at IS NULL)
+# y es viejo (created_at < utcnow - ORPHAN_THRESHOLD_MINUTES), es casi
+# seguro huérfano de un crash previo a la corrección de Fase 2.3 o de
+# un escenario edge (ej. servidor reiniciado durante envío).
+#
+# El flujo normal de XML_READY → SENT toma < 30s. 10 minutos es un margen
+# generoso para evitar falsos positivos.
+ORPHAN_THRESHOLD_MINUTES = 10
+ORPHAN_STATUSES = ("XML_READY",)
+
+
+def _orphan_filter():
+    """
+    Filtro SQLAlchemy para detectar einv huérfanos.
+    Un huérfano es XML_READY con sent_at NULL y created_at viejo.
+    """
+    threshold = utcnow() - timedelta(minutes=ORPHAN_THRESHOLD_MINUTES)
+    return and_(
+        ElectronicInvoice.status.in_(ORPHAN_STATUSES),
+        ElectronicInvoice.sent_at.is_(None),
+        ElectronicInvoice.created_at < threshold,
+    )
+
 
 _processor_task = None
 
@@ -99,10 +125,18 @@ def get_queue_status(db: Session) -> dict:
         .count()
     )
 
+    # FASE 2.3: contar orphans separadamente para visibilidad
+    orphans = (
+        db.query(ElectronicInvoice)
+        .filter(_orphan_filter())
+        .count()
+    )
+
     has_internet = check_internet()
 
     return {
         "queued_count": queued,
+        "orphan_count": orphans,  # FASE 2.3 — Fix 2.3: visibilidad de orphans
         "has_internet": has_internet,
         "retry_interval_seconds": RETRY_INTERVAL,
         "processor_running": _processor_task is not None and not _processor_task.done(),
@@ -110,10 +144,14 @@ def get_queue_status(db: Session) -> dict:
 
 
 def get_queued_invoices(db: Session, limit: int = 50) -> list[dict]:
-    """Lista los comprobantes en cola offline."""
+    """Lista los comprobantes en cola offline (incluye orphans XML_READY)."""
     records = (
         db.query(ElectronicInvoice)
-        .filter(ElectronicInvoice.status.in_(OFFLINE_STATUSES))
+        # FASE 2.3 — Fix 2.3: incluir orphans en el listado.
+        .filter(or_(
+            ElectronicInvoice.status.in_(OFFLINE_STATUSES),
+            _orphan_filter(),
+        ))
         .order_by(ElectronicInvoice.created_at.asc())
         .limit(limit)
         .all()
@@ -130,6 +168,8 @@ def get_queued_invoices(db: Session, limit: int = 50) -> list[dict]:
             "last_error": r.last_error,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "tries": r.tries,
+            # FASE 2.3 — indicador para que el UI muestre advertencia visual
+            "is_orphan": r.status == "XML_READY",
         }
         for r in records
     ]
@@ -155,10 +195,18 @@ def _process_queue_cycle() -> int:
 
     try:
         with safe_session() as db:
-            # Obtener comprobantes en cola (FIFO)
+            # Obtener comprobantes en cola (FIFO).
+            # FASE 2.3 — Fix 2.3: además de QUEUED, también recuperamos
+            # XML_READY huérfanos antiguos (sent_at NULL, created_at > 10min).
+            # Estos son comprobantes que quedaron en estado intermedio por
+            # un crash de la app antes del fix de Fase 2.3, o por un
+            # escenario edge (servidor reiniciado durante el envío).
             queued = (
                 db.query(ElectronicInvoice)
-                .filter(ElectronicInvoice.status.in_(OFFLINE_STATUSES))
+                .filter(or_(
+                    ElectronicInvoice.status.in_(OFFLINE_STATUSES),
+                    _orphan_filter(),
+                ))
                 .order_by(ElectronicInvoice.created_at.asc())
                 .limit(MAX_RETRY_PER_CYCLE)
                 .all()
@@ -171,9 +219,25 @@ def _process_queue_cycle() -> int:
 
             for einv in queued:
                 try:
-                    # Cambiar status para evitar procesamiento duplicado
+                    # ── FASE 2.3 — Fix 2.3: NO commitear status intermedio ──
+                    # Antes: `einv.status = "XML_READY"; db.commit()` antes
+                    # del envío. Si la app crasheaba entre ese commit y el
+                    # commit final del envío, el comprobante quedaba en
+                    # XML_READY permanentemente (la cola solo recogía
+                    # QUEUED/SEND_ERROR). Auditoría detectaba el orphan
+                    # meses después.
+                    #
+                    # Ahora: solo cambiamos en memoria. Si la app crashea,
+                    # el rollback automático de la sesión SQLAlchemy devuelve
+                    # el einv a `QUEUED` (su estado en BD), y la próxima
+                    # vuelta de la cola lo reintenta naturalmente.
+                    #
+                    # `send_einvoice_to_hacienda` internamente hace su propio
+                    # `db.commit()` con el estado final (SENT/SEND_ERROR/QUEUED).
+                    # La validación interna `status in ("XML_READY", "SEND_ERROR")`
+                    # se hace sobre el objeto en memoria, así que el cambio
+                    # local le basta para pasar.
                     einv.status = "XML_READY"
-                    db.commit()
 
                     # Intentar enviar
                     result = send_einvoice_to_hacienda(db, einv.id)

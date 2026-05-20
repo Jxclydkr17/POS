@@ -8,7 +8,9 @@ import xml.etree.ElementTree as ET
 from sqlalchemy.orm import Session
 from app.db.models.issuer_profile import IssuerProfile
 from app.db.models.product import Product
-from app.utils.dt import now_cr
+from app.utils.dt import now_cr, to_cr_iso
+# FASE 4.2 — Fix 4.2: serialización con declaración XML estándar (comillas dobles)
+from app.einvoice._xml_emit import xml_to_bytes, xml_to_str
 
 NS_XSI = "http://www.w3.org/2001/XMLSchema-instance"
 
@@ -78,6 +80,101 @@ PAYMENT_MAP = {
 _IMPUESTOS_ESPECIFICOS = {"03", "04", "05", "06"}
 # Códigos que usan tarifa porcentual (no DatosImpuestoEspecifico)
 _IMPUESTOS_CON_TARIFA = {"01", "02", "07", "08", "12", "99"}
+
+# ─────────────────────────────────────────────────────────────
+# FASE 1.1 — Soporte para productos comunes (sin inventario)
+# ─────────────────────────────────────────────────────────────
+# Los productos comunes son líneas vendidas al momento, sin estar en
+# la tabla `products`: ej. "alambre cortado", "tornillos sueltos",
+# "pintura mezclada al momento". El SaleDetail tiene `is_common=True`
+# y `product_id=None`. Para Hacienda igual hay que emitir un XML válido.
+#
+# Valor de CABYS por defecto:
+#   "8399000000000" → catálogo CABYS "Otros servicios n.c.p."
+# Es un código genérico aceptado por Hacienda como fallback cuando el
+# producto no tiene un código CABYS específico asignado. La ferretería
+# debería poco a poco mover sus productos comunes recurrentes al
+# inventario con su código CABYS correcto.
+DEFAULT_COMMON_CABYS_CODE = "8399000000000"
+DEFAULT_COMMON_UNIT_TYPE = "Unid"
+
+
+class _VirtualCommonProduct:
+    """FASE 1.1: 'Producto virtual' para líneas con is_common=True.
+
+    Construye un objeto con la misma interfaz mínima que `Product`
+    pero con valores tomados del propio SaleDetail (descripción,
+    tax_rate) y defaults sensatos para el resto. Esto permite que
+    `_process_detail_line` funcione sin tocar BD cuando la línea
+    no corresponde a un producto del inventario.
+    """
+
+    __slots__ = (
+        "id", "name", "cabys_code", "tax_rate", "unit_type",
+        "impuesto_code", "impuesto_code_otro", "iva_cobrado_fabrica",
+        "factor_calculo_iva", "partida_arancelaria", "registro_fiscal_8707",
+        "tipo_transaccion", "numero_vin_serie", "registro_medicamento",
+        "forma_farmaceutica", "discount_code_default", "tax_tarifa_code_override",
+        "imp_esp_impuesto_unidad", "imp_esp_cantidad_unidad_medida",
+        "imp_esp_porcentaje", "imp_esp_volumen_unidad_consumo",
+    )
+
+    def __init__(self, detail: Any):
+        # id None — útil para logging / debug
+        self.id = None
+
+        # Nombre legible: descripción del SaleDetail truncada a 200 chars
+        desc = getattr(detail, "common_description", None) or "Producto común"
+        if not isinstance(desc, str):
+            desc = str(desc)
+        self.name = desc.strip()[:200] or "Producto común"
+
+        # CABYS: permite override por SaleDetail.common_cabys_code si esa
+        # columna existe en el futuro; si no, usa el default global.
+        override_cabys = getattr(detail, "common_cabys_code", None)
+        if isinstance(override_cabys, str) and override_cabys.strip():
+            self.cabys_code = override_cabys.strip()
+        else:
+            self.cabys_code = DEFAULT_COMMON_CABYS_CODE
+
+        # tax_rate: viene del SaleDetail (NO del producto, porque no hay).
+        # Acepta float / Decimal / None.
+        raw_rate = getattr(detail, "tax_rate", None)
+        self.tax_rate = raw_rate if raw_rate is not None else Decimal("0")
+
+        # Unidad de medida: override opcional por SaleDetail
+        override_unit = getattr(detail, "common_unit_type", None)
+        if isinstance(override_unit, str) and override_unit.strip():
+            self.unit_type = override_unit.strip()[:15]
+        else:
+            self.unit_type = DEFAULT_COMMON_UNIT_TYPE
+
+        # Todos los campos opcionales: None (no aplican a productos comunes)
+        self.impuesto_code = None
+        self.impuesto_code_otro = None
+        self.iva_cobrado_fabrica = None
+        self.factor_calculo_iva = None
+        self.partida_arancelaria = None
+        self.registro_fiscal_8707 = None
+        self.tipo_transaccion = None
+        self.numero_vin_serie = None
+        self.registro_medicamento = None
+        self.forma_farmaceutica = None
+        self.discount_code_default = None
+        self.tax_tarifa_code_override = None
+        self.imp_esp_impuesto_unidad = None
+        self.imp_esp_cantidad_unidad_medida = None
+        self.imp_esp_porcentaje = None
+        self.imp_esp_volumen_unidad_consumo = None
+
+
+def _is_common_detail(d: Any) -> bool:
+    """True si el SaleDetail es un producto común (sin inventario)."""
+    if bool(getattr(d, "is_common", False)):
+        return True
+    if getattr(d, "product_id", None) in (None, 0):
+        return True
+    return False
 
 
 def _rfc3339_now() -> str:
@@ -335,8 +432,16 @@ class _ResumenAccumulators:
 # ═════════════════════════════════════════════════════════════
 
 def _prefetch_products(db: Session, details) -> dict:
-    """FASE 3 — Fix 3.2: Prefetch todos los productos en UNA query."""
-    product_ids = [d.product_id for d in details if getattr(d, "product_id", None)]
+    """FASE 3 — Fix 3.2: Prefetch todos los productos en UNA query.
+
+    FASE 1.1: Excluye líneas con is_common=True o product_id None/0,
+    para que el query no traiga "Product WHERE id IS NULL" (que devuelve
+    siempre vacío y desperdicia un roundtrip a la BD).
+    """
+    product_ids = [
+        d.product_id for d in details
+        if getattr(d, "product_id", None) and not _is_common_detail(d)
+    ]
     if not product_ids:
         return {}
     products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
@@ -348,14 +453,22 @@ def _process_detail_line(
     doc_type: str, acc: _ResumenAccumulators,
     products_map: dict = None,
 ):
-    # FASE 3 — Fix 3.2: Usar products_map prefetcheado para evitar N+1.
-    # Si no se pasa el mapa, cae en query individual (retrocompatibilidad).
-    if products_map and d.product_id in products_map:
-        product = products_map[d.product_id]
+    # ── FASE 1.1 — Soporte para productos comunes ──
+    # Si la línea es is_common=True (o product_id None/0), no buscamos en
+    # la tabla products: construimos un objeto virtual con los datos del
+    # propio SaleDetail. Esto evita el ValueError "Producto no encontrado"
+    # que antes hacía fallar el build-xml y dejaba el consecutivo gastado.
+    if _is_common_detail(d):
+        product = _VirtualCommonProduct(d)
     else:
-        product = db.query(Product).filter(Product.id == d.product_id).first()
-    if not product:
-        raise ValueError(f"Producto no encontrado ID {d.product_id}")
+        # FASE 3 — Fix 3.2: Usar products_map prefetcheado para evitar N+1.
+        # Si no se pasa el mapa, cae en query individual (retrocompatibilidad).
+        if products_map and d.product_id in products_map:
+            product = products_map[d.product_id]
+        else:
+            product = db.query(Product).filter(Product.id == d.product_id).first()
+        if not product:
+            raise ValueError(f"Producto no encontrado ID {d.product_id}")
 
     qty = Decimal(str(d.quantity))
     unit_gross = Decimal(str(d.unit_price))
@@ -974,7 +1087,7 @@ def build_xml_for_sale_v44(
             "Pase referencia_doc al builder."
         )
 
-    xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_bytes = xml_to_bytes(root)
     return xml_bytes.decode("utf-8")
 
 
@@ -1033,7 +1146,8 @@ def build_xml_for_rep_v44(
         ir = _add(root, "InformacionReferencia")
         _add(ir, "TipoDocIR", tipo_doc_ir)
         _add(ir, "Numero", _safe(numero_ref, 50))
-        _add(ir, "FechaEmisionIR", sale_ref.created_at.astimezone().isoformat(timespec="seconds"))
+        # FASE 2.1 — Fix 2.1: TZ_CR explícita vía to_cr_iso.
+        _add(ir, "FechaEmisionIR", to_cr_iso(sale_ref.created_at))
         _add(ir, "Codigo", _safe(codigo_referencia, 2))
         _add(ir, "Razon", _safe(razon_referencia, 180))
 
@@ -1072,7 +1186,7 @@ def build_xml_for_rep_v44(
     _add(mp_node, "TipoMedioPago", tipo_medio)
     _add(resumen, "TotalComprobante", str(amt))
 
-    xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_bytes = xml_to_bytes(root)
     return xml_bytes.decode("utf-8")
 
 
@@ -1133,11 +1247,12 @@ def build_xml_for_nc_v44(
     ir = _add(root, "InformacionReferencia")
     _add(ir, "TipoDocIR", tipo_doc_original)
     _add(ir, "Numero", _safe(numero_ref, 50))
-    _add(ir, "FechaEmisionIR", sale_original.created_at.astimezone().isoformat(timespec="seconds"))
+    # FASE 2.1 — Fix 2.1: TZ_CR explícita vía to_cr_iso.
+    _add(ir, "FechaEmisionIR", to_cr_iso(sale_original.created_at))
     _add(ir, "Codigo", "01")
     _add(ir, "Razon", _safe(razon, 180))
 
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    return xml_to_str(root)
 
 
 # ═════════════════════════════════════════════════════════════
@@ -1198,11 +1313,12 @@ def build_xml_for_nd_v44(
     ir = _add(root, "InformacionReferencia")
     _add(ir, "TipoDocIR", tipo_doc_original)
     _add(ir, "Numero", _safe(numero_ref, 50))
-    _add(ir, "FechaEmisionIR", sale_original.created_at.astimezone().isoformat(timespec="seconds"))
+    # FASE 2.1 — Fix 2.1: TZ_CR explícita vía to_cr_iso.
+    _add(ir, "FechaEmisionIR", to_cr_iso(sale_original.created_at))
     _add(ir, "Codigo", codigo_referencia)
     _add(ir, "Razon", _safe(razon, 180))
 
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    return xml_to_str(root)
 
 
 # ═════════════════════════════════════════════════════════════
@@ -1353,7 +1469,7 @@ def build_xml_for_fec_v44(
         _add(ir, "Codigo", "04")
         _add(ir, "Razon", _safe(razon_referencia, 180))
 
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    return xml_to_str(root)
 
 
 # ═════════════════════════════════════════════════════════════
@@ -1412,4 +1528,4 @@ def build_xml_for_fee_v44(
     _write_medio_pago(resumen, sale, total_comprobante)
     _add(resumen, "TotalComprobante", str(total_comprobante))
 
-    return ET.tostring(root, encoding="utf-8", xml_declaration=True).decode("utf-8")
+    return xml_to_str(root)

@@ -4,6 +4,8 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import xml.etree.ElementTree as ET
 from app.utils.dt import now_cr
+# FASE 4.2 — Fix 4.2: declaración XML estándar (comillas dobles)
+from app.einvoice._xml_emit import xml_to_bytes
 
 
 def _d(v) -> Decimal:
@@ -227,5 +229,5 @@ def build_xml_for_sale(
     ET.SubElement(resumen, "TotalImpuesto").text = _money(total_impuesto)
     ET.SubElement(resumen, "TotalComprobante").text = _money(((total_gravado + total_exento) - total_descuento) + total_impuesto)
 
-    xml_bytes = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+    xml_bytes = xml_to_bytes(root)
     return xml_bytes.decode("utf-8")

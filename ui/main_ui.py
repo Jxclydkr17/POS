@@ -753,6 +753,80 @@ class MainWindow(QMainWindow):
             self.grp_utils.setVisible(True)
 
     # ==========================================================
+    # FASE 2.4 — Fix 2.4: Gate del perfil emisor (UI)
+    # ==========================================================
+    def _ensure_issuer_configured(self) -> bool:
+        """
+        Verifica si el perfil del emisor está configurado con datos reales.
+
+        Si NO está configurado, muestra un QMessageBox bloqueante con
+        opción de ir directo a Configuración. Retorna False (bloquear flujo).
+
+        Si SÍ está configurado, retorna True (permitir continuar).
+
+        No cachea el resultado: el chequeo es un HTTP local (~5ms) y así
+        cualquier cambio que el dueño haga en la vista de Configuración
+        se refleja inmediatamente en el próximo intento de entrar a Ventas.
+
+        Defensivo: si por cualquier razón el endpoint falla (red local
+        rota, backend caído), retornamos True para no bloquear toda la
+        operación por un check secundario. El backend volverá a validar
+        cuando se intente crear la venta y bloqueará allí si corresponde.
+        """
+        try:
+            import requests
+            from ui.api import BASE_URL
+            token = session.token or ""
+            r = requests.get(
+                f"{BASE_URL}/settings/issuer-profile/status",
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=5,
+            )
+            if r.status_code != 200:
+                logging.warning(
+                    "Issuer status check fallido HTTP %s — permitiendo continuar; "
+                    "el backend bloqueará al crear venta si corresponde.",
+                    r.status_code,
+                )
+                return True
+
+            data = (r.json() or {}).get("data") or {}
+            is_configured = bool(data.get("is_configured", False))
+            blocking_reason = data.get("blocking_reason") or "Perfil del emisor sin configurar."
+
+            if is_configured:
+                return True
+
+            # No configurado → mostrar modal bloqueante.
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle("Configure el emisor")
+            box.setText("Configure los datos del emisor antes de hacer su primera venta.")
+            box.setInformativeText(
+                f"{blocking_reason}\n\n"
+                "Sin estos datos, las facturas no podrán enviarse a Hacienda."
+            )
+            btn_config = box.addButton("Ir a Configuración", QMessageBox.AcceptRole)
+            box.addButton("Cancelar", QMessageBox.RejectRole)
+            box.setDefaultButton(btn_config)
+            box.exec()
+
+            if box.clickedButton() is btn_config:
+                try:
+                    self.show_section("configuración")
+                except Exception as e:
+                    logging.warning("No se pudo navegar a configuración: %s", e)
+
+            return False
+
+        except requests.RequestException as e:
+            logging.warning("No se pudo verificar el emisor: %s — permitiendo continuar.", e)
+            return True
+        except Exception as e:
+            logging.exception("Error inesperado en _ensure_issuer_configured: %s", e)
+            return True
+
+    # ==========================================================
     # CAMBIO DE VISTA - MEJORADO
     # ==========================================================
     def show_section(self, section):
@@ -783,6 +857,14 @@ class MainWindow(QMainWindow):
                 self.set_view(self._customers_view)
 
             elif section == "ventas":
+                # ── FASE 2.4 — Fix 2.4: Gate del perfil del emisor ──
+                # Antes de cargar la vista de ventas, verificar que el emisor
+                # esté configurado. Si tiene cédula placeholder ("000000000")
+                # o nunca se configuró, mostrar bloqueo claro al cajero con
+                # opción de ir directo a Configuración.
+                if not self._ensure_issuer_configured():
+                    return  # _ensure_issuer_configured ya navegó o mostró mensaje
+
                 from ui.views.sales_view import SalesView
                 if self.sales_view is None:
                     self.sales_view = SalesView()

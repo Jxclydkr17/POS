@@ -89,6 +89,69 @@ def _resolve_api_key_from_env(provider_name: str) -> Optional[str]:
     return None
 
 
+def _maybe_migrate_deprecated_model(
+    provider_name: str,
+    current_model: str,
+) -> Optional[str]:
+    """
+    FASE 1.2 — Fix 1.2: Auto-migrar modelos deprecados a la versión vigente.
+
+    Si el modelo guardado en `ai_config.model` es uno que el proveedor
+    marca como deprecado, se reemplaza por su `default_model`. La
+    persistencia en BD se hace en `_resolve_from_db` con `safe_session`
+    para no afectar la transacción del request en curso.
+
+    Args:
+        provider_name: nombre del proveedor (ej. "anthropic").
+        current_model: modelo guardado actualmente en BD.
+
+    Returns:
+        Nuevo modelo si hay que migrar, None si no hace falta.
+    """
+    if not current_model:
+        return None
+
+    cls = _PROVIDER_CLASSES.get(provider_name)
+    if not cls:
+        return None
+
+    deprecated = getattr(cls, "deprecated_models", frozenset())
+    if current_model not in deprecated:
+        return None
+
+    new_model = getattr(cls, "default_model", "") or ""
+    if not new_model:
+        return None
+
+    logger.warning(
+        "Modelo %s '%s' está deprecado. Auto-migrando a '%s' en ai_config.",
+        provider_name, current_model, new_model,
+    )
+    return new_model
+
+
+def _persist_model_migration(new_model: str) -> None:
+    """
+    Persiste el nuevo modelo en `ai_config` usando una sesión separada
+    (safe_session) para evitar contaminar la transacción del request.
+
+    Cualquier fallo se loguea pero no propaga, porque la migración es
+    un nice-to-have (el `_safe_model` del provider sigue siendo la
+    red de seguridad real en runtime).
+    """
+    try:
+        from app.db.database import safe_session
+        from app.db.models.ai_config import AIConfig
+        with safe_session() as s:
+            cfg = s.query(AIConfig).filter(AIConfig.id == 1).first()
+            if cfg and cfg.model != new_model:
+                cfg.model = new_model
+                s.commit()
+                logger.info("ai_config.model actualizado a '%s'", new_model)
+    except Exception as e:
+        logger.warning("No se pudo persistir migración de modelo: %s", e)
+
+
 # ─────────────────────────────────────────────────────
 # Resolución desde BD (FASE 2)
 # ─────────────────────────────────────────────────────
@@ -122,11 +185,21 @@ def _resolve_from_db(db) -> Optional[Tuple[str, str, dict]]:
             logger.warning(f"Proveedor en BD no reconocido: {config.provider}")
             return None
 
+        # ── FASE 1.2 — Fix 1.2: Auto-migrar modelo deprecado ──
+        # Si la fila `ai_config` tiene un modelo deprecado guardado
+        # (ej. instalación existente con claude-sonnet-4-20250514),
+        # lo reemplazamos por el default vigente y lo persistimos.
+        effective_model = config.model or ""
+        new_model = _maybe_migrate_deprecated_model(config.provider, effective_model)
+        if new_model:
+            effective_model = new_model
+            _persist_model_migration(new_model)
+
         extras = {
             "max_tokens": config.max_tokens or 1024,
             "temperature": config.temperature if config.temperature is not None else 0.3,
             "custom_prompt": config.custom_prompt or "",
-            "model": config.model or "",
+            "model": effective_model,
         }
 
         return config.provider, api_key, extras

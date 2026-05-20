@@ -24,7 +24,7 @@ from app.einvoice.hacienda_client import (
     HaciendaSendError,
     HaciendaConfigError,
 )
-from app.utils.dt import utcnow
+from app.utils.dt import utcnow, to_cr_iso
 from app.constants.status_enums import InvoiceStatus
 
 logger = logging.getLogger(__name__)
@@ -84,14 +84,13 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
     if sale:
         receptor_tipo, receptor_numero = _extract_receptor_from_sale(db, sale)
 
-    fecha = ""
+    # FASE 2.1 — Fix 2.1: usar TZ_CR explícita en lugar de la TZ del sistema.
+    # Hacienda requiere `fecha` con offset -06:00; `astimezone()` sin argumento
+    # devolvía la TZ del SO (problema si la PC estaba mal configurada).
     if sale and sale.created_at:
-        try:
-            fecha = sale.created_at.astimezone().isoformat(timespec="seconds")
-        except Exception:
-            fecha = sale.created_at.isoformat()
+        fecha = to_cr_iso(sale.created_at)
     else:
-        fecha = utcnow().isoformat()
+        fecha = to_cr_iso(None)  # → now_cr() en CR
 
     xml_b64 = base64.b64encode(einv.xml_signed.encode("utf-8")).decode("ascii")
 
@@ -277,7 +276,8 @@ def send_rep_to_hacienda(db: Session, rep_id: int) -> dict:
     receptor_tipo = getattr(customer, "id_type", None) if customer else None
     receptor_numero = getattr(customer, "id_number", None) if customer else None
 
-    fecha = rep.created_at.isoformat() if rep.created_at else utcnow().isoformat()
+    # FASE 2.1 — Fix 2.1: garantizar offset -06:00 también para REPs.
+    fecha = to_cr_iso(rep.created_at)
     xml_b64 = base64.b64encode(rep.xml_signed.encode("utf-8")).decode("ascii")
 
     client = get_hacienda_client()

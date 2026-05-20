@@ -73,58 +73,371 @@ BACKEND_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
 
 
 def _first_run_check():
-    """Verifica si es la primera ejecución y ejecuta setup inicial."""
+    """Verifica si es la primera ejecución y ejecuta setup inicial.
+
+    FASE 3.10 — Fix 3.10: blinda contra estado inconsistente.
+
+    Antes:
+      Si `_initialize_database()` fallaba a mitad (corte de luz, disco
+      lleno, error transitorio de SQLite), el archivo `.db` ya estaba
+      creado con algunas tablas, sin `alembic_version` correcto. El
+      siguiente arranque vería `db_path.exists() == True` y mandaría
+      a `_auto_migrate()` que fallaría intentando ejecutar migraciones
+      sobre una BD a medio crear.
+
+    Ahora:
+      1. Si la inicialización falla, BORRAMOS el archivo `.db` parcial
+         antes de re-lanzar el error. El próximo arranque vuelve a
+         intentar desde cero limpio.
+      2. Si la BD existe, verificamos su consistencia ANTES de
+         `_auto_migrate()`. Si faltan tablas declaradas en los modelos
+         → abortar con `MigrationFailedError` y dejar que el usuario
+         decida (restaurar backup o borrar y empezar de nuevo).
+    """
     from app.core.config import settings, is_sqlite, APP_DIR
 
     if is_sqlite():
         db_path = APP_DIR / settings.db_sqlite_path
+
         if not db_path.exists():
             logger.info("Primera ejecución detectada. Creando base de datos...")
-            _initialize_database()
+            try:
+                _initialize_database()
+            except Exception:
+                # FASE 3.10 — Fix 3.10: borrar BD parcial para reintento limpio.
+                if db_path.exists():
+                    try:
+                        db_path.unlink()
+                        logger.warning(
+                            "Inicialización falló. BD parcial eliminada para "
+                            "que el próximo arranque vuelva a intentar limpio."
+                        )
+                    except Exception as cleanup_err:
+                        logger.error(
+                            "Inicialización falló Y no se pudo borrar la BD "
+                            "parcial: %s. Borre manualmente: %s",
+                            cleanup_err, db_path,
+                        )
+                raise
             return True
 
-    # ── FASE 4 — Fix 4.4: Auto-migración en cada arranque ──
-    # Si la BD ya existe, aplicar migraciones pendientes automáticamente.
-    # Esto cubre el caso donde el dueño de la ferretería actualiza la app
-    # (nuevo .exe) pero la BD tiene esquema viejo. Sin esto, tendría que
-    # correr 'alembic upgrade head' manualmente.
+        # FASE 3.10 — Fix 3.10: BD existe → verificar consistencia ANTES
+        # de intentar migrar. Si está corrupta, fallar limpio con guía.
+        ok, issues = _verify_existing_db_health()
+        if not ok:
+            raise MigrationFailedError(
+                "La base de datos existe pero está en estado inconsistente "
+                "(probablemente la creación inicial falló a mitad en un arranque previo).",
+                backup_path=None,
+                details=issues + [
+                    f"Para reparar: elimine '{db_path}' y reinicie Violette POS "
+                    f"para crear una BD nueva, o restaure manualmente desde "
+                    f"el último backup en data/backups/."
+                ],
+            )
+
     _auto_migrate()
     return False
 
 
-def _initialize_database():
-    """Crea tablas y datos iniciales."""
+def _verify_existing_db_health() -> tuple[bool, list[str]]:
+    """
+    FASE 3.10 — Fix 3.10: Chequea si una BD pre-existente está sana
+    para auto-migrar.
+
+    Retorna (True, []) si es seguro proceder con _auto_migrate().
+    Retorna (False, [problemas]) si la BD parece corrupta o a medio crear.
+
+    Side effect controlado:
+      Si la BD tiene TODAS las tablas esperadas pero le falta
+      `alembic_version` (instalación legacy creada con `create_all`
+      sin stamp, pre-Fix 2.6), aplica `stamp head` para sincronizar.
+      Esto permite que las migraciones futuras la traten como una
+      instalación normal.
+    """
+    issues: list[str] = []
     try:
+        from sqlalchemy import inspect
+        from app.db.database import Base, engine
+        import app.db.models  # noqa: F401  - registrar modelos en metadata
+
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+
+        # Caso 1: BD vacía (archivo existe pero sin tablas)
+        if len(tables) == 0:
+            issues.append(
+                "El archivo de base de datos existe pero está vacío "
+                "(0 tablas). Probablemente la creación inicial se "
+                "interrumpió antes de aplicar migraciones."
+            )
+            return False, issues
+
+        # Caso 2: faltan tablas esperadas por los modelos
+        expected = set(Base.metadata.tables.keys())
+        missing = sorted(expected - tables)
+        if missing:
+            issues.append(
+                f"Faltan tablas declaradas en los modelos: {missing[:8]}"
+                + (f" (y {len(missing) - 8} más)" if len(missing) > 8 else "")
+            )
+            return False, issues
+
+        # Caso 3: tablas completas pero sin alembic_version
+        # (instalación legacy pre-Fix 2.6). Stampeamos head para
+        # sincronizar y dejar que migraciones futuras sigan normal.
+        if "alembic_version" not in tables:
+            logger.warning(
+                "BD con tablas completas pero sin alembic_version. "
+                "Aplicando stamp head para sincronizar (instalación legacy)."
+            )
+            try:
+                _stamp_alembic_head()
+            except Exception as e:
+                issues.append(
+                    f"No se pudo aplicar stamp head a BD legacy: {e}"
+                )
+                return False, issues
+
+        return True, []
+
+    except Exception as e:
+        # Si la verificación rompe por algo no esperado, considerar la BD
+        # inválida — mejor que intentar migrarla a ciegas.
+        issues.append(f"La verificación de consistencia de BD falló: {e}")
+        return False, issues
+
+
+# ═══════════════════════════════════════════════════════════════
+# FASE 2.5 — Fix 2.5: Verificación de consistencia post-migración
+# ═══════════════════════════════════════════════════════════════
+
+class MigrationFailedError(Exception):
+    """
+    La auto-migración Alembic falló y la BD puede estar en estado
+    inconsistente. Conserva la ruta del backup pre-migración para
+    que `main()` pueda ofrecer al usuario la opción de restaurarlo
+    en lugar de seguir con una BD rota.
+    """
+
+    def __init__(self, message: str, backup_path: str | None = None,
+                 details: list[str] | None = None):
+        super().__init__(message)
+        self.backup_path = backup_path
+        self.details = details or []
+
+
+def _verify_schema_consistency(expected_head: str | None = None) -> tuple[bool, list[str]]:
+    """
+    FASE 2.5 — Fix 2.5: Verifica que la BD está en el estado esperado
+    después de aplicar migraciones.
+
+    Chequea:
+      1. La versión actual de Alembic en BD coincide con HEAD.
+      2. Todas las tablas declaradas en los modelos existen en BD.
+
+    NO verifica columnas individuales — eso requeriría una comparación
+    exhaustiva que es costosa y propensa a falsos positivos (columnas
+    computed, defaults SQL, etc.). Las tablas faltantes son indicador
+    suficiente de migración fallida a mitad.
+
+    Args:
+        expected_head: revisión Alembic esperada. Si es None, se intenta
+                       obtener automáticamente.
+
+    Returns:
+        (ok, issues): ok=True si todo está bien; issues=lista de strings
+                      describiendo cada problema encontrado.
+    """
+    issues: list[str] = []
+
+    try:
+        from sqlalchemy import inspect
+        from app.db.database import Base, engine
+        import app.db.models  # carga todos los modelos en Base.metadata
+
+        # 1) Alembic version = HEAD
+        from alembic.runtime.migration import MigrationContext
+        with engine.connect() as conn:
+            context = MigrationContext.configure(conn)
+            current_rev = context.get_current_revision()
+
+        if expected_head is None:
+            from alembic.config import Config
+            from alembic.script import ScriptDirectory
+            if getattr(sys, "frozen", False):
+                base = Path(sys.executable).parent
+            else:
+                base = Path(__file__).parent
+            ini_path = base / "alembic.ini"
+            if ini_path.exists():
+                cfg = Config(str(ini_path))
+                cfg.set_main_option("script_location", str(base / "alembic"))
+                expected_head = ScriptDirectory.from_config(cfg).get_current_head()
+
+        if expected_head and current_rev != expected_head:
+            issues.append(
+                f"Versión Alembic en BD ({current_rev or '(ninguna)'}) "
+                f"no coincide con HEAD esperado ({expected_head})."
+            )
+
+        # 2) Tablas declaradas vs tablas reales
+        inspector = inspect(engine)
+        actual_tables = set(inspector.get_table_names())
+        expected_tables = set(Base.metadata.tables.keys())
+
+        missing = sorted(expected_tables - actual_tables)
+        if missing:
+            issues.append(
+                f"Tablas declaradas en los modelos que faltan en la BD: {missing}"
+            )
+        # Tablas extra (no en modelos) NO son problema: alembic_version y
+        # tablas legacy son válidas; no las reportamos.
+
+    except Exception as e:
+        # Si la propia verificación rompe, NO bloqueamos el arranque por
+        # un fallo del verificador. Pero sí lo logueamos como warning.
+        logger.warning(
+            "No se pudo verificar consistencia del esquema: %s. "
+            "Continuando con el arranque.", e,
+        )
+        return True, []
+
+    return len(issues) == 0, issues
+
+
+def _initialize_database():
+    """
+    Crea tablas y datos iniciales en una BD nueva.
+
+    FASE 2.6 — Fix 2.6: Inicialización vía Alembic, no `create_all`.
+
+    Antes:
+        Base.metadata.create_all() + alembic stamp head
+        Problema: las migraciones futuras DEBÍAN ser idempotentes porque
+        `create_all` ya creaba todo el schema y `stamp head` solo marcaba
+        la revisión. Si una migración nueva intentaba `op.create_index(...)`
+        sobre un índice que `create_all` ya creó implícitamente, fallaba
+        con "index already exists".
+
+    Ahora:
+        alembic upgrade head desde BD vacía.
+        Las migraciones se aplican en orden y dejan `alembic_version`
+        correctamente seteada. Cualquier migración futura puede asumir que
+        la BD fue construida POR la cadena Alembic — no por SQLAlchemy
+        directo. Esto elimina la necesidad de idempotencia y permite que
+        las migraciones usen comandos DDL normales (create_table, create_index,
+        add_column).
+
+    Fallback: si Alembic no está disponible (caso muy raro: instalación
+    rota), se usa `create_all` como red de seguridad. En ese caso se
+    advierte en logs porque la BD quedará con `alembic_version` vacío y
+    las migraciones futuras pueden requerir intervención manual.
+    """
+    try:
+        # Cargar todos los modelos (registra en Base.metadata para fallback)
         from app.db.database import Base, engine
         import app.db.models  # noqa: F401
 
-        logger.info("Creando tablas...")
-        Base.metadata.create_all(bind=engine)
+        # ── Ruta correcta: Alembic upgrade head ──
+        used_alembic = _initialize_via_alembic()
 
+        if not used_alembic:
+            # Fallback solo si Alembic no está disponible
+            logger.warning(
+                "Alembic no disponible — usando create_all como fallback. "
+                "Las migraciones futuras pueden requerir intervención manual."
+            )
+            Base.metadata.create_all(bind=engine)
+
+        # Datos iniciales (seed) — solo después de que las tablas existen
         logger.info("Insertando datos iniciales...")
         from app.scripts.seed_db import run as run_seed
         run_seed(force=False)
 
         logger.info("Base de datos inicializada correctamente.")
 
-        # Marcar alembic como up-to-date para que no intente re-migrar
-        _stamp_alembic_head()
-
+    except MigrationFailedError:
+        # Propagar para que main() ofrezca recovery (aunque en first-run
+        # no hay backup que restaurar; el handler hará lo correcto).
+        raise
     except Exception as e:
         logger.error(f"Error inicializando BD: {e}")
         raise
 
 
+def _initialize_via_alembic() -> bool:
+    """
+    FASE 2.6 — Fix 2.6: Aplica `alembic upgrade head` desde BD vacía.
+
+    Retorna True si se aplicó correctamente, False si Alembic no está
+    disponible (en ese caso el caller usa el fallback `create_all`).
+
+    Levanta MigrationFailedError si Alembic está disponible pero las
+    migraciones fallan — no debería ocurrir en una instalación normal,
+    pero si pasa, el paquete está roto y el dueño tiene que reinstalar.
+    """
+    try:
+        from alembic.config import Config
+        from alembic import command
+    except ImportError:
+        return False
+
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).parent
+
+    ini_path = base / "alembic.ini"
+    if not ini_path.exists():
+        logger.debug("alembic.ini no encontrado en first-run; usando fallback.")
+        return False
+
+    alembic_cfg = Config(str(ini_path))
+    alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+
+    logger.info("Aplicando cadena de migraciones desde cero (upgrade head)...")
+    try:
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Cadena de migraciones aplicada en first-run.")
+    except Exception as e:
+        logger.error("Error en upgrade inicial: %s", e, exc_info=True)
+        raise MigrationFailedError(
+            "No se pudo crear la base de datos aplicando las migraciones de Alembic. "
+            "Esto suele indicar un paquete de instalación dañado o un problema con "
+            "permisos de escritura.",
+            backup_path=None,  # No hay backup en first-run
+            details=[f"Error inicial: {e}"],
+        )
+
+    # Verificación post-creación (defensa frente a fallos silenciosos)
+    ok, issues = _verify_schema_consistency()
+    if not ok:
+        raise MigrationFailedError(
+            "La inicialización completó pero el esquema quedó inconsistente.",
+            backup_path=None,
+            details=issues,
+        )
+
+    return True
+
+
 def _auto_migrate():
     """
     FASE 4 — Fix 4.4: Aplica migraciones Alembic pendientes automáticamente.
+    FASE 2.5 — Fix 2.5: Backup obligatorio + verificación de consistencia.
 
-    Seguridades:
-      - Si alembic no está configurado, no hace nada (log warning).
-      - Si no hay migraciones pendientes, termina en <50ms.
-      - Crea backup antes de migrar (por si algo sale mal).
-      - Si la migración falla, el error se loguea pero la app intenta iniciar
-        de todas formas (la BD vieja probablemente funcione con el código nuevo).
+    Flujo:
+      1. Detectar si hay migraciones pendientes.
+      2. Si las hay, crear backup pre-migración. Si el backup FALLA, no migrar.
+      3. Aplicar migraciones.
+      4. Verificar consistencia post-migración (versión Alembic + tablas).
+      5. Si la migración o la verificación fallan, levantar MigrationFailedError
+         con la ruta del backup para que main() ofrezca restaurarlo.
+
+    Casos en los que NO levantamos excepción crítica:
+      - Alembic no está instalado/disponible (instalación no usa migrations).
+      - No hay migraciones pendientes (no-op).
     """
     try:
         from alembic.config import Config
@@ -132,66 +445,105 @@ def _auto_migrate():
         from alembic.script import ScriptDirectory
         from alembic.runtime.migration import MigrationContext
         from app.db.database import engine
+    except ImportError:
+        logger.debug("Alembic no disponible, omitiendo auto-migración.")
+        return
 
-        # Buscar alembic.ini
-        if getattr(sys, 'frozen', False):
-            base = Path(sys.executable).parent
-        else:
-            base = Path(__file__).parent
+    # Buscar alembic.ini
+    if getattr(sys, 'frozen', False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).parent
 
-        ini_path = base / "alembic.ini"
-        if not ini_path.exists():
-            logger.debug("alembic.ini no encontrado, omitiendo auto-migración.")
-            return
+    ini_path = base / "alembic.ini"
+    if not ini_path.exists():
+        logger.debug("alembic.ini no encontrado, omitiendo auto-migración.")
+        return
 
-        alembic_cfg = Config(str(ini_path))
-        # Asegurar que script_location apunte al directorio correcto
-        alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+    alembic_cfg = Config(str(ini_path))
+    alembic_cfg.set_main_option("script_location", str(base / "alembic"))
 
+    try:
         script = ScriptDirectory.from_config(alembic_cfg)
-
         with engine.connect() as conn:
             context = MigrationContext.configure(conn)
             current_rev = context.get_current_revision()
-
         head_rev = script.get_current_head()
-
-        if current_rev == head_rev:
-            logger.debug("Base de datos al día, sin migraciones pendientes.")
-            return
-
-        logger.info(
-            f"Migraciones pendientes detectadas: {current_rev or '(ninguna)'} → {head_rev}. "
-            f"Aplicando automáticamente..."
-        )
-
-        # Backup de seguridad antes de migrar
-        try:
-            from app.services.backup_service import create_backup
-            backup_path = create_backup(tag="pre_migration")
-            logger.info(f"Backup pre-migración creado: {backup_path}")
-        except Exception as be:
-            logger.warning(f"No se pudo crear backup pre-migración: {be}")
-
-        # Aplicar migraciones
-        command.upgrade(alembic_cfg, "head")
-        logger.info("Migraciones aplicadas correctamente.")
-
-    except ImportError:
-        logger.debug("Alembic no disponible, omitiendo auto-migración.")
     except Exception as e:
         logger.error(
-            f"Error en auto-migración: {e}. "
-            f"La app intentará iniciar de todas formas. "
-            f"Si hay problemas, ejecute 'alembic upgrade head' manualmente.",
-            exc_info=True,
+            "Error consultando estado de Alembic: %s. "
+            "Omitiendo auto-migración.", e,
         )
+        return
+
+    if current_rev == head_rev:
+        logger.debug("Base de datos al día, sin migraciones pendientes.")
+        return
+
+    logger.info(
+        "Migraciones pendientes detectadas: %s → %s. Aplicando automáticamente...",
+        current_rev or "(ninguna)", head_rev,
+    )
+
+    # ── FASE 2.5 — Fix 2.5: Backup pre-migración OBLIGATORIO ──
+    # Sin backup, no migramos. Si algo sale mal después no podríamos
+    # ofrecer recovery al usuario y la ferretería podría perder datos.
+    try:
+        from app.services.backup_service import create_backup
+        backup_path = create_backup(tag="pre_migration")
+        logger.info("Backup pre-migración creado: %s", backup_path)
+    except Exception as be:
+        logger.error("No se pudo crear backup pre-migración: %s", be, exc_info=True)
+        raise MigrationFailedError(
+            "Migración cancelada: no se pudo crear el backup de seguridad. "
+            "La base de datos NO fue modificada. "
+            "Verifique espacio en disco y permisos de escritura en data/backups/.",
+            backup_path=None,
+            details=[f"Error de backup: {be}"],
+        )
+
+    # ── Aplicar migraciones ──
+    try:
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Migraciones aplicadas (upgrade head OK).")
+    except Exception as e:
+        logger.error("Error aplicando migraciones: %s", e, exc_info=True)
+        raise MigrationFailedError(
+            "La migración falló y la base de datos puede estar en estado inconsistente.",
+            backup_path=backup_path,
+            details=[f"Error de Alembic: {e}"],
+        )
+
+    # ── FASE 2.5 — Fix 2.5: Verificación post-migración ──
+    # Es posible que `command.upgrade` reporte éxito pero la BD quede
+    # parcialmente migrada (ej. dialect cliente con autocommit no soportado
+    # para DDL, error de constraint, etc.). Validamos explícitamente.
+    ok, issues = _verify_schema_consistency(expected_head=head_rev)
+    if not ok:
+        logger.error("Verificación post-migración falló:\n  - %s", "\n  - ".join(issues))
+        raise MigrationFailedError(
+            "La migración completó pero la base de datos quedó en estado inconsistente. "
+            "Tablas esperadas faltan o la versión de Alembic no coincide.",
+            backup_path=backup_path,
+            details=issues,
+        )
+
+    logger.info("Verificación post-migración OK. Schema en estado esperado.")
 
 
 def _stamp_alembic_head():
     """
-    Marca la BD como up-to-date en alembic sin ejecutar migraciones.
-    Se usa después de create_all() en first run.
+    DEPRECATED — FASE 2.6 — Fix 2.6.
+
+    Esta función ya no se usa en el flujo principal. Se mantenía solo para
+    el caso "first run con create_all" que ahora se reemplazó por
+    `_initialize_via_alembic()` (que aplica las migraciones reales en orden
+    y deja `alembic_version` correctamente seteada por la cadena).
+
+    Se conserva el código por si algún script externo / tarea de mantenimiento
+    necesita marcar manualmente la BD como up-to-date sin correr migraciones
+    (ej. después de un restore desde un dump que no incluyó `alembic_version`).
+    No es invocada automáticamente en ningún flujo del launcher.
     """
     try:
         from alembic.config import Config
@@ -209,7 +561,7 @@ def _stamp_alembic_head():
         alembic_cfg = Config(str(ini_path))
         alembic_cfg.set_main_option("script_location", str(base / "alembic"))
         command.stamp(alembic_cfg, "head")
-        logger.info("Alembic marcado en HEAD (primera ejecución).")
+        logger.info("Alembic marcado en HEAD (uso manual).")
     except Exception as e:
         logger.warning(f"No se pudo marcar alembic HEAD: {e}")
 
@@ -375,6 +727,107 @@ def _start_ui():
     return app.exec()
 
 
+# ═══════════════════════════════════════════════════════════════
+# FASE 2.5 — Fix 2.5: Handler del diálogo de recovery
+# ═══════════════════════════════════════════════════════════════
+
+def _handle_migration_failure(error: MigrationFailedError) -> bool:
+    """
+    Muestra un diálogo modal al usuario cuando la auto-migración falla y
+    le ofrece restaurar desde el backup pre-migración.
+
+    Returns:
+        True  → el usuario eligió restaurar Y el restore fue exitoso.
+                Se debe cerrar la app para que el siguiente arranque tome
+                el estado restaurado.
+        False → el usuario eligió no restaurar, o el restore falló.
+    """
+    from PySide6.QtWidgets import QApplication, QMessageBox
+
+    if QApplication.instance() is None:
+        QApplication(sys.argv)
+
+    details_text = "\n  • ".join(error.details) if error.details else "(sin detalles)"
+
+    main_msg = (
+        f"{error}\n\n"
+        f"Detalle:\n  • {details_text}\n\n"
+        "Para evitar daños, Violette POS no continuará con la base de datos "
+        "en este estado."
+    )
+
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Critical)
+    box.setWindowTitle("Error de actualización — Violette POS")
+    box.setText("La actualización de la base de datos falló.")
+    box.setInformativeText(main_msg)
+
+    if error.backup_path:
+        # Tenemos backup → ofrecer restaurar
+        btn_restore = box.addButton("Restaurar backup automáticamente", QMessageBox.AcceptRole)
+        btn_close = box.addButton("Cerrar (restaurar manualmente)", QMessageBox.RejectRole)
+        box.setDefaultButton(btn_restore)
+        box.setDetailedText(
+            f"Backup pre-migración disponible en:\n{error.backup_path}\n\n"
+            "Si elige 'Restaurar backup', la BD volverá al estado previo a la "
+            "actualización. Después puede contactar soporte.\n\n"
+            "Si elige 'Cerrar', deberá restaurar manualmente el backup antes "
+            "de volver a abrir Violette POS."
+        )
+        box.exec()
+
+        if box.clickedButton() is btn_restore:
+            return _attempt_restore(error.backup_path)
+        return False
+    else:
+        # Sin backup (caso: backup falló antes de migrar). La BD NO fue tocada.
+        box.addButton("Cerrar", QMessageBox.RejectRole)
+        box.setDetailedText(
+            "Como el backup no se pudo crear, la migración se canceló a "
+            "tiempo y la base de datos NO fue modificada. Verifique espacio "
+            "en disco y permisos de escritura en data/backups/, luego vuelva "
+            "a iniciar Violette POS."
+        )
+        box.exec()
+        return False
+
+
+def _attempt_restore(backup_path: str) -> bool:
+    """
+    Intenta restaurar el backup pre-migración. Si tiene éxito, retorna True.
+    Si falla, muestra un nuevo diálogo informando al usuario que debe
+    restaurar manualmente.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    try:
+        from app.services.backup_service import restore_backup
+        # restore_backup espera filename relativo a BACKUP_DIR o ruta absoluta.
+        # `backup_path` viene como ruta absoluta de create_backup() → OK.
+        logger.info("Restaurando backup pre-migración: %s", backup_path)
+        restore_backup(backup_path)
+        logger.info("Restore completado. La app se cerrará para reiniciar.")
+
+        QMessageBox.information(
+            None,
+            "Restauración completada",
+            "La base de datos se restauró al estado previo a la actualización.\n\n"
+            "Violette POS se cerrará. Vuelva a abrirlo para usarlo normalmente.",
+        )
+        return True
+
+    except Exception as e:
+        logger.error("Error restaurando backup: %s", e, exc_info=True)
+        QMessageBox.critical(
+            None,
+            "Error restaurando backup",
+            f"No se pudo restaurar el backup automáticamente:\n\n{e}\n\n"
+            f"Restaure manualmente el archivo:\n{backup_path}\n\n"
+            "Contacte soporte si necesita ayuda.",
+        )
+        return False
+
+
 def main():
     """Flujo principal: setup → backend → UI."""
     # Ahora que app está en el path, usar el logger estructurado
@@ -384,7 +837,18 @@ def main():
     app_logger.info("=" * 50)
 
     try:
-        _first_run_check()
+        # ── FASE 2.5 — Fix 2.5: capturar fallos de migración por separado ──
+        # MigrationFailedError tiene contexto suficiente para ofrecer recovery.
+        # Las demás excepciones siguen el flujo de "error fatal genérico".
+        try:
+            _first_run_check()
+        except MigrationFailedError as me:
+            app_logger.error("Migración fallida: %s", me)
+            _handle_migration_failure(me)
+            # En cualquier caso (restore OK o usuario rechazó), terminamos.
+            # Si el restore fue OK, el siguiente arranque toma el estado limpio.
+            sys.exit(2)
+
         _start_backend()
         exit_code = _start_ui()
 

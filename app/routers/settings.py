@@ -521,6 +521,82 @@ def get_issuer_profile(db: Session = Depends(get_db)):
     return success_response("Perfil emisor obtenido", issuer)
 
 
+# ──────────────────────────────────────────────────────────
+# FASE 2.4 — Fix 2.4: Status del perfil emisor (gate de UI)
+# ──────────────────────────────────────────────────────────
+@router.get("/issuer-profile/status",
+            dependencies=[Depends(get_current_user)])
+def get_issuer_profile_status(db: Session = Depends(get_db)):
+    """
+    Indica si el perfil del emisor está configurado con datos reales.
+
+    Lo consulta el UI antes de abrir la vista de Ventas: si el perfil
+    está sin configurar (placeholder), muestra un modal bloqueante
+    para forzar al dueño a completar los datos antes de la primera venta.
+
+    Response:
+        {
+          "data": {
+            "is_configured": bool,
+            "missing_fields": [str, ...],
+            "blocking_reason": str | null,
+          },
+          ...
+        }
+
+    `is_configured = false` indica que el emisor:
+      - no existe, o
+      - tiene id_number = "000000000" (placeholder), o
+      - tiene legal_name aún por configurar.
+    """
+    issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
+
+    _DUMMY_ID = "000000000"
+    _DUMMY_LEGAL_PREFIX = "NOMBRE LEGAL POR CONFIGURAR"
+
+    missing = []
+    reason = None
+
+    if not issuer:
+        missing = ["legal_name", "id_type", "id_number", "email", "branch_code", "terminal_code"]
+        reason = "No hay perfil de emisor configurado."
+        return success_response(
+            "Estado del perfil emisor",
+            {
+                "is_configured": False,
+                "missing_fields": missing,
+                "blocking_reason": reason,
+            },
+        )
+
+    if issuer.id_number == _DUMMY_ID:
+        missing.append("id_number")
+        reason = "El perfil tiene cédula genérica '000000000'."
+
+    if issuer.legal_name and issuer.legal_name.upper().startswith(_DUMMY_LEGAL_PREFIX):
+        missing.append("legal_name")
+        if reason is None:
+            reason = "La razón social está en estado 'por configurar'."
+
+    # Otros campos críticos vacíos (defensivo, aunque seed los llena)
+    for field in ("email", "branch_code", "terminal_code"):
+        if not getattr(issuer, field, None):
+            missing.append(field)
+
+    is_configured = len(missing) == 0
+    if not is_configured and reason is None:
+        reason = "Faltan campos críticos: " + ", ".join(missing)
+
+    return success_response(
+        "Estado del perfil emisor",
+        {
+            "is_configured": is_configured,
+            "missing_fields": missing,
+            "blocking_reason": reason,
+        },
+    )
+
+
 @router.put("/issuer-profile", response_model=APIResponse[IssuerProfileOut],
             dependencies=[Depends(require_role("admin"))])
 def update_issuer_profile(payload: IssuerProfileUpdate, db: Session = Depends(get_db),

@@ -1,9 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Generación de comprobantes PDF para ventas de AGROMATINA.
+Generación de comprobantes PDF para ventas de Violette POS.
+
+FASE 3.8 — Fix 3.8: docstring y logo limpiados de marcas de un proyecto
+anterior ("AGROMATINA"). El logo ahora se busca como "logo.png" en
+`app/static/` (sin nombre acoplado a un cliente específico). Si el
+archivo no existe, el PDF se genera sin logo (comportamiento previo).
 
 Este módulo crea un PDF sencillo pero bonito con:
-- Logo de la ferretería
+- Logo de la ferretería (opcional)
 - Datos del negocio
 - Datos de la venta
 - Tabla de productos
@@ -37,8 +42,10 @@ STATIC_DIR = os.path.join(BASE_DIR, "static")
 # ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
 PDF_DIR = str(get_pdf_dir())
 
-# Logo (ajusta el nombre/ruta si lo guardás distinto)
-LOGO_PATH = os.path.join(STATIC_DIR, "agromatina_logo.png")
+# Logo (FASE 3.8 — Fix 3.8): nombre genérico, no acoplado a un cliente.
+# Si el archivo no existe (caso default), el PDF se genera sin logo.
+# Para personalizar: copiá tu logo a `app/static/logo.png`.
+LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
 
 # get_pdf_dir() ya crea la carpeta automáticamente
 

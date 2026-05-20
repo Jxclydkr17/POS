@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +41,24 @@ RETRY_INTERVAL_SECONDS = 300     # cada 5min reintentar SEND_ERROR
 MAX_RETRY_ATTEMPTS = 3           # después de 3 intentos → FAILED
 BATCH_SIZE = 20                  # máximo de comprobantes por ciclo
 
-# Flag para detener los tasks limpiamente
+# ── FASE 1.3 — Fix 1.3: Referencias fuertes a los tasks ──
+# Python asyncio NO mantiene referencias fuertes a tasks creados con
+# `create_task`. Si nadie guarda la referencia, el garbage collector
+# puede recoger el task y el polling se detiene silenciosamente.
+#
+# Antes: `asyncio.create_task(_poller_loop())` sin asignar a nada.
+# Síntoma: el polling moría a las pocas horas y las facturas SENT
+# nunca pasaban a ACEPTADO/RECHAZADO en la UI.
+#
+# Ahora: guardamos las tasks en variables module-level, lo que
+# garantiza que vivan durante toda la ejecución de la app.
+_poller_task: Optional[asyncio.Task] = None
+_retry_task: Optional[asyncio.Task] = None
+
+# Flag para detener los loops sin cancelarlos forzosamente
+# (ej. para pausar el polling sin matar la task durante mantenimiento).
+# En el shutdown normal, `stop_background_tasks()` también llama
+# `task.cancel()`, que es el mecanismo principal de detención.
 _running = True
 
 
@@ -355,59 +373,135 @@ def get_pending_summary() -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 async def _poller_loop():
-    """Loop asíncrono que ejecuta el polling cada POLL_INTERVAL_SECONDS."""
-    # Esperar 30s al arrancar para no saturar al inicio
-    await asyncio.sleep(30)
-    logger.info(f"Hacienda Poller iniciado (cada {POLL_INTERVAL_SECONDS}s)")
+    """Loop asíncrono que ejecuta el polling cada POLL_INTERVAL_SECONDS.
 
-    while _running:
-        try:
-            # Ejecutar en thread para no bloquear el event loop
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _poll_sent_invoices)
-        except Exception as e:
-            logger.error(f"Poller loop error: {e}")
+    FASE 1.3 — Fix 1.3:
+    - Maneja `asyncio.CancelledError` para shutdown limpio.
+    - Usa `asyncio.to_thread()` en lugar de `loop.run_in_executor(None, ...)`,
+      que es la API recomendada desde Python 3.9+ (la otra está deprecated
+      en 3.10+).
+    """
+    try:
+        # Esperar 30s al arrancar para no saturar al inicio
+        await asyncio.sleep(30)
+        logger.info(f"Hacienda Poller iniciado (cada {POLL_INTERVAL_SECONDS}s)")
 
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        while _running:
+            try:
+                # Ejecutar en thread para no bloquear el event loop.
+                # Nota: si la task se cancela mientras _poll_sent_invoices
+                # está corriendo en el thread, el thread termina su iteración
+                # y luego la CancelledError se propaga aquí.
+                await asyncio.to_thread(_poll_sent_invoices)
+            except Exception as e:
+                # `except Exception` NO captura CancelledError (es BaseException
+                # en Python 3.8+), así que la cancelación se propaga limpiamente.
+                logger.error(f"Poller loop error: {e}")
+
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("Hacienda Poller cancelado limpiamente")
+        raise
 
 
 async def _retry_loop():
-    """Loop asíncrono que ejecuta reintentos cada RETRY_INTERVAL_SECONDS."""
-    # Esperar 60s al arrancar
-    await asyncio.sleep(60)
-    logger.info(f"Hacienda Retry Queue iniciada (cada {RETRY_INTERVAL_SECONDS}s, max {MAX_RETRY_ATTEMPTS} intentos)")
+    """Loop asíncrono que ejecuta reintentos cada RETRY_INTERVAL_SECONDS.
 
-    while _running:
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, _retry_failed_sends)
-        except Exception as e:
-            logger.error(f"Retry loop error: {e}")
+    FASE 1.3 — Fix 1.3: igual que `_poller_loop`, ahora maneja
+    `CancelledError` y usa `asyncio.to_thread`.
+    """
+    try:
+        # Esperar 60s al arrancar
+        await asyncio.sleep(60)
+        logger.info(
+            f"Hacienda Retry Queue iniciada (cada {RETRY_INTERVAL_SECONDS}s, "
+            f"max {MAX_RETRY_ATTEMPTS} intentos)"
+        )
 
-        await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+        while _running:
+            try:
+                await asyncio.to_thread(_retry_failed_sends)
+            except Exception as e:
+                logger.error(f"Retry loop error: {e}")
+
+            await asyncio.sleep(RETRY_INTERVAL_SECONDS)
+    except asyncio.CancelledError:
+        logger.info("Hacienda Retry Queue cancelada limpiamente")
+        raise
 
 
-def start_background_tasks():
+def start_background_tasks() -> Tuple[Optional[asyncio.Task], Optional[asyncio.Task]]:
     """
     Inicia los background tasks de polling y reintentos.
-    Llamar desde main.py en el evento startup.
+    Llamar desde main.py dentro del lifespan (startup).
+
+    FASE 1.3 — Fix 1.3:
+    - Guarda referencias a las tasks en variables module-level para
+      evitar que el garbage collector las recoja.
+    - Idempotente: si ya hay tasks corriendo, las retorna sin recrear.
+
+    Returns:
+        Tupla (poller_task, retry_task). Útil si el caller también
+        quiere guardar referencias o awaitarlas en el shutdown.
 
     Ejemplo:
-        @app.on_event("startup")
-        async def _startup():
-            from app.einvoice.hacienda_poller import start_background_tasks
-            start_background_tasks()
+        from app.einvoice.hacienda_poller import start_background_tasks
+        start_background_tasks()
     """
-    global _running
+    global _running, _poller_task, _retry_task
     _running = True
 
-    asyncio.create_task(_poller_loop())
-    asyncio.create_task(_retry_loop())
+    # Idempotencia: si ya hay tasks vivos, no recrear.
+    # Esto cubre llamadas duplicadas accidentales (hot reload, retries).
+    poller_alive = _poller_task is not None and not _poller_task.done()
+    retry_alive = _retry_task is not None and not _retry_task.done()
+    if poller_alive and retry_alive:
+        logger.warning(
+            "Background tasks de Hacienda ya estaban corriendo; "
+            "no se recrearán."
+        )
+        return _poller_task, _retry_task
+
+    # Si solo uno está vivo (estado inconsistente), detener el sobrante
+    # antes de empezar de cero.
+    if poller_alive:
+        _poller_task.cancel()
+    if retry_alive:
+        _retry_task.cancel()
+
+    _poller_task = asyncio.create_task(_poller_loop(), name="hacienda_poller")
+    _retry_task = asyncio.create_task(_retry_loop(), name="hacienda_retry")
     logger.info("Background tasks de Hacienda iniciados")
+    return _poller_task, _retry_task
 
 
-def stop_background_tasks():
-    """Señaliza a los loops que se detengan."""
-    global _running
+def stop_background_tasks() -> None:
+    """
+    Detiene los background tasks limpiamente.
+
+    FASE 1.3 — Fix 1.3:
+    - Llama `task.cancel()` en cada task. La cancelación se propaga al
+      siguiente `await` (typicamente el `asyncio.sleep` del loop), donde
+      el `try/except CancelledError` la maneja y sale limpiamente.
+    - El flag `_running = False` queda como mecanismo secundario (por si
+      algún caller futuro quiere pausar sin cancelar).
+    - Las referencias module-level se limpian para permitir un eventual
+      reinicio con `start_background_tasks()`.
+
+    Es síncrono: no espera a que los tasks terminen. El event loop de
+    FastAPI lifespan se encarga del cleanup final.
+    """
+    global _running, _poller_task, _retry_task
     _running = False
+
+    for task, label in [(_poller_task, "poller"), (_retry_task, "retry")]:
+        if task is None or task.done():
+            continue
+        try:
+            task.cancel()
+        except Exception as e:
+            logger.warning(f"Error cancelando task Hacienda {label}: {e}")
+
+    _poller_task = None
+    _retry_task = None
     logger.info("Background tasks de Hacienda detenidos")

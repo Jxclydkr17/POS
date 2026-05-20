@@ -7,7 +7,6 @@ Cubre: ventas, gastos, caja, inventario, clientes, compras y financiero.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from app.utils.dt import today_cr
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -75,8 +74,27 @@ def _period_range(period: str) -> tuple[date, date]:
     return today, today
 
 
+from app.utils.dt import today_cr, TZ_CR
+from datetime import timezone as _tz
+
+
 def _dt_range(start_d: date, end_d: date) -> tuple[datetime, datetime]:
-    return datetime.combine(start_d, time.min), datetime.combine(end_d, time.max)
+    """
+    FASE 2.2 — Fix 2.2: Retorna rango UTC que cubre [start_d, end_d] en CR.
+
+    Antes esta función retornaba `datetime.combine(d, time.min/max)` naive,
+    que asumía implícitamente que `Sale.created_at` estaba en CR-naive.
+    Después de la migración, `Sale.created_at` se guarda en UTC, por lo
+    que el rango también debe estar en UTC.
+
+    Convención: rango CERRADO `[start_utc, end_utc]` para mantener
+    compatibilidad con queries existentes que usan `<= end_dt`.
+      - start = 00:00:00 CR del start_d, convertido a UTC.
+      - end   = 23:59:59.999999 CR del end_d, convertido a UTC.
+    """
+    start_cr = datetime.combine(start_d, time.min).replace(tzinfo=TZ_CR)
+    end_cr = datetime.combine(end_d, time.max).replace(tzinfo=TZ_CR)
+    return start_cr.astimezone(_tz.utc), end_cr.astimezone(_tz.utc)
 
 
 def _period_label(period: str) -> str:

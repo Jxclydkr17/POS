@@ -25,7 +25,7 @@ Incluye facturación electrónica (Hacienda), control de inventario, caja, compr
    - La base de datos (`violette_pos.db`)
    - El archivo de configuración (`.env` con SECRET_KEY generada)
    - Las carpetas `data/logs/`, `data/pdfs/`, `data/backups/`
-4. Inicie sesión con las credenciales iniciales (ver sección siguiente).
+4. La primera vez que abra la app, aparecerá un asistente para crear su usuario administrador con la contraseña que elija (ver "Primer Inicio de Sesión" más abajo).
 
 ### Opción B — Desde código fuente (desarrollo)
 
@@ -65,15 +65,14 @@ build.bat
 
 ## Primer Inicio de Sesión
 
-| Campo    | Valor       |
-|----------|-------------|
-| Usuario  | `admin`     |
-| Contraseña | `admin123` |
+En la **primera ejecución**, Violette POS detecta que no hay usuarios en la base de datos y muestra un asistente de configuración inicial que le pedirá crear su usuario administrador:
 
-> **Importante:** La app le pedirá cambiar la contraseña en el primer inicio de sesión.  
-> Cámbiela por una contraseña segura antes de registrar datos reales.
+- **Usuario**: el nombre que prefiera (mínimo 3 caracteres). Sugerencia: `admin`.
+- **Contraseña**: mínimo 8 caracteres. Elija una contraseña fuerte; este usuario va a tener acceso completo al sistema.
 
-Después del primer login puede crear usuarios adicionales con roles de cajero o administrador desde el menú de configuración.
+> **Importante:** No existe ninguna contraseña por defecto. La primera persona que abra la app es quien establece la credencial. Si pierde la contraseña, **no hay forma de recuperarla**: tendría que restaurar desde un backup o borrar la base de datos y volver a configurar.
+
+Después de crear el administrador, puede iniciar sesión normalmente. Desde el menú de configuración puede crear usuarios adicionales con roles de cajero o administrador.
 
 ---
 

@@ -384,9 +384,19 @@ def change_own_password(
     current_user.password = hash_password(data.new_password)
     current_user.must_change_password = False
 
-    # Revocar tokens anteriores (forzar re-login con nueva contraseña)
+    # ── FASE 1.4 — Fix 1.4: revocación al borde del segundo ──
+    # Antes: `token_revoked_at = _utcnow()` quedaba con microsegundos,
+    # pero PyJWT serializa `iat` como int (segundos epoch). El nuevo
+    # token creado pocos ms después tenía un `iat` (entero) MENOR que
+    # `token_revoked_at` (con microsegundos), y la validación en
+    # `dependencies.py` lo rechazaba con "Token revocado". Bug
+    # intermitente — el usuario cambiaba contraseña y a la siguiente
+    # petición lo expulsaba "Sesión expirada".
+    #
+    # Solución: truncar a segundos para que `iat == revoked_at` y el
+    # check `iat < revoked` (estricto) deje pasar el nuevo token.
     from app.utils.dt import utcnow as _utcnow
-    current_user.token_revoked_at = _utcnow()
+    current_user.token_revoked_at = _utcnow().replace(microsecond=0)
 
     try:
         db.commit()
@@ -479,17 +489,20 @@ def update_user(
             )
         user.is_active = data.is_active
         # ── FASE 3 — Fix 3.3: Revocar tokens al desactivar ──
+        # FASE 1.4: truncar a segundos por consistencia con el resto de
+        # puntos que escriben token_revoked_at (ver change_own_password).
         if not data.is_active:
             from app.utils.dt import utcnow as _utcnow
-            user.token_revoked_at = _utcnow()
+            user.token_revoked_at = _utcnow().replace(microsecond=0)
             logger.info(f"Tokens revocados para usuario '{user.username}' (desactivado)")
 
     if data.password:
         user.password = hash_password(data.password)
         user.must_change_password = False
         # ── FASE 3 — Fix 3.3: Revocar tokens al cambiar password ──
+        # FASE 1.4: truncar a segundos por consistencia (ver change_own_password).
         from app.utils.dt import utcnow as _utcnow
-        user.token_revoked_at = _utcnow()
+        user.token_revoked_at = _utcnow().replace(microsecond=0)
         logger.info(f"Tokens revocados para usuario '{user.username}' (cambio de password)")
 
     try:

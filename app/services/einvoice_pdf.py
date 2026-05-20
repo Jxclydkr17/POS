@@ -42,7 +42,7 @@ from app.db.models.sale_detail import SaleDetail
 from app.db.models.customer import Customer
 from app.db.models.product import Product
 from app.db.models.issuer_profile import IssuerProfile
-from app.utils.dt import now_cr
+from app.utils.dt import now_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.core.config import get_pdf_dir
 
 logger = logging.getLogger(__name__)
@@ -211,7 +211,8 @@ def generate_einvoice_pdf(
     story.append(Paragraph(f"<b>Clave:</b> {clave}", styles["Normal"]))
     story.append(Spacer(1, 1 * mm))
 
-    fecha_str = (sale.created_at or now_cr()).strftime("%d/%m/%Y %H:%M:%S") if sale.created_at else now_cr().strftime("%d/%m/%Y %H:%M:%S")
+    # FASE 2.2 — Fix 2.2: fecha siempre en CR (UTC en BD → CR para mostrar).
+    fecha_str = format_cr(sale.created_at, "%d/%m/%Y %H:%M:%S") if sale.created_at else now_cr().strftime("%d/%m/%Y %H:%M:%S")
     story.append(Paragraph(f"<b>Fecha emisión:</b> {fecha_str}", styles["Normal"]))
     story.append(Spacer(1, 3 * mm))
 

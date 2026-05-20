@@ -31,6 +31,18 @@ def set_secure(db: Session, key: str, value: str) -> None:
     FASE 2 — Fix 2.2: flush en vez de commit para respetar Unit of Work.
     El caller (router) es dueño del commit, así múltiples set_secure()
     seguidos son atómicos (todo o nada).
+
+    FASE 4.3 — Fix 4.3: invalidar caché de credenciales después de la
+    escritura. Antes ningún punto del código llamaba
+    `clear_credential_cache()` después de un update, así que el dueño
+    podía cambiar credenciales de Hacienda y la app seguía usando las
+    viejas hasta el próximo reinicio. Ahora la invalidación es
+    automática para CUALQUIER caller (presente o futuro).
+
+    Si el commit posterior fallara, el caché queda invalidado
+    innecesariamente — la próxima lectura re-fetchea de BD (operación
+    leve). Es un coste aceptable frente al riesgo de servir credenciales
+    viejas tras un cambio exitoso.
     """
     encrypted = encrypt_value(value)
     row = db.query(SecureConfig).filter(SecureConfig.key == key).first()
@@ -40,6 +52,10 @@ def set_secure(db: Session, key: str, value: str) -> None:
         row = SecureConfig(key=key, value_encrypted=encrypted)
         db.add(row)
     db.flush()
+
+    # FASE 4.3 — Fix 4.3: invalidar caché
+    from app.core.credentials import clear_credential_cache
+    clear_credential_cache()
 
 
 def get_secure(db: Session, key: str) -> Optional[str]:
@@ -70,9 +86,14 @@ def delete_secure(db: Session, key: str) -> None:
     Elimina un valor de la DB.
 
     FASE 2 — Fix 2.2: flush en vez de commit (misma razón que set_secure).
+    FASE 4.3 — Fix 4.3: invalidar caché de credenciales tras eliminar.
     """
     db.query(SecureConfig).filter(SecureConfig.key == key).delete()
     db.flush()
+
+    # FASE 4.3 — Fix 4.3: invalidar caché
+    from app.core.credentials import clear_credential_cache
+    clear_credential_cache()
 
 
 def get_all_keys(db: Session) -> list[str]:

@@ -204,13 +204,38 @@ def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
 # ==========================================================
 # 🟪 Reporte completo del día (LECTURA)
 # ==========================================================
-def get_cash_report(db: Session, report_date: date) -> dict:
+def get_cash_report(
+    db: Session,
+    report_date: date,
+    cash_session_id: int | None = None,
+) -> dict:
     """
     Genera el reporte completo del día, independientemente del estado de la caja.
     Funciona tanto para cajas abiertas como cerradas.
     Incluye ventas y movimientos para evitar múltiples llamadas HTTP.
+
+    FASE 3.9 — Fix 3.9: preparar para multi-terminal sin romper mono-terminal.
+
+    Antes:
+        `db.query(CashSession).filter(CashSession.date == report_date).first()`
+        retornaba la PRIMERA sesión que coincidiera con la fecha, en orden
+        no determinístico. Hoy con mono-terminal no genera problema porque
+        hay una sola sesión por día, pero el día que alguien agregue una
+        segunda terminal (caja secundaria, oficina anexa) el reporte
+        empezaría a mezclar cajas o a retornar la "equivocada".
+
+    Ahora:
+      - Si se pasa `cash_session_id` explícito, se usa ese (futuro
+        endpoint multi-terminal puede pedir una caja específica).
+      - Si no, se toma la sesión MÁS RECIENTE de ese día (`opened_at desc`).
+        En mono-terminal: idéntico a antes (única sesión).
+        En multi-terminal sin filtro: comportamiento determinístico, no
+        aleatorio según orden de inserción.
     """
-    session = db.query(CashSession).filter(CashSession.date == report_date).first()
+    query = db.query(CashSession).filter(CashSession.date == report_date)
+    if cash_session_id is not None:
+        query = query.filter(CashSession.id == cash_session_id)
+    session = query.order_by(CashSession.opened_at.desc()).first()
     if not session:
         return {}
 

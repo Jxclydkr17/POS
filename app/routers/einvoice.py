@@ -172,17 +172,58 @@ async def hacienda_callback(request: Request, db: Session = Depends(get_db)):
     """
     Recibe notificaciones asíncronas de Hacienda sobre el estado de comprobantes.
 
-    ⚠️ LIMITACIÓN DE SEGURIDAD:
-    Este endpoint no tiene autenticación ni valida el origen de la petición.
-    Actualmente es seguro porque la app corre en localhost (inaccesible desde
-    internet). Si en el futuro se despliega en un servidor público, se DEBE:
-      1. Validar que el request provenga de IPs de Hacienda, o
-      2. Verificar la firma digital del XML de respuesta, o
-      3. Proteger con un token secreto en la URL (webhook secret).
-    Sin esto, cualquiera podría enviar callbacks falsos marcando facturas
-    como "aceptadas" sin que Hacienda las haya procesado.
+    AUTENTICACIÓN — FASE 3.6 — Fix 3.6:
+      Si `HACIENDA_CALLBACK_SECRET` está configurado en `.env`, el request
+      debe incluir el mismo valor en uno de:
+        - header `X-Callback-Token: <secret>`
+        - query param `?token=<secret>`
+      Sin token válido → 401.
+
+      Si NO hay secret configurado:
+        - localhost (127.0.0.1, ::1): se permite (compat con instalación local).
+        - cualquier otro host: se permite por compat, pero se loguea warning
+          recomendando configurar el secret.
+
+      Comparación timing-safe con `hmac.compare_digest` para evitar
+      timing attacks que pudieran inferir el secret carácter a carácter.
+
+      Generar el secret con:
+        python -c "import secrets; print(secrets.token_urlsafe(32))"
     """
     from app.db.models.electronic_rep import ElectronicRep
+    from app.core.credentials import hacienda_callback_secret
+    import hmac as _hmac
+
+    # ── FASE 3.6 — Fix 3.6: autenticación del callback ──
+    _secret = hacienda_callback_secret()
+    _client_host = request.client.host if request.client else ""
+    _is_localhost = _client_host in ("127.0.0.1", "::1", "localhost")
+
+    if _secret:
+        # Hay secret configurado → exigir token válido SIEMPRE
+        provided = (
+            request.headers.get("x-callback-token")
+            or request.query_params.get("token")
+            or ""
+        )
+        if not provided or not _hmac.compare_digest(provided, _secret):
+            logger.warning(
+                "Callback Hacienda RECHAZADO: token inválido | "
+                "client=%s | provided=%s",
+                _client_host or "?",
+                "(none)" if not provided else f"...{provided[-4:]}",
+            )
+            raise HTTPException(status_code=401, detail="Token de callback inválido")
+    else:
+        # Sin secret configurado → permitir, pero advertir si no es local
+        if not _is_localhost:
+            logger.warning(
+                "Callback Hacienda recibido SIN secret configurado, desde host "
+                "no-local (%s). Configure HACIENDA_CALLBACK_SECRET en .env "
+                "para proteger este endpoint.",
+                _client_host,
+            )
+
     try:
         body = await request.json()
     except Exception:
@@ -262,7 +303,23 @@ def get_hacienda_response(einvoice_id: int, db: Session = Depends(get_db)):
 
 
 # ================================================================
-# BUILD XML -- Fases 1+2+5: ahora maneja FE, TE, NC y ND
+# BUILD XML — FASE 1.1 (Fix 1.1): Asignación atómica de consecutivo
+# ================================================================
+#
+# Antes: este endpoint asignaba el consecutivo de DocumentSequence al
+# inicio, construía el XML, y si la construcción fallaba, el consecutivo
+# quedaba gastado para siempre, generando huecos en la secuencia.
+#
+# Ahora: el flujo es atómico. Se construye el XML con un consecutivo
+# placeholder (NO se incrementa DocumentSequence aún). Se valida XSD.
+# Solo si todo pasa, se reserva el consecutivo real con
+# `next_sequence_number()` y se reconstruye el XML con él. Esto
+# garantiza que cada incremento en DocumentSequence corresponde a un
+# XML válido que se va a firmar y enviar.
+#
+# Caso de reintento: si el einv YA tiene consecutivo/clave (por ejemplo,
+# pasó XSD/sign en un intento previo pero falló al enviar), se reutiliza
+# en lugar de reservar uno nuevo. Esto preserva el consecutivo gastado.
 # ================================================================
 @router.post("/{einvoice_id}/build-xml", dependencies=[Depends(get_current_user)])
 def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
@@ -287,57 +344,150 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     doc_type = einv.document_type
     doc_label = _DOC_LABELS.get(doc_type, "FE")
 
-    # Generar consecutivo/clave si no tiene
-    if not einv.consecutivo or not einv.clave:
-        branch = (issuer.branch_code or "001").zfill(3)
-        terminal = (issuer.terminal_code or "00001").zfill(5)
-        seq = next_sequence_number(db, branch, terminal, doc_type)
-        consecutivo = build_consecutivo(branch, terminal, doc_type, seq)
-        clave = build_clave(issuer.id_number, consecutivo)
-    else:
-        consecutivo = einv.consecutivo
-        clave = einv.clave
+    branch = (issuer.branch_code or "001").zfill(3)
+    terminal = (issuer.terminal_code or "00001").zfill(5)
 
     customer = getattr(sale, "customer", None)
 
-    # -- Generar XML segun tipo de documento --
-    if doc_type in ("01", "04"):
-        # FE o TE
-        xml = build_xml_for_sale(
-            db, sale=sale, sale_details=details,
-            clave=clave, consecutivo=consecutivo, customer=customer,
-        )
-    elif doc_type == "03":
-        # NC: buscar el documento original
+    # Para NC/ND, ubicamos el documento original UNA vez (se usa en ambas
+    # construcciones: dry-run y real).
+    original_einv = None
+    if doc_type == "03":
         original_einv = _find_original_einv(db, sale.id, einv.id)
-        xml = build_xml_for_nc(
-            db, sale=sale, sale_details=details,
-            clave=clave, consecutivo=consecutivo, customer=customer,
-            original_einv=original_einv,
-        )
     elif doc_type == "02":
-        # ND: buscar el documento original
         original_einv = _find_original_einv(db, sale.id, einv.id)
-        xml = build_xml_for_nd(
-            db, sale=sale, sale_details=details,
-            clave=clave, consecutivo=consecutivo, customer=customer,
-            original_einv=original_einv,
-        )
-    else:
+    elif doc_type not in ("01", "04"):
         raise HTTPException(status_code=400, detail=f"Tipo de documento no soportado para build-xml: {doc_type}")
 
-    # -- Validar XSD --
-    xsd_errors = validate_xml(xml, doc_label)
+    # Helper interno: construye el XML para este einv con el consecutivo
+    # y clave dados. Se invoca dos veces: una en dry-run, otra con el
+    # consecutivo real reservado.
+    def _build_with(_clave: str, _consecutivo: str) -> str:
+        if doc_type in ("01", "04"):
+            return build_xml_for_sale(
+                db, sale=sale, sale_details=details,
+                clave=_clave, consecutivo=_consecutivo, customer=customer,
+            )
+        elif doc_type == "03":
+            return build_xml_for_nc(
+                db, sale=sale, sale_details=details,
+                clave=_clave, consecutivo=_consecutivo, customer=customer,
+                original_einv=original_einv,
+            )
+        elif doc_type == "02":
+            return build_xml_for_nd(
+                db, sale=sale, sale_details=details,
+                clave=_clave, consecutivo=_consecutivo, customer=customer,
+                original_einv=original_einv,
+            )
+        else:
+            # Defensivo; ya validamos arriba
+            raise HTTPException(status_code=400, detail=f"Tipo de documento no soportado: {doc_type}")
+
+    # ── Caso reintento: einv ya tiene consecutivo asignado ──
+    # Si llegamos aquí con consecutivo/clave ya asignados (intento
+    # previo que pasó XSD pero falló en otro paso), reutilizamos los
+    # mismos en lugar de reservar uno nuevo.
+    if einv.consecutivo and einv.clave:
+        consecutivo = einv.consecutivo
+        clave = einv.clave
+        try:
+            xml = _build_with(clave, consecutivo)
+        except Exception as e:
+            # El XML ya no se puede construir aunque tengamos consecutivo
+            # (probablemente bug nuevo o datos corruptos). Marcar error
+            # SIN tocar el consecutivo (ya está en BD).
+            einv.status = "ERROR"
+            einv.last_error = f"Reintento de build-xml falló: {e}"[:500]
+            db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "Error reconstruyendo XML", "error": str(e), "einvoice_id": einv.id},
+            )
+
+        xsd_errors = validate_xml(xml, doc_label)
+        if xsd_errors:
+            einv.xml_signed = xml
+            einv.status = "XSD_ERROR"
+            einv.last_error = "; ".join(xsd_errors[:5])
+            db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "XML no paso XSD", "errors": xsd_errors[:10], "einvoice_id": einv.id},
+            )
+
+        # Firmar
+        xml_final, was_signed, sign_error = _try_sign_xml(xml)
+        einv.xml_signed = xml_final
+        einv.last_error = sign_error
+        if sign_error:
+            einv.status = "SIGN_ERROR"
+        elif was_signed:
+            einv.status = "XML_READY"
+        else:
+            einv.status = "XML_UNSIGNED"
+        db.commit()
+
+        return success_response(
+            message=("XML generado y firmado correctamente" if was_signed
+                     else "XML generado (sin firma)" if not sign_error
+                     else f"Firma fallo: {sign_error}"),
+            data={
+                "id": einv.id, "status": einv.status, "clave": clave,
+                "consecutivo": consecutivo, "doc_type": doc_label,
+                "xsd_validated": True, "signed": was_signed,
+                "sign_error": sign_error,
+            },
+        )
+
+    # ── Primer intento: dry-run con consecutivo placeholder ──
+    # Construimos el XML con un consecutivo "candidato" SIN reservar
+    # número real en DocumentSequence. Si la construcción o el XSD
+    # fallan, el consecutivo real nunca se incrementa.
+    placeholder_seq = 1  # valor irrelevante; el XML se reconstruirá si pasa todo
+    placeholder_consecutivo = build_consecutivo(branch, terminal, doc_type, placeholder_seq)
+    placeholder_clave = build_clave(issuer.id_number, placeholder_consecutivo)
+
+    try:
+        xml_dry = _build_with(placeholder_clave, placeholder_consecutivo)
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Error de construcción del XML — NO gastar consecutivo.
+        einv.status = "ERROR"
+        einv.last_error = f"Construcción XML falló: {e}"[:500]
+        db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "No se pudo construir el XML", "error": str(e), "einvoice_id": einv.id},
+        )
+
+    # XSD del dry-run: detecta errores estructurales antes de gastar consecutivo
+    xsd_errors = validate_xml(xml_dry, doc_label)
     if xsd_errors:
-        einv.consecutivo = consecutivo
-        einv.clave = clave
-        einv.xml_signed = xml
         einv.status = "XSD_ERROR"
         einv.last_error = "; ".join(xsd_errors[:5])
+        # Guardamos el XML de dry-run como referencia diagnóstica.
+        # NOTA: tiene consecutivo placeholder, NO sirve para enviar.
+        einv.xml_signed = xml_dry
         db.commit()
-        raise HTTPException(status_code=422, detail={"message": "XML no paso XSD", "errors": xsd_errors[:10], "einvoice_id": einv.id})
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "XML no paso XSD", "errors": xsd_errors[:10], "einvoice_id": einv.id},
+        )
 
-    # -- Firmar --
+    # ── Todo OK: AHORA SÍ reservar consecutivo real ──
+    # `next_sequence_number` incrementa DocumentSequence (con lock pesimista
+    # en MySQL). El commit final del db garantiza la persistencia atómica
+    # junto con el resto de cambios al einv.
+    seq = next_sequence_number(db, branch, terminal, doc_type)
+    consecutivo = build_consecutivo(branch, terminal, doc_type, seq)
+    clave = build_clave(issuer.id_number, consecutivo)
+
+    # Reconstruir XML con consecutivo real (rápido: ~10ms)
+    xml = _build_with(clave, consecutivo)
+
+    # Firmar
     xml_final, was_signed, sign_error = _try_sign_xml(xml)
 
     einv.consecutivo = consecutivo
@@ -353,8 +503,15 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     db.commit()
 
     return success_response(
-        message="XML generado y firmado correctamente" if was_signed else "XML generado (sin firma)" if not sign_error else f"Firma fallo: {sign_error}",
-        data={"id": einv.id, "status": einv.status, "clave": clave, "consecutivo": consecutivo, "doc_type": doc_label, "xsd_validated": True, "signed": was_signed, "sign_error": sign_error}
+        message=("XML generado y firmado correctamente" if was_signed
+                 else "XML generado (sin firma)" if not sign_error
+                 else f"Firma fallo: {sign_error}"),
+        data={
+            "id": einv.id, "status": einv.status, "clave": clave,
+            "consecutivo": consecutivo, "doc_type": doc_label,
+            "xsd_validated": True, "signed": was_signed,
+            "sign_error": sign_error,
+        },
     )
 
 

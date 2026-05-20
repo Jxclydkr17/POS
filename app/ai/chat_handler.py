@@ -7,12 +7,19 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from datetime import date, timedelta
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, format_cr  # FASE 2.2 — Fix 2.2
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.db.database import get_db
+
+# FASE 1.5 — Fix 1.5: autenticación en endpoints /ai/*
+# Antes los 3 endpoints (/chat, /proactive-alerts, /export-chat) eran
+# accesibles sin token: cualquier proceso local podía consumir la API
+# key de Anthropic configurada (con costo real) o ver alertas del
+# negocio. Ahora todos requieren un access token válido.
+from app.core.dependencies import get_current_user
 
 # FASE 1: Consultas de datos reales
 from app.ai.data_query_intent import try_data_query
@@ -1201,7 +1208,8 @@ def _handle_context_questions(text_norm: str, ctx: UIContext) -> Optional[str]:
     return None
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse,
+             dependencies=[Depends(get_current_user)])
 def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
     # Limpiar sesiones expiradas al inicio de cada request
     _purge_expired()
@@ -1668,7 +1676,7 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
             last_txt = ""
             if last_sale and getattr(last_sale, "created_at", None):
                 try:
-                    dt = last_sale.created_at.strftime("%Y-%m-%d %H:%M")
+                    dt = format_cr(last_sale.created_at, "%Y-%m-%d %H:%M")  # FASE 2.2
                     last_txt = f"\n🧾 Última compra: {dt} — {_format_price_crc(getattr(last_sale, 'total', 0) or 0)}"
                 except Exception as e:
                     logger.debug("Failed to format last_sale date: %s", e)
@@ -2360,7 +2368,7 @@ def chat(req: ChatRequest, db: "Session" = Depends(get_db)) -> ChatResponse:
         last_txt = ""
         if last_sale and getattr(last_sale, "created_at", None):
             try:
-                dt = last_sale.created_at.strftime("%Y-%m-%d %H:%M")
+                dt = format_cr(last_sale.created_at, "%Y-%m-%d %H:%M")  # FASE 2.2
                 last_txt = f"\n🧾 Última compra: {dt} — {_format_price_crc(getattr(last_sale, 'total', 0) or 0)}"
             except Exception as e:
                 logger.debug("Failed to format last_sale date: %s", e)
@@ -2611,7 +2619,8 @@ class ProactiveAlertsResponse(BaseModel):
     suggestions: List[str] = Field(default_factory=list)
 
 
-@router.get("/proactive-alerts", response_model=ProactiveAlertsResponse)
+@router.get("/proactive-alerts", response_model=ProactiveAlertsResponse,
+            dependencies=[Depends(get_current_user)])
 def proactive_alerts(db: "Session" = Depends(get_db)) -> ProactiveAlertsResponse:
     """FASE 7: Alertas proactivas al abrir el chat."""
     try:
@@ -2641,7 +2650,8 @@ class ExportResponse(BaseModel):
     filename: str
 
 
-@router.post("/export-chat", response_model=ExportResponse)
+@router.post("/export-chat", response_model=ExportResponse,
+             dependencies=[Depends(get_current_user)])
 def export_chat(req: ExportRequest) -> ExportResponse:
     """FASE 7: Exportar conversación del chat."""
     # FASE 4 — Fix 4.3: now_cr() para consistencia con zona horaria CR
