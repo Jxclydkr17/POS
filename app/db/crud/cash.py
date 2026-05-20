@@ -227,15 +227,18 @@ def get_cash_report(
     Ahora:
       - Si se pasa `cash_session_id` explícito, se usa ese (futuro
         endpoint multi-terminal puede pedir una caja específica).
-      - Si no, se toma la sesión MÁS RECIENTE de ese día (`opened_at desc`).
+      - Si no, se toma la sesión MÁS RECIENTE de ese día (`created_at desc`).
         En mono-terminal: idéntico a antes (única sesión).
         En multi-terminal sin filtro: comportamiento determinístico, no
         aleatorio según orden de inserción.
+
+    NOTA: El modelo CashSession usa `created_at` como timestamp de apertura
+    (no existe `opened_at`). Se setea con utcnow() en open_session().
     """
     query = db.query(CashSession).filter(CashSession.date == report_date)
     if cash_session_id is not None:
         query = query.filter(CashSession.id == cash_session_id)
-    session = query.order_by(CashSession.opened_at.desc()).first()
+    session = query.order_by(CashSession.created_at.desc()).first()
     if not session:
         return {}
 

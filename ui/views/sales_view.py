@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHeaderView, QAbstractItemView, QMessageBox,
     QSpinBox, QMenu
 )
-from PySide6.QtCore import Qt, QSize, QTimer, QEvent
+from PySide6.QtCore import Qt, QSize, QTimer, QEvent, QObject
 from PySide6.QtGui import QDoubleValidator, QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -2564,10 +2564,22 @@ class SalesView(QWidget):
                 self._perma_focus_installed = False
 
     def eventFilter(self, obj, event):
+        # ──────────────────────────────────────────────────────────────
+        # GUARDA DEFENSIVA (PySide6):
+        # Como este filter está instalado a nivel de QApplication, Qt
+        # puede invocarlo con `obj` siendo un QLayoutItem/QWidgetItem
+        # (eventos LayoutRequest, etc.), que NO es subclase de QObject.
+        # En ese caso, llamar a super().eventFilter() truena con
+        # TypeError. Además no nos interesa filtrar esos eventos, así
+        # que salimos limpio con False (= no filtrar).
+        # ──────────────────────────────────────────────────────────────
+        if not isinstance(obj, QObject):
+            return False
+
         if not self._is_cash_open():
-            return super().eventFilter(obj, event)
+            return False
         if not self.isVisible():
-            return super().eventFilter(obj, event)
+            return False
 
         if event.type() == QEvent.MouseButtonRelease:
             w = QApplication.focusWidget()
@@ -2582,7 +2594,7 @@ class SalesView(QWidget):
 
             # Si el foco quedó en un input protegido, respetarlo
             if w in protected:
-                return super().eventFilter(obj, event)
+                return False
 
             # Si el click fue dentro de un input protegido, respetarlo
             target = (
@@ -2592,21 +2604,21 @@ class SalesView(QWidget):
             if target is not None:
                 for p in protected:
                     if p is not None and (target is p or p.isAncestorOf(target)):
-                        return super().eventFilter(obj, event)
+                        return False
 
             # ✅ FIX 3: No robar foco si el click fue sobre un widget interactivo
             interactive_types = (QPushButton, QSpinBox, QComboBox, QTableWidget, QAbstractItemView)
             if target is not None and isinstance(target, interactive_types):
-                return super().eventFilter(obj, event)
+                return False
 
             # No robar foco si el click fue fuera de SalesView (ej: sidebar)
             if target is not None and not self.isAncestorOf(target):
-                return super().eventFilter(obj, event)
+                return False
 
             # Click completado dentro de Ventas -> devolver foco al buscador
             QTimer.singleShot(0, self._focus_product_search)
 
-        return super().eventFilter(obj, event)
+        return False
 
     def check_cash_session(self):
         api_call("get",
