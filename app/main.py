@@ -159,8 +159,42 @@ async def lifespan(app: FastAPI):
 
 
 # Crear aplicación
-# ── FASE 3 — Fix 3.1: docs se activan con ENABLE_DOCS=true o APP_DEBUG=true ──
-_show_docs = settings.app_debug or settings.enable_docs
+# ── FASE 4 — Fix 4.5: docs no se activan por accidente en producción ──
+# Antes:
+#   `_show_docs = settings.app_debug or settings.enable_docs`
+#   → si alguien dejaba `app_debug=true` por error en el .env de
+#     producción, /docs y /openapi.json quedaban expuestos, dándole a
+#     un atacante con acceso a localhost el mapa completo de la API.
+#
+# Ahora (defensa en profundidad):
+#   - enable_docs=true   → /docs ON. Opt-in explícito (Fix 3.1) para
+#                          diagnóstico en producción; se respeta sin
+#                          condiciones porque la variable existe
+#                          precisamente para ese caso de uso.
+#   - app_debug=true     → /docs ON sólo si APP_ENV NO es producción.
+#                          En producción `app_debug` se ignora para
+#                          esta decisión y queda un warning en logs.
+#
+# Además /openapi.json se gatea junto con /docs y /redoc: antes seguía
+# accesible aunque /docs estuviera apagado, filtrando el schema completo.
+# El mismo trato recibe la sección de "links" en GET / más abajo.
+#
+# Convención APP_ENV: igual que `app/core/logger.py` — "production" y
+# "prod" (case-insensitive) cuentan como producción.
+_is_production = (settings.app_env or "").strip().lower() in ("production", "prod")
+
+if _is_production:
+    _show_docs = settings.enable_docs
+    if settings.app_debug and not settings.enable_docs:
+        logger.warning(
+            "app_debug=true detectado con app_env=%s. Se IGNORA app_debug "
+            "para activar /docs (Fix 4.5). Si realmente necesita la API "
+            "documentada en producción, use ENABLE_DOCS=true explícitamente.",
+            settings.app_env,
+        )
+else:
+    _show_docs = settings.app_debug or settings.enable_docs
+
 app = FastAPI(
     title=settings.app_name,
     description="Sistema de Punto de Venta Inteligente - Violette POS",
@@ -168,6 +202,9 @@ app = FastAPI(
     lifespan=lifespan,
     docs_url="/docs" if _show_docs else None,
     redoc_url="/redoc" if _show_docs else None,
+    # ── Fix 4.5: cerrar /openapi.json junto con la UI de docs ──
+    # Sin esto el schema queda accesible aunque /docs esté oculto.
+    openapi_url="/openapi.json" if _show_docs else None,
 )
 
 
@@ -333,9 +370,13 @@ def health_check(db: Session = Depends(get_db)):
 
 @app.get("/")
 def root():
-    return {
+    # ── FASE 4 — Fix 4.5: anunciar /docs y /redoc sólo si están activos ──
+    # No tiene sentido (y filtra info) sugerir endpoints inexistentes.
+    info: dict = {
         "message": f"Bienvenido a {settings.app_name}",
-        "docs": "/docs",
-        "redoc": "/redoc",
         "health": "/health",
     }
+    if _show_docs:
+        info["docs"] = "/docs"
+        info["redoc"] = "/redoc"
+    return info

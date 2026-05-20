@@ -7,6 +7,13 @@ al tabla economic_activities. Idempotente: hace upsert por código.
 AUDITORÍA FIX 1.2 / 4.2: Corregida ruta del CSV para usar APP_DIR
 en vez de os.getcwd(), que falla cuando se ejecuta como .exe (PyInstaller
 cambia el directorio de trabajo).
+
+FASE 4 — Fix 4.8: el CSV se movió de la raíz del proyecto a `app/data/`
+por organización. La ruta primaria ahora es `app/data/economic_activities.csv`.
+Se mantiene un fallback a la ubicación legacy (raíz) con un warning, para
+que las instalaciones que aún no movieron el archivo no se queden sin
+catálogo. Cuando todas las instalaciones estén actualizadas, el bloque
+de legacy puede borrarse.
 """
 
 import csv
@@ -19,7 +26,32 @@ from app.core.config import APP_DIR
 
 logger = logging.getLogger(__name__)
 
-CSV_PATH = str(APP_DIR / "economic_activities.csv")
+# ── FASE 4 — Fix 4.8: ubicación canónica y fallback legacy ──
+CSV_PATH = APP_DIR / "app" / "data" / "economic_activities.csv"
+_LEGACY_CSV_PATH = APP_DIR / "economic_activities.csv"
+
+
+def _resolve_csv_path() -> str | None:
+    """
+    Devuelve la ruta del CSV o None si no existe en ninguna ubicación.
+
+    Prioriza la ruta canónica (app/data/). Si no existe ahí pero sí en
+    la raíz del proyecto, lo acepta con un warning para suavizar la
+    transición — el .spec del .exe ya copia el CSV a la ubicación nueva,
+    así que el fallback solo aplica a installs en dev/source que aún no
+    movieron el archivo.
+    """
+    if CSV_PATH.exists():
+        return str(CSV_PATH)
+    if _LEGACY_CSV_PATH.exists():
+        logger.warning(
+            "economic_activities.csv encontrado en la raíz del proyecto "
+            "(ubicación legacy). Por favor muévalo a 'app/data/' — el .spec "
+            "del .exe ya espera la nueva ruta y el fallback se removerá en "
+            "una versión futura."
+        )
+        return str(_LEGACY_CSV_PATH)
+    return None
 
 
 def run(db: Session | None = None):
@@ -29,9 +61,13 @@ def run(db: Session | None = None):
     Acepta una sesión existente (para ser llamado desde seed_db)
     o crea una propia si se ejecuta standalone.
     """
-    if not os.path.exists(CSV_PATH):
-        msg = f"No se encontró el archivo en: {CSV_PATH}"
-        logger.warning(msg)
+    csv_path = _resolve_csv_path()
+    if csv_path is None:
+        logger.warning(
+            "No se encontró economic_activities.csv ni en %s ni en %s. "
+            "La tabla de actividades económicas se quedará vacía.",
+            CSV_PATH, _LEGACY_CSV_PATH,
+        )
         return
 
     own_session = db is None
@@ -42,7 +78,7 @@ def run(db: Session | None = None):
     updated = 0
 
     try:
-        with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as f:
+        with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
             reader = csv.DictReader(f)
 
             for row in reader:

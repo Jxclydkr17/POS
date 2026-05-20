@@ -10,6 +10,16 @@ FASE 1 — Fixes aplicados:
              se reutiliza. Si es un proceso ajeno, se muestra error claro.
   - Fix 1.5: Eliminada referencia a "styles (1).qss" (artefacto de desarrollo).
 
+FASE 4 (revisión 2026-05) — Fix 4.4: Fallback dinámico de puerto.
+  Extiende Fix 1.4: cuando el 8000 está ocupado por un programa AJENO
+  (no es otra instancia de Violette), en vez de abortar se prueban
+  8001, 8002, ... 8009 hasta encontrar uno libre o detectar una
+  instancia ya corriendo. Solo se aborta si toda la franja está
+  ocupada. El puerto efectivo se publica vía `API_BASE_URL` para que
+  la UI (`ui.api.BASE_URL`) se conecte al puerto correcto.
+  El rango es configurable con las variables de entorno
+  `VIOLETTE_PORT_RANGE_START` y `VIOLETTE_PORT_RANGE_END`.
+
 FASE 5: Usa logging estructurado con rotación.
 """
 
@@ -67,9 +77,21 @@ logger.addHandler(_console_handler)
 logger.propagate = False  # evitar que suba al root logger
 
 # ── Puerto y host del backend ──
+# BACKEND_PORT y BACKEND_URL son los valores POR DEFECTO.
+# Tras `_select_backend_port()` (Fix 4.4), pueden quedar reasignados a otro
+# puerto del rango si el 8000 está ocupado por un programa ajeno.
 BACKEND_HOST = "127.0.0.1"
 BACKEND_PORT = 8000
 BACKEND_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+
+# ── FASE 4.4 — Rango de puertos para el fallback dinámico ──
+# Por defecto se prueba 8000-8009 (10 puertos). El usuario puede sobrescribir
+# con variables de entorno si todos los puertos de esa franja están en uso
+# por otros servicios:
+#   set VIOLETTE_PORT_RANGE_START=9000
+#   set VIOLETTE_PORT_RANGE_END=9009
+DEFAULT_PORT_RANGE_START = 8000
+DEFAULT_PORT_RANGE_END = 8009
 
 
 def _first_run_check():
@@ -568,6 +590,7 @@ def _stamp_alembic_head():
 
 # ═══════════════════════════════════════════════════════════════
 # FASE 1 — Fix 1.4: Detección de conflicto de puerto
+# FASE 4 — Fix 4.4: Fallback dinámico de puerto (8001, 8002, ...)
 # ═══════════════════════════════════════════════════════════════
 
 def _is_port_in_use(host: str, port: int) -> bool:
@@ -599,52 +622,172 @@ def _is_our_backend(url: str) -> bool:
     return False
 
 
-def _check_port_availability() -> str:
+def _classify_port(host: str, port: int) -> str:
     """
-    Verifica si el puerto del backend está disponible.
+    Clasifica el estado de un puerto candidato.
 
     Returns:
-        "available"   — puerto libre, se puede iniciar el backend
-        "ours"        — ya hay una instancia de Violette corriendo, reutilizar
-        "conflict"    — el puerto está ocupado por otro programa
+        "available" — puerto libre, se puede iniciar uvicorn ahí.
+        "ours"      — ya hay una instancia de Violette POS escuchando ahí.
+        "conflict"  — el puerto está ocupado por otro programa.
     """
-    if not _is_port_in_use(BACKEND_HOST, BACKEND_PORT):
+    if not _is_port_in_use(host, port):
         return "available"
-
-    logger.info(f"Puerto {BACKEND_PORT} en uso. Verificando si es Violette POS...")
-
-    if _is_our_backend(BACKEND_URL):
-        logger.info("Detectada instancia existente de Violette POS. Reutilizando.")
+    if _is_our_backend(f"http://{host}:{port}"):
         return "ours"
-
     return "conflict"
 
 
+def _resolve_port_range() -> tuple[int, int]:
+    """
+    Resuelve el rango de puertos a probar.
+
+    Permite override vía variables de entorno:
+        VIOLETTE_PORT_RANGE_START (default 8000)
+        VIOLETTE_PORT_RANGE_END   (default 8009, inclusivo)
+
+    Valores no numéricos o fuera de rango (1024..65535) caen al default
+    sin abortar el arranque.
+    """
+    def _read_int(name: str, default: int) -> int:
+        raw = os.getenv(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            v = int(raw)
+        except ValueError:
+            logger.warning(
+                "%s='%s' no es un entero válido. Usando default %d.",
+                name, raw, default,
+            )
+            return default
+        if v < 1024 or v > 65535:
+            logger.warning(
+                "%s=%d fuera del rango válido (1024..65535). Usando default %d.",
+                name, v, default,
+            )
+            return default
+        return v
+
+    start = _read_int("VIOLETTE_PORT_RANGE_START", DEFAULT_PORT_RANGE_START)
+    end = _read_int("VIOLETTE_PORT_RANGE_END", DEFAULT_PORT_RANGE_END)
+    if end < start:
+        logger.warning(
+            "VIOLETTE_PORT_RANGE_END (%d) < START (%d). Igualando END=START.",
+            end, start,
+        )
+        end = start
+    return start, end
+
+
+def _select_backend_port() -> tuple[int, str, list[int]]:
+    """
+    FASE 4.4 — Selecciona un puerto del rango configurado.
+
+    Itera del START al END inclusive. Para cada puerto:
+      - Si está LIBRE  → se elige y se retorna ("available").
+      - Si tiene una instancia de Violette POS corriendo → se reutiliza
+        ("ours") y se retorna sin iniciar otro uvicorn.
+      - Si está ocupado por OTRO programa → se anota y se prueba el siguiente.
+
+    Returns:
+        (port, status, conflicts) donde:
+          port       — el puerto efectivamente seleccionado.
+          status     — "available" (hay que iniciar uvicorn) o
+                       "ours" (reutilizar la instancia ya viva).
+          conflicts  — puertos ocupados por procesos ajenos durante la
+                       búsqueda (para diagnóstico en logs).
+
+    Raises:
+        RuntimeError si TODOS los puertos del rango están ocupados por
+        programas ajenos a Violette POS. El mensaje incluye instrucciones
+        para que el usuario elija un rango distinto.
+    """
+    start, end = _resolve_port_range()
+    conflicts: list[int] = []
+
+    for port in range(start, end + 1):
+        status = _classify_port(BACKEND_HOST, port)
+
+        if status == "available":
+            if port == start and not conflicts:
+                # Caso normal: el primer puerto del rango está libre.
+                logger.debug("Puerto %d libre.", port)
+            else:
+                logger.info(
+                    "Puerto(s) %s ocupado(s) por otro(s) programa(s). "
+                    "Usando %d en su lugar.",
+                    conflicts, port,
+                )
+            return port, "available", conflicts
+
+        if status == "ours":
+            if conflicts:
+                logger.info(
+                    "Detectada instancia existente de Violette POS en puerto %d. "
+                    "Reutilizando. (Puertos %s ocupados por otros programas.)",
+                    port, conflicts,
+                )
+            else:
+                logger.info(
+                    "Detectada instancia existente de Violette POS en puerto %d. "
+                    "Reutilizando.", port,
+                )
+            return port, "ours", conflicts
+
+        # status == "conflict" → siguiente puerto
+        conflicts.append(port)
+        logger.info(
+            "Puerto %d ocupado por otro programa. Probando siguiente...", port,
+        )
+
+    # Agotamos el rango sin encontrar puerto utilizable
+    raise RuntimeError(
+        f"No se pudo encontrar un puerto libre en el rango "
+        f"{start}-{end} para el servidor interno.\n\n"
+        f"Todos los puertos están ocupados por otros programas: {conflicts}\n\n"
+        "Violette POS necesita uno de estos puertos para funcionar.\n"
+        "Opciones:\n"
+        "  - Cierre los programas que están usando estos puertos e intente "
+        "de nuevo.\n"
+        "  - Reinicie la computadora.\n"
+        "  - Configure un rango distinto antes de abrir Violette POS:\n"
+        "        set VIOLETTE_PORT_RANGE_START=9000\n"
+        "        set VIOLETTE_PORT_RANGE_END=9009"
+    )
+
+
 def _start_backend():
-    """Inicia el servidor FastAPI/uvicorn en un hilo daemon."""
+    """
+    Inicia el servidor FastAPI/uvicorn en un hilo daemon.
+
+    FASE 4.4 — Fix 4.4: Si el puerto preferido (8000) está ocupado por un
+    programa ajeno, prueba 8001, 8002, ... hasta el final del rango.
+    Una vez elegido el puerto, lo publica en `os.environ["API_BASE_URL"]`
+    para que la UI (`ui.api.BASE_URL`) se conecte al puerto correcto.
+    """
     import uvicorn
 
-    # ── FASE 1 — Fix 1.4: Verificar puerto antes de iniciar ──
-    port_status = _check_port_availability()
+    global BACKEND_PORT, BACKEND_URL
 
-    if port_status == "ours":
-        # Ya hay una instancia corriendo — no iniciar otra
-        logger.info("Backend ya está corriendo. Conectando...")
+    # ── FASE 4.4 — Seleccionar puerto del rango configurado ──
+    port, status, _conflicts = _select_backend_port()
+
+    # Actualizar globals y env var ANTES de cualquier import de `ui.api`
+    # (ui.api lee API_BASE_URL en import-time). El primer import de ui.api
+    # ocurre dentro de _start_ui() — bastante después de este punto — por
+    # lo que setearla aquí garantiza coherencia entre backend y UI.
+    BACKEND_PORT = port
+    BACKEND_URL = f"http://{BACKEND_HOST}:{BACKEND_PORT}"
+    os.environ["API_BASE_URL"] = BACKEND_URL
+
+    if status == "ours":
+        # Ya hay una instancia corriendo — no iniciar otra.
+        logger.info("Backend ya está corriendo en %s. Conectando...", BACKEND_URL)
         return None
 
-    if port_status == "conflict":
-        # Otro programa usa el puerto — error fatal
-        error_msg = (
-            f"El puerto {BACKEND_PORT} está ocupado por otro programa.\n\n"
-            f"Violette POS necesita el puerto {BACKEND_PORT} para funcionar.\n"
-            "Cierre el programa que está usando este puerto e intente de nuevo.\n\n"
-            "Si el problema persiste, reinicie la computadora."
-        )
-        logger.error(error_msg)
-        raise RuntimeError(error_msg)
-
-    # Puerto disponible — iniciar normalmente
-    logger.info(f"Iniciando backend en {BACKEND_URL} ...")
+    # status == "available" → iniciar uvicorn en el puerto elegido
+    logger.info("Iniciando backend en %s ...", BACKEND_URL)
 
     config = uvicorn.Config(
         "app.main:app",

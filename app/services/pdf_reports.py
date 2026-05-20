@@ -7,8 +7,15 @@ anterior ("AGROMATINA"). El logo ahora se busca como "logo.png" en
 `app/static/` (sin nombre acoplado a un cliente específico). Si el
 archivo no existe, el PDF se genera sin logo (comportamiento previo).
 
+FASE 4 — Fix 4.11: la búsqueda del logo se unifica con el resto del
+proyecto. Antes este módulo buscaba en `app/static/logo.png` (ruta que
+no existía en el repo, por lo que los PDFs venían SIN logo), mientras
+el resto de la app usaba `ui/assets/` vía `get_logo_path()` del config.
+Ahora delega a `get_logo_path()` para que haya UNA sola ubicación
+canónica del logo en toda la aplicación.
+
 Este módulo crea un PDF sencillo pero bonito con:
-- Logo de la ferretería (opcional)
+- Logo de la ferretería (opcional, desde ui/assets/ — ver get_logo_path)
 - Datos del negocio
 - Datos de la venta
 - Tabla de productos
@@ -32,20 +39,22 @@ from reportlab.platypus import (
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from app.utils.dt import now_cr
 from app.utils.unit_helpers import format_quantity
-from app.core.config import get_pdf_dir
+# ── FASE 4 — Fix 4.11: usar el helper canónico de búsqueda de logo. ──
+# `get_logo_path()` busca en ui/assets/ y retorna ruta absoluta o None.
+from app.core.config import get_pdf_dir, get_logo_path
 
 # ---------------------------------------------------------
 # RUTAS BÁSICAS
 # ---------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # carpeta app/
-STATIC_DIR = os.path.join(BASE_DIR, "static")
 # ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
 PDF_DIR = str(get_pdf_dir())
 
-# Logo (FASE 3.8 — Fix 3.8): nombre genérico, no acoplado a un cliente.
-# Si el archivo no existe (caso default), el PDF se genera sin logo.
-# Para personalizar: copiá tu logo a `app/static/logo.png`.
-LOGO_PATH = os.path.join(STATIC_DIR, "logo.png")
+# ── FASE 4 — Fix 4.11: la ubicación del logo se resuelve vía
+# get_logo_path() — ver el helper en app/core/config.py. Eliminados
+# BASE_DIR/STATIC_DIR/LOGO_PATH que apuntaban a app/static/, una ruta
+# que no existía en el repo (por eso los PDFs venían sin logo).
+# Para personalizar el logo, reemplazá ui/assets/logoferre.jpg (o
+# poné un logo.png / logo.jpg en esa misma carpeta — ver get_logo_path).
 
 # get_pdf_dir() ya crea la carpeta automáticamente
 
@@ -82,8 +91,12 @@ def generate_sale_pdf(sale_data: dict, logo_path: str | None = None) -> str:
     if not sale_data:
         raise ValueError("sale_data está vacío")
 
-    if logo_path is None and os.path.exists(LOGO_PATH):
-        logo_path = LOGO_PATH
+    # ── FASE 4 — Fix 4.11: fallback unificado al helper canónico ──
+    # Si el caller no pasó un logo explícito, buscamos vía get_logo_path()
+    # que ya retorna ruta existente o None (con manejo correcto de
+    # APP_DIR en modo .exe vs dev).
+    if logo_path is None:
+        logo_path = get_logo_path()
 
     sale_id = sale_data.get("id", "N/A")
     customer_name = (sale_data.get("customer") or {}).get("name", "Cliente General")

@@ -20,6 +20,71 @@ USO:
 
     info = check_update()      # {"available": True, "latest": "1.1.0", ...}
     result = download_update()  # Descarga el paquete si hay update
+
+MODELO DE SEGURIDAD ACTUAL
+══════════════════════════
+  1. HTTPS obligatorio para la URL de descarga (Fix 4.1):
+     se rechaza cualquier URL que no comience con "https://".
+  2. SHA-256 obligatorio en el manifiesto (Fix 3.1):
+     - El servidor DEBE enviar el campo `sha256` en la respuesta JSON.
+     - Sin hash → la descarga se rechaza antes de empezar.
+     - Tras descargar → se recalcula el hash localmente y se compara
+       con el del manifiesto. Mismatch → archivo eliminado + log de
+       alerta de seguridad.
+
+  Esto es suficiente PARA EL MODELO DE AMENAZA HABITUAL: un atacante
+  que intenta MITM o servir un .zip distinto sin controlar el servidor
+  legítimo. HTTPS protege el canal; SHA-256 verifica integridad
+  contra el manifiesto firmado por TLS.
+
+FASE 4 — Fix 4.10 — DEFERIDO (auditoría 2026-05)
+═════════════════════════════════════════════════
+  El auditor señaló que SHA-256 + HTTPS NO protege contra un
+  escenario más serio: alguien compromete el servidor de updates
+  (`updates.violettepos.com`). Con control del servidor, el atacante
+  puede generar un .zip malicioso Y poner su hash correspondiente
+  en el manifiesto — SHA-256 solo certifica integridad, no autoría.
+
+  La defensa robusta sería firma asimétrica del .zip (Ed25519/RSA)
+  con una clave privada que NO viva en el servidor, sino offline.
+  El .exe embebería la clave pública y rechazaría cualquier descarga
+  cuya firma no valide.
+
+  POR QUÉ NO SE IMPLEMENTÓ AHORA:
+    - El auditor mismo lo marcó "Fase futura" y aclaró que "para
+      una ferretería realmente no es crítico porque depende de HTTPS".
+    - Implementar firma requiere infraestructura externa al código:
+        (a) generar y proteger una clave privada offline,
+        (b) un proceso de firma en cada release (manual o CI),
+        (c) embeber la pubkey en el .exe y definir rotación,
+        (d) backup seguro de la clave privada (si se pierde, no se
+            pueden enviar más updates a la flota desplegada).
+    - El updater HOY está dormido: hay endpoints REST
+      (`GET /system/update/check`, `POST /system/update/download`)
+      pero ninguna vista de la UI los llama, no hay check automático
+      al arranque, y la URL default (`updates.violettepos.com/api/version`)
+      es placeholder.
+    - Implementar verificación de firma sin tener el resto de la
+      infraestructura sería teatro de seguridad: o el código rechaza
+      siempre (rompe el updater), o se le agrega un bypass que anula
+      la protección.
+
+  CUÁNDO RETOMAR:
+    Cuando se decida activar updates automáticos en producción Y se
+    defina el workflow operativo de firma. En ese momento:
+      1. Generar keypair Ed25519 con `cryptography` (no usar RSA legacy).
+      2. Documentar dónde vive la clave privada y quién accede.
+      3. Crear `scripts/sign_release.py` (firma de .zip pre-publicación).
+      4. Embeber pubkey en `app/core/release_pubkey.py` o similar.
+      5. Modificar `check_update`/`download_update` para exigir y
+         verificar el campo `signature` del manifiesto.
+      6. Actualizar el contrato con el servidor de updates para que
+         devuelva `signature` y `pubkey_id` en la respuesta JSON.
+
+  Mientras tanto, este módulo sigue siendo seguro para el modelo de
+  amenaza estándar (MITM en tránsito, sustitución por terceros sin
+  control del servidor), que es el escenario realista para una
+  app desplegada en una ferretería con HTTPS hacia un servidor propio.
 """
 
 from __future__ import annotations
@@ -141,6 +206,14 @@ def _verify_sha256(filepath: Path, expected_hash: str) -> bool:
     """
     Verifica el SHA-256 de un archivo contra el hash esperado.
     FASE 3 — Fix 3.1: hashlib se importa pero nunca se usaba.
+
+    NOTA — Fix 4.10 (DEFERIDO): esta verificación SOLO garantiza
+    integridad del archivo respecto al manifiesto del servidor. NO
+    garantiza autoría: si el servidor está comprometido, el atacante
+    sirve un .zip propio CON SU hash correspondiente y este chequeo
+    pasa. La defensa correspondiente sería firma asimétrica con clave
+    offline — ver el bloque "Fix 4.10 — DEFERIDO" en el docstring del
+    módulo para el rationale completo y la lista de pasos para retomar.
     """
     if not expected_hash:
         return False

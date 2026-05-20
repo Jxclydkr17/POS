@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Generación de PDF de proformas/cotizaciones para AGROMATINA.
+Generación de PDF de proformas/cotizaciones para Violette POS.
 
 Reutiliza la misma estructura visual de pdf_reports.py con diferencias clave:
 - Marca de agua "PROFORMA" en diagonal
@@ -8,6 +8,13 @@ Reutiliza la misma estructura visual de pdf_reports.py con diferencias clave:
 - Muestra número PRO-XXXXXX y fecha de vencimiento
 - Incluye notas del vendedor
 - Pie: "Este documento no tiene validez fiscal"
+
+FASE 4 — Fix 4.11: la búsqueda del logo se unifica con el resto del
+proyecto vía `get_logo_path()` (busca en ui/assets/). Antes este módulo
+buscaba `app/static/agromatina_logo.png` — nombre acoplado a un cliente
+anterior y carpeta que no existía en el repo, por lo que las proformas
+venían SIN logo. Al mismo tiempo, se reemplazó la referencia a
+"AGROMATINA" en el docstring por "Violette POS".
 """
 
 import os
@@ -28,18 +35,23 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 from app.utils.dt import now_cr, to_cr
 from app.utils.unit_helpers import format_quantity
-from app.core.config import get_pdf_dir
+# ── FASE 4 — Fix 4.11: usar el helper canónico de búsqueda de logo. ──
+# `get_logo_path()` busca en ui/assets/ y retorna ruta absoluta o None.
+from app.core.config import get_pdf_dir, get_logo_path
 from app.constants.status_enums import ProformaStatus
 
 # ---------------------------------------------------------
 # RUTAS BÁSICAS (mismas que pdf_reports.py)
 # ---------------------------------------------------------
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # carpeta app/
-STATIC_DIR = os.path.join(BASE_DIR, "static")
 # ── FASE 5 — Fix 5.2: PDFs en directorio externo configurable ──
 PDF_DIR = str(get_pdf_dir())
 
-LOGO_PATH = os.path.join(STATIC_DIR, "agromatina_logo.png")
+# ── FASE 4 — Fix 4.11: la ubicación del logo se resuelve vía
+# get_logo_path() — ver el helper en app/core/config.py. Eliminados
+# BASE_DIR/STATIC_DIR/LOGO_PATH que apuntaban a app/static/agromatina_logo.png,
+# una ruta inexistente con nombre acoplado a un cliente anterior.
+# Para personalizar el logo, reemplazá ui/assets/logoferre.jpg (o
+# poné un logo.png / logo.jpg en esa misma carpeta — ver get_logo_path).
 
 # get_pdf_dir() ya crea la carpeta automáticamente
 
@@ -148,8 +160,12 @@ def generate_proforma_pdf(proforma_data: dict, logo_path: str | None = None) -> 
     if not proforma_data:
         raise ValueError("proforma_data está vacío")
 
-    if logo_path is None and os.path.exists(LOGO_PATH):
-        logo_path = LOGO_PATH
+    # ── FASE 4 — Fix 4.11: fallback unificado al helper canónico ──
+    # Si el caller no pasó un logo explícito, buscamos vía get_logo_path()
+    # que ya retorna ruta existente o None (con manejo correcto de
+    # APP_DIR en modo .exe vs dev).
+    if logo_path is None:
+        logo_path = get_logo_path()
 
     proforma_id = proforma_data.get("id", "N/A")
     number = proforma_data.get("number", f"PRO-{proforma_id}")

@@ -94,17 +94,44 @@ def decrypt_value(encrypted_text: str) -> Optional[str]:
 
 def mask_api_key(api_key: str) -> str:
     """
-    Enmascara una API key mostrando solo los últimos 4 caracteres.
-    Ej: "sk-ant-abc123xyz789" → "sk-...9789"
+    Enmascara una API key para mostrarla sin revelar el secreto completo.
+    Útil en logs y en la UI de configuración (campo "API Key Hint").
+
+    FASE 4 — Fix 4.9: lógica reescrita. Antes la versión vieja era:
+
+        return "****" + api_key[-2:] if len(api_key) > 2 else "****"
+
+    Dos problemas:
+      1. La precedencia de `+` vs `if-else` engañaba al lector
+         (parsea como `("****" + api_key[-2:]) if ... else "****"`).
+      2. El docstring prometía "los últimos 4 caracteres" pero el branch
+         corto entregaba solo 2.
+
+    Estrategia nueva (proporcional al largo, para no filtrar keys cortas):
+      - vacío / None  → ""
+      - <= 6 chars    → "****"           (cualquier carácter visible filtraría
+                                          >15% de la key; mejor ocultar todo)
+      - 7..15 chars   → "****" + últimos 4   (ej: "****6789")
+      - >= 16 chars   → primeros 3 + "..." + últimos 4   (ej: "sk-...7890")
+
+    El branch >=16 prioriza identificación visual — el prefijo suele
+    indicar proveedor ("sk-", "AIza", "ak_") sin exponer suficiente
+    para reproducir la key.
+
+    Ejemplos:
+      mask_api_key("")                            → ""
+      mask_api_key("abc")                         → "****"
+      mask_api_key("abcdefg")                     → "****defg"
+      mask_api_key("sk-ant-api03-abc1234")        → "sk-...1234"
     """
     if not api_key:
         return ""
-    if len(api_key) <= 8:
-        return "****" + api_key[-2:] if len(api_key) > 2 else "****"
-
-    prefix = api_key[:3]
-    suffix = api_key[-4:]
-    return f"{prefix}...{suffix}"
+    n = len(api_key)
+    if n <= 6:
+        return "****"
+    if n <= 15:
+        return "****" + api_key[-4:]
+    return f"{api_key[:3]}...{api_key[-4:]}"
 
 
 # ═══════════════════════════════════════════════════════════════
