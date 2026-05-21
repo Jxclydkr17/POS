@@ -17,7 +17,7 @@ from app.db.models.supplier import Supplier
 from app.db.crud.cash import get_cash_report
 from app.utils.responses import success_response
 from app.services.dashboard_snapshot_service import ensure_dashboard_snapshot, get_dashboard_snapshot
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, cr_day_to_utc_range
 
 logger = logging.getLogger(__name__)
 
@@ -128,12 +128,13 @@ def _build_count_trend(
 @router.get("/summary")
 def dashboard_summary(db: Session = Depends(get_db)):
     today = today_cr()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    # FASE 1 — Fix 1.2: rango UTC del día CR (half-open: [start, end)).
+    # Antes se usaba datetime.combine(d, time.min/max) naive, que SQLAlchemy
+    # comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start, end = cr_day_to_utc_range(today)
 
     yesterday = today - timedelta(days=1)
-    y_start = datetime.combine(yesterday, time.min)
-    y_end = datetime.combine(yesterday, time.max)
+    y_start, y_end = cr_day_to_utc_range(yesterday)
 
     # respaldo: aseguramos snapshot de ayer
     yesterday_snapshot = ensure_dashboard_snapshot(db, yesterday)
@@ -156,13 +157,13 @@ def dashboard_summary(db: Session = Depends(get_db)):
     # -----------------------------
     sales_total = (
         db.query(func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.created_at >= start, Sale.created_at <= end)
+        .filter(Sale.created_at >= start, Sale.created_at < end)
         .scalar()
     )
 
     sales_total_yesterday = (
         db.query(func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.created_at >= y_start, Sale.created_at <= y_end)
+        .filter(Sale.created_at >= y_start, Sale.created_at < y_end)
         .scalar()
     )
 
@@ -171,13 +172,13 @@ def dashboard_summary(db: Session = Depends(get_db)):
     # -----------------------------
     expenses_total = (
         db.query(func.coalesce(func.sum(Expense.amount), 0))
-        .filter(Expense.date >= start, Expense.date <= end)
+        .filter(Expense.date >= start, Expense.date < end)
         .scalar()
     )
 
     expenses_total_yesterday = (
         db.query(func.coalesce(func.sum(Expense.amount), 0))
-        .filter(Expense.date >= y_start, Expense.date <= y_end)
+        .filter(Expense.date >= y_start, Expense.date < y_end)
         .scalar()
     )
 
@@ -325,7 +326,7 @@ def _get_top_sold_products_today(db: Session, start: datetime, end: datetime, li
         )
         .join(SaleDetail, SaleDetail.product_id == Product.id)
         .join(Sale, Sale.id == SaleDetail.sale_id)
-        .filter(Sale.created_at >= start, Sale.created_at <= end)
+        .filter(Sale.created_at >= start, Sale.created_at < end)
         .group_by(Product.id, Product.name)
         .order_by(func.sum(SaleDetail.quantity).desc(), func.sum(SaleDetail.subtotal).desc())
         .limit(limit)
@@ -427,8 +428,8 @@ def _get_top_suppliers_with_critical_products(db: Session, limit: int = 5):
 @router.get("/top-lists")
 def dashboard_top_lists(db: Session = Depends(get_db)):
     today = today_cr()
-    start = datetime.combine(today, time.min)
-    end = datetime.combine(today, time.max)
+    # FASE 1 — Fix 1.2: rango UTC del día CR (half-open: [start, end)).
+    start, end = cr_day_to_utc_range(today)
 
     return success_response(
         message="Top lists del dashboard obtenidas correctamente.",

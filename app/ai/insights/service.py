@@ -1,6 +1,6 @@
 from datetime import date, datetime, timedelta
 import logging
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, cr_day_to_utc_range
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
@@ -42,8 +42,10 @@ def get_today_insights(db: Session) -> InsightsResponse:
     alerts: list[Insight] = []
 
     today = today_cr()
-    start_today = datetime.combine(today, datetime.min.time())
-    end_today = datetime.combine(today, datetime.max.time())
+    # FASE 1 — Fix 1.2: rango UTC del día CR (half-open: [start, end)).
+    # Antes se usaba datetime.combine(d, datetime.min/max.time()) naive, que
+    # SQLAlchemy comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start_today, end_today = cr_day_to_utc_range(today)
 
     # -------------------------------------------------
     # 1️⃣ VENTAS DE HOY + PREDICCIÓN (estable)
@@ -51,7 +53,7 @@ def get_today_insights(db: Session) -> InsightsResponse:
     today_sales = float(
         db.query(func.sum(Sale.total))
         .filter(Sale.created_at >= start_today)
-        .filter(Sale.created_at <= end_today)
+        .filter(Sale.created_at < end_today)
         .scalar()
         or 0.0
     )
@@ -60,13 +62,13 @@ def get_today_insights(db: Session) -> InsightsResponse:
     # Ventana: 14 días incluyendo HOY
     series_days = 14
     start_window_day = (today - timedelta(days=series_days - 1))  # incluye hoy
-    start_window_dt = datetime.combine(start_window_day, datetime.min.time())
+    start_window_dt, _ = cr_day_to_utc_range(start_window_day)
 
     # Traemos sumas por día (solo días con ventas), luego rellenamos huecos con 0
     rows = (
         db.query(func.date(Sale.created_at), func.sum(Sale.total))
         .filter(Sale.created_at >= start_window_dt)
-        .filter(Sale.created_at <= end_today)
+        .filter(Sale.created_at < end_today)
         .group_by(func.date(Sale.created_at))
         .all()
     )

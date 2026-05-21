@@ -7,7 +7,7 @@ que se muestran automáticamente al abrir el chat.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, cr_day_to_utc_range
 from typing import List, Dict, Any
 
 from sqlalchemy import func
@@ -36,8 +36,10 @@ def get_proactive_alerts(db: Session) -> List[Dict[str, Any]]:
     """
     alerts: list[dict] = []
     today = today_cr()
-    start_dt = datetime.combine(today, time.min)
-    end_dt = datetime.combine(today, time.max)
+    # FASE 1 — Fix 1.2: rango UTC del día CR (half-open: [start, end)).
+    # Antes se usaba datetime.combine(d, time.min/max) naive, que SQLAlchemy
+    # comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start_dt, end_dt = cr_day_to_utc_range(today)
 
     try:
         # ── 1) Caja no abierta ──
@@ -61,7 +63,7 @@ def get_proactive_alerts(db: Session) -> List[Dict[str, Any]]:
                 func.coalesce(func.sum(Sale.total), 0),
                 func.count(Sale.id),
             )
-            .filter(Sale.created_at >= start_dt, Sale.created_at <= end_dt, Sale.status != SaleStatus.ANULADA)
+            .filter(Sale.created_at >= start_dt, Sale.created_at < end_dt, Sale.status != SaleStatus.ANULADA)
             .first()
         )
         sales_total = float(sales_result[0] or 0)
@@ -132,7 +134,7 @@ def get_proactive_alerts(db: Session) -> List[Dict[str, Any]]:
         # ── 6) Gastos del día ──
         expenses_total = float(
             db.query(func.coalesce(func.sum(Expense.amount), 0))
-            .filter(Expense.date >= start_dt, Expense.date <= end_dt)
+            .filter(Expense.date >= start_dt, Expense.date < end_dt)
             .scalar() or 0
         )
 

@@ -10,21 +10,24 @@ from app.db.models.customer import Customer
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.dashboard_snapshot import DashboardSnapshot
 from app.db.crud.cash import get_cash_report
+from app.utils.dt import cr_day_to_utc_range
 
 
 def build_dashboard_snapshot_data(db: Session, target_date: date) -> dict:
-    start = datetime.combine(target_date, time.min)
-    end = datetime.combine(target_date, time.max)
+    # FASE 1 — Fix 1.2: rango UTC del día CR (half-open: [start, end)).
+    # Antes se usaba datetime.combine(d, time.min/max) naive, que SQLAlchemy
+    # comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start, end = cr_day_to_utc_range(target_date)
 
     sales_total = (
         db.query(func.coalesce(func.sum(Sale.total), 0))
-        .filter(Sale.created_at >= start, Sale.created_at <= end)
+        .filter(Sale.created_at >= start, Sale.created_at < end)
         .scalar()
     )
 
     expenses_total = (
         db.query(func.coalesce(func.sum(Expense.amount), 0))
-        .filter(Expense.date >= start, Expense.date <= end)
+        .filter(Expense.date >= start, Expense.date < end)
         .scalar()
     )
 

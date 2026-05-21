@@ -10,7 +10,7 @@ from app.db.models.expense import Expense
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.customer import Customer
 from app.core.dependencies import get_current_user
-from app.utils.dt import now_cr, format_cr
+from app.utils.dt import now_cr, format_cr, cr_day_to_utc_range
 from app.constants.expense_categories import CAT_COMPRAS_PROVEEDORES
 from app.constants.status_enums import SaleStatus
 
@@ -28,15 +28,18 @@ def _compute_period(db: Session, start_day, end_day):
     """Calcula las métricas financieras para un período dado.
     Retorna un dict con todos los campos del reporte.
     """
-    start = datetime.combine(start_day, time.min)
-    end = datetime.combine(end_day, time.max)
+    # FASE 1 — Fix 1.2: rango UTC de [start_day, end_day] CR (half-open).
+    # Antes se usaba datetime.combine(d, time.min/max) naive, que SQLAlchemy
+    # comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start, _ = cr_day_to_utc_range(start_day)
+    _, end = cr_day_to_utc_range(end_day)
 
     # ------- Ventas (excluir ANULADAS) -------
     sales = (
         db.query(Sale)
         .filter(
             Sale.created_at >= start,
-            Sale.created_at <= end,
+            Sale.created_at < end,
             Sale.status != SaleStatus.ANULADA,
         )
         .all()
@@ -101,7 +104,7 @@ def _compute_period(db: Session, start_day, end_day):
     total_receivables = _to_float(receivable_result)
 
     # ------- Gastos -------
-    expenses = db.query(Expense).filter(Expense.date >= start, Expense.date <= end).all()
+    expenses = db.query(Expense).filter(Expense.date >= start, Expense.date < end).all()
     total_expenses = sum(float(e.amount) for e in expenses)
 
     purchase_expenses = sum(

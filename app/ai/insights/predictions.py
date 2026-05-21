@@ -7,7 +7,7 @@ from typing import List, Tuple
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, cr_day_to_utc_range
 from app.db.models.sale import Sale
 
 
@@ -40,12 +40,15 @@ def get_daily_sales_totals(
 ) -> List[Tuple[date, float]]:
     """
     Retorna lista de (fecha, total_del_dia) ordenada por fecha.
-    OJO: end_dt es inclusivo si lo pasas con datetime.max.time().
+
+    FASE 1 — Fix 1.2: el rango es half-open [start_dt, end_dt). Pasá `end_dt`
+    como el inicio del día siguiente al último que querés incluir (ej. usá
+    `cr_day_to_utc_range(end_day)[1]`), no como `datetime.max.time()`.
     """
     rows = (
         db.query(func.date(Sale.created_at).label("d"), func.sum(Sale.total).label("t"))
         .filter(Sale.created_at >= start_dt)
-        .filter(Sale.created_at <= end_dt)
+        .filter(Sale.created_at < end_dt)
         .group_by(func.date(Sale.created_at))
         .order_by(func.date(Sale.created_at))
         .all()
@@ -69,8 +72,11 @@ def predict_sales_next_7_days_avg(db: Session) -> SalesPrediction | None:
     start_day = today - timedelta(days=14)
     end_day = today - timedelta(days=1)
 
-    start_dt = datetime.combine(start_day, datetime.min.time())
-    end_dt = datetime.combine(end_day, datetime.max.time())
+    # FASE 1 — Fix 1.2: rango UTC del intervalo CR (half-open: [start, end)).
+    # Antes se usaba datetime.combine(d, datetime.min/max.time()) naive, que
+    # SQLAlchemy comparaba contra Sale.created_at (UTC) sin offset, desfasando 6h.
+    start_dt, _ = cr_day_to_utc_range(start_day)
+    _, end_dt = cr_day_to_utc_range(end_day)
 
     daily = get_daily_sales_totals(db, start_dt, end_dt)
 
