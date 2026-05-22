@@ -1818,7 +1818,9 @@ class MainWindow(QMainWindow):
             new_role = payload.get("role", "vendedor")
 
             # Actualizar sesión global
-            session.start_session(new_username, new_role, token)
+            # FASE 2 — Fix 2.4: incluir refresh_token capturado por el LoginDialog
+            # (puede ser None si el backend no lo retornó, ej. backend antiguo).
+            session.start_session(new_username, new_role, token, refresh_token=dlg.refresh_token)
 
             # Actualizar estado interno
             self.username = new_username

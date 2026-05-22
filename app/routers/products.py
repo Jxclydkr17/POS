@@ -6,7 +6,7 @@ from sqlalchemy import func, desc
 from typing import List, Optional
 from datetime import datetime, timedelta
 from fastapi import HTTPException
-from app.utils.dt import utcnow
+from app.utils.dt import utcnow, format_cr  # FASE 2.2 — Fix 2.2: display CR
 
 logger = logging.getLogger(__name__)
 
@@ -468,7 +468,7 @@ def get_inventory_movements(
         data=[
             {
                 "id":            m.id,
-                "fecha":         m.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "fecha":         format_cr(m.created_at, "%Y-%m-%d %H:%M:%S"),  # FASE 2.2
                 "tipo":          m.type,
                 "cantidad":      float(m.quantity) if m.quantity is not None else 0,
                 "stock_antes":   float(m.stock_before) if m.stock_before is not None else 0,

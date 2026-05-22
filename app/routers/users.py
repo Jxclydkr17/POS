@@ -409,11 +409,20 @@ def change_own_password(
         raise HTTPException(status_code=500, detail="Error interno al cambiar la contraseña.")
     logger.info(f"Usuario '{current_user.username}' cambió su contraseña.")
 
-    # Generar nuevo token para que no se cierre la sesión inmediatamente
-    new_token = create_access_token({"sub": current_user.username, "role": current_user.role})
+    # ── FASE 2 — Fix 2.4: Generar AMBOS tokens nuevos ──
+    # Antes solo se retornaba un access_token nuevo. El refresh_token viejo
+    # tenía iat < token_revoked_at, así que cuando el access expiraba (2h),
+    # /users/refresh lo rechazaba con "Token revocado" y el usuario quedaba
+    # forzado a re-loguearse. Ahora retornamos AMBOS tokens nuevos —
+    # iat (en segundos, ver Fix 1.4) ≥ revoked_at (truncado a segundos), así
+    # que pasan la validación. Mantiene una sesión refrescable de 24h tras
+    # cambio de contraseña.
+    new_access = create_access_token({"sub": current_user.username, "role": current_user.role})
+    new_refresh = create_refresh_token({"sub": current_user.username, "role": current_user.role})
     return {
         "message": "Contraseña actualizada exitosamente",
-        "access_token": new_token,
+        "access_token": new_access,
+        "refresh_token": new_refresh,
         "token_type": "bearer",
     }
 

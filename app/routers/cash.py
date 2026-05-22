@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import date
-from app.utils.dt import today_cr
+from app.utils.dt import today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 
 from app.db.database import get_db
 from app.db.models.cash_session import CashSession
@@ -218,7 +218,7 @@ def get_today_movements(
             "type": "Entrada" if m.type == "in" else "Salida",
             "amount": float(m.amount),
             "description": m.description or "",
-            "time": m.created_at.strftime("%H:%M:%S") if m.created_at else "N/A",
+            "time": format_cr(m.created_at, "%H:%M:%S") if m.created_at else "N/A",  # FASE 2.2
         }
         for m in movements
     ]
@@ -274,7 +274,7 @@ def get_movements_by_date(
             "amount": float(m.amount),
             "description": m.description or "",
             "source": m.source,
-            "time": m.created_at.strftime("%H:%M:%S") if m.created_at else "N/A",
+            "time": format_cr(m.created_at, "%H:%M:%S") if m.created_at else "N/A",  # FASE 2.2
         }
         for m in movements
     ]

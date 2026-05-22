@@ -195,16 +195,28 @@ class SaleTicketDialog(QDialog):
     # 🖨️ Imprimir ticket
     # -------------------------------------------------------
     def print_ticket(self):
-        """Imprimir el ticket en la impresora térmica.
-        Lee la configuración de impresora desde la API de settings
-        en vez de usar valores hardcodeados.
+        """Imprimir el ticket via el flujo del sistema operativo.
+
+        FASE 2 — Fix 2.5:
+          Antes esta función importaba `print_sale_ticket` de
+          app.utils.print_ticket — pero esa función no existe (referencia
+          muerta a una refactorización pasada), así que el botón "Imprimir"
+          siempre tiraba ImportError.
+
+          La idea original era enviar el PDF crudo al puerto 9100 de la
+          impresora térmica configurada, lo cual NO funciona (las térmicas
+          POS no interpretan PDF; producen caracteres aleatorios o se
+          cuelgan — ver Fix 2.5 en app/utils/print_ticket.py).
+
+          Hasta que se implemente generación ESC/POS, este botón abre el
+          PDF en el flujo de impresión nativo del SO (`os.startfile(pdf,
+          "print")` en Windows, `lp`/`lpr` en macOS/Linux). El usuario
+          selecciona la impresora desde el diálogo del SO.
         """
         try:
-            from app.utils.print_ticket import print_sale_ticket
-
-            # Fase 4.3: Leer config de impresora desde settings
+            # Lee la config solo para respetar printer_type == "none"
+            # (desactivación explícita). Para el resto, vamos al PDF.
             printer_config = self._get_printer_config()
-
             if printer_config["type"] == "none":
                 QMessageBox.information(
                     self, "Impresión deshabilitada",
@@ -212,16 +224,30 @@ class SaleTicketDialog(QDialog):
                 )
                 return
 
-            ok = print_sale_ticket(
-                self.sale_data,
-                printer_type=printer_config["type"],
-                printer_info=printer_config["info"]
-            )
+            pdf_path = self.sale_data.get("pdf")
+            # `pdf` puede ser ruta local o URL (ver open_pdf). Para imprimir
+            # vía SO necesitamos una ruta local existente.
+            if not pdf_path or (isinstance(pdf_path, str) and pdf_path.startswith("http")):
+                QMessageBox.warning(
+                    self, "PDF no disponible",
+                    "El comprobante PDF aún no se generó localmente.\n"
+                    "Reintente en unos segundos o use el botón 'Abrir PDF'."
+                )
+                return
+            if not os.path.exists(pdf_path):
+                QMessageBox.warning(
+                    self, "PDF no encontrado",
+                    "El archivo PDF no se encuentra en el disco. "
+                    "Regenérelo desde el listado de ventas."
+                )
+                return
 
-            if ok:
-                QMessageBox.information(self, "Éxito", "Ticket impreso correctamente.")
-            else:
-                QMessageBox.warning(self, "Error", "No se pudo imprimir el ticket.")
+            from app.utils.print_ticket import print_pdf
+            print_pdf(pdf_path)
+            QMessageBox.information(
+                self, "Enviado a impresora",
+                "Ticket enviado a la impresora del sistema operativo."
+            )
         except Exception as e:
             QMessageBox.critical(self, "Error", f"No se pudo imprimir el ticket:\n{e}")
 

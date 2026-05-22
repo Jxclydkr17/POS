@@ -12,7 +12,45 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas
 from datetime import datetime
+from pathlib import Path
 from app.utils.dt import now_cr
+from app.core.config import DATA_DIR  # FASE 2 — Fix 2.3: exports en DATA_DIR
+
+
+# ── FASE 2 — Fix 2.3: directorio de exports persistente ─────
+# Antes: los exports se escribían con rutas relativas al CWD
+# ("exports/foo.xlsx"). En una app empaquetada como .exe, el CWD puede
+# ser cualquier sitio según cómo se lance (acceso directo del escritorio,
+# menú inicio, doble-click directo, etc.) → el usuario nunca encontraba
+# sus archivos. DATA_DIR/exports/ es predecible y persiste entre updates.
+
+def _export_dir() -> Path:
+    """Retorna DATA_DIR/exports/, creándolo si no existe."""
+    p = DATA_DIR / "exports"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _resolve_export_filename(filename, default_basename: str) -> str:
+    """Resuelve cualquier filename a una ruta absoluta bajo DATA_DIR/exports/.
+
+    Reglas:
+      - None / vacío  → DATA_DIR/exports/<default_basename>
+      - relativo      → DATA_DIR/exports/<basename(filename)>
+                        (ignora prefijos como 'exports/' para evitar duplicación)
+      - absoluto      → respeta tal cual; sólo asegura que el directorio padre
+                        exista. El caller asumió la responsabilidad de elegir
+                        el destino.
+    Siempre retorna `str` (compatible con openpyxl/reportlab que esperan str).
+    """
+    if filename:
+        p = Path(filename)
+        if p.is_absolute():
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return str(p)
+        # Relativo: tomar sólo el basename para no duplicar 'exports/'
+        return str(_export_dir() / p.name)
+    return str(_export_dir() / default_basename)
 
 
 # ── Helpers ─────────────────────────────────────────────────
@@ -42,15 +80,19 @@ def _dicts_to_excel(data: list[dict], filename: str) -> str:
 
 def export_sales_history_excel(data, filename=None):
     """Exporta lista de ventas a Excel"""
-    if not filename:
-        filename = f"historial_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"historial_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
     return _dicts_to_excel(data, filename)
 
 
 def export_sales_history_pdf(data, start_date, end_date, filename=None, business_name="Mi Negocio"):
     """Exporta lista de ventas a PDF"""
-    if not filename:
-        filename = f"historial_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"historial_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
     c = canvas.Canvas(filename, pagesize=landscape(letter))
     width, height = landscape(letter)
@@ -99,15 +141,19 @@ def export_sales_history_pdf(data, start_date, end_date, filename=None, business
 
 def export_expenses_excel(data, filename=None):
     """Exporta lista de gastos a Excel"""
-    if not filename:
-        filename = f"reporte_gastos_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"reporte_gastos_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
     return _dicts_to_excel(data, filename)
 
 
 def export_expenses_pdf(data, start_date, end_date, total, filename=None, business_name="Mi Negocio"):
     """Exporta lista de gastos a PDF"""
-    if not filename:
-        filename = f"reporte_gastos_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"reporte_gastos_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
     c = canvas.Canvas(filename, pagesize=landscape(letter))
     width, height = landscape(letter)
@@ -163,15 +209,19 @@ def export_expenses_pdf(data, start_date, end_date, total, filename=None, busine
 
 def export_purchases_excel(data, filename=None):
     """Exporta lista de compras/facturas a Excel."""
-    if not filename:
-        filename = f"reporte_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"reporte_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
     return _dicts_to_excel(data, filename)
 
 
 def export_purchases_pdf(data, title_extra="", filename=None, business_name="Mi Negocio"):
     """Exporta lista de compras/facturas a PDF."""
-    if not filename:
-        filename = f"reporte_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"reporte_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
     c = canvas.Canvas(filename, pagesize=landscape(letter))
     width, height = landscape(letter)
@@ -246,8 +296,10 @@ def export_purchases_pdf(data, title_extra="", filename=None, business_name="Mi 
 
 def export_sales_analytics_excel(data, filename=None):
     """Exporta analítica de ventas a Excel (múltiples hojas)."""
-    if not filename:
-        filename = f"analitica_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"analitica_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
 
     wb = Workbook()
 
@@ -289,8 +341,10 @@ def export_sales_analytics_excel(data, filename=None):
 
 def export_sales_analytics_pdf(data, filename=None, business_name="Mi Negocio"):
     """Exporta analítica de ventas a PDF."""
-    if not filename:
-        filename = f"analitica_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"analitica_ventas_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
     c = canvas.Canvas(filename, pagesize=landscape(letter))
     width, height = landscape(letter)
@@ -372,8 +426,10 @@ def export_sales_analytics_pdf(data, filename=None, business_name="Mi Negocio"):
 
 def export_purchases_analytics_excel(data, filename=None):
     """Exporta analítica de compras a Excel (múltiples hojas)."""
-    if not filename:
-        filename = f"analitica_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"analitica_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
 
     wb = Workbook()
     first_sheet_used = False
@@ -411,8 +467,10 @@ def export_purchases_analytics_excel(data, filename=None):
 
 def export_purchases_analytics_pdf(data, filename=None, business_name="Mi Negocio"):
     """Exporta analítica de compras a PDF."""
-    if not filename:
-        filename = f"analitica_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    # FASE 2 — Fix 2.3: ruta absoluta en DATA_DIR/exports
+    filename = _resolve_export_filename(
+        filename, f"analitica_compras_{now_cr().strftime('%Y%m%d_%H%M%S')}.pdf"
+    )
 
     c = canvas.Canvas(filename, pagesize=landscape(letter))
     width, height = landscape(letter)

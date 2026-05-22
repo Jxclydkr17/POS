@@ -46,7 +46,7 @@ from app.services.settings_service import (
     log_audit,
     get_audit_log,
 )
-from app.core.config import is_sqlite
+from app.core.config import is_sqlite, DATA_DIR  # FASE 2 — Fix 2.2: DATA_DIR persiste updates
 from app.services import backup_service
 
 logger = logging.getLogger(__name__)
@@ -56,11 +56,15 @@ router = APIRouter(
     tags=["Configuración"]
 )
 
-LOGO_DIR = os.path.join(os.path.dirname(__file__), "..", "uploads", "logos")
+# ── FASE 2 — Fix 2.2: directorios persistentes en DATA_DIR ──
+# Antes vivían en app/uploads/logos (→ _internal/ en .exe), que se
+# borra cada update del installer. DATA_DIR/uploads/logos persiste.
+LOGO_DIR = DATA_DIR / "uploads" / "logos"
 os.makedirs(LOGO_DIR, exist_ok=True)
 
-BACKUP_DIR = os.path.join(os.path.dirname(__file__), "..", "backups")
-os.makedirs(BACKUP_DIR, exist_ok=True)
+# ── FASE 2 — Fix 2.2: Eliminado BACKUP_DIR muerto. El real está en
+# app/services/backup_service.py (BACKUP_DIR = DATA_DIR / "backups").
+# El de acá nunca se usaba pero creaba un directorio huérfano por carga.
 
 # ── FASE 2 — Fix 2.5: Extensiones permitidas para logo ──
 _ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
@@ -760,7 +764,10 @@ from app.schemas.secure_config import (
 from app.services.secure_config_service import get_secure, set_secure
 
 
-CERT_DIR = os.path.join(os.path.dirname(__file__), "..", "certs")
+# ── FASE 2 — Fix 2.2: cert persistente en DATA_DIR ──
+# CRÍTICO: el certificado .p12 de Hacienda no debe perderse al actualizar.
+# Antes: app/certs (→ _internal/app/certs en .exe, borrado en cada update).
+CERT_DIR = DATA_DIR / "certs"
 os.makedirs(CERT_DIR, exist_ok=True)
 
 

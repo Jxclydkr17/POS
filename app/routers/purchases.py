@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, subqueryload
 
 from app.db.database import get_db
 from app.core.dependencies import get_current_user, require_role
+from app.core.config import DATA_DIR  # FASE 2 — Fix 2.2: DATA_DIR persiste updates
 from app.schemas.api_response import APIResponse
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.supplier import Supplier
@@ -237,7 +238,9 @@ def export_purchases(
             "notes": p.notes or "",
         })
 
-    os.makedirs("exports", exist_ok=True)
+    # FASE 2 — Fix 2.3: ya no necesitamos os.makedirs("exports", ...).
+    # export_utils._resolve_export_filename() crea DATA_DIR/exports/ y resuelve
+    # rutas relativas contra ese directorio absoluto. Pasamos basenames simples.
 
     if format.lower() == "pdf":
         from app.utils.export_utils import export_purchases_pdf
@@ -251,13 +254,15 @@ def export_purchases(
         filepath = export_purchases_pdf(
             data,
             title_extra=title_extra,
-            filename=f"exports/compras_export.pdf",
+            filename="compras_export.pdf",  # FASE 2.3: basename → DATA_DIR/exports/...
         )
         return FileResponse(filepath, filename="reporte_compras.pdf", media_type="application/pdf")
     else:
         from app.utils.export_utils import export_purchases_excel
 
-        filepath = export_purchases_excel(data, filename=f"exports/compras_export.xlsx")
+        filepath = export_purchases_excel(
+            data, filename="compras_export.xlsx"  # FASE 2.3: basename → DATA_DIR/exports/...
+        )
         return FileResponse(
             filepath,
             filename="reporte_compras.xlsx",
@@ -588,7 +593,10 @@ def pay_purchase(
 # ------------------------------------------------------------
 # 🔹 Subir PDF
 # ------------------------------------------------------------
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "uploads", "purchases")
+# ── FASE 2 — Fix 2.2: uploads persistentes en DATA_DIR ──
+# Antes: {project}/uploads/purchases (→ _internal/uploads/purchases en .exe),
+# borrado en cada update del installer. DATA_DIR/uploads/purchases persiste.
+UPLOAD_DIR = DATA_DIR / "uploads" / "purchases"
 
 
 @router.post("/{purchase_id}/upload-pdf", response_model=APIResponse[PurchaseOut])

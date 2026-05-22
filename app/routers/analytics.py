@@ -18,7 +18,7 @@ from app.db.models.purchase_payment import PurchasePayment
 from app.db.models.supplier import Supplier
 from app.db.models.category import Category
 from app.db.models.user import User
-from app.utils.dt import utcnow, today_cr
+from app.utils.dt import utcnow, today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.utils.db_compat import sql_datediff, sql_year, sql_month
 
 # ── FASE 1 — Fix 1.1: Importar dependencia de autenticación ──
@@ -396,7 +396,7 @@ def products_no_rotation(
         if row.last_sale_at:
             last_sale = row.last_sale_at if row.last_sale_at.tzinfo else row.last_sale_at.replace(tzinfo=timezone.utc)
             days_without_sale = (now - last_sale).days
-            last_sale_str = row.last_sale_at.strftime("%Y-%m-%d")
+            last_sale_str = format_cr(row.last_sale_at, "%Y-%m-%d")  # FASE 2.2
         else:
             days_without_sale = None   # nunca vendido
             last_sale_str = None

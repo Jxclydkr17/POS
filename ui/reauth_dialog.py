@@ -117,6 +117,8 @@ class LoginDialog(QDialog):
         """)
 
         self.token = None
+        # FASE 2 — Fix 2.4: capturar refresh_token para mantener sesión refrescable.
+        self.refresh_token = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -191,6 +193,10 @@ class LoginDialog(QDialog):
             QMessageBox.critical(self, "Error", "Respuesta del servidor sin token.")
             return
         self.token = token
+        # FASE 2 — Fix 2.4: capturar refresh_token (puede no venir si el
+        # backend es viejo, en cuyo caso queda en None y simplemente no se
+        # persiste refresh — la sesión durará 2h sin renovación).
+        self.refresh_token = data.get("refresh_token")
         self.accept()
 
     def _on_login_failed(self, error_msg: str):

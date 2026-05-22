@@ -438,21 +438,21 @@ def customer_profile(
             "notes": getattr(customer, "notes", None),
             "birth_date": str(customer.birth_date) if getattr(customer, "birth_date", None) else None,
             "is_active": customer.is_active,
-            "created_at": customer.created_at.strftime("%Y-%m-%d") if customer.created_at else None,
+            "created_at": format_cr(customer.created_at, "%Y-%m-%d") if customer.created_at else None,  # FASE 2.2
         },
         "stats": {
             "total_sales": total_sales,
             "total_amount": round(total_amount, 2),
             "avg_ticket": round(avg_ticket, 2),
             "frequency_per_month": frequency,
-            "last_sale_date": last_sale.strftime("%Y-%m-%d %H:%M") if last_sale else None,
-            "first_sale_date": first_sale.strftime("%Y-%m-%d") if first_sale else None,
+            "last_sale_date": format_cr(last_sale, "%Y-%m-%d %H:%M") if last_sale else None,  # FASE 2.2
+            "first_sale_date": format_cr(first_sale, "%Y-%m-%d") if first_sale else None,  # FASE 2.2
         },
         "credit": {
             "balance": credit_balance,
             "limit": credit_limit,
             "has_limit": has_limit,
-            "last_payment_date": last_payment.created_at.strftime("%Y-%m-%d %H:%M") if last_payment else None,
+            "last_payment_date": format_cr(last_payment.created_at, "%Y-%m-%d %H:%M") if last_payment else None,  # FASE 2.2
             "last_payment_amount": float(last_payment.amount) if last_payment else None,
         },
         "recent_sales": [

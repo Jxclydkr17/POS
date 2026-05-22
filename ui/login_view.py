@@ -528,8 +528,15 @@ class LoginWindow(QWidget):
 
             def _on_ok(new_data):
                 new_token = new_data.get("access_token")
+                # FASE 2 — Fix 2.4: capturar el refresh_token nuevo del response.
+                # Antes solo se guardaba el access (2h de vida). Cuando ese expiraba,
+                # el refresh viejo (del login original) tenía iat < token_revoked_at,
+                # así que /users/refresh lo rechazaba → re-login forzado tras 2h.
+                new_refresh = new_data.get("refresh_token")
                 if new_token:
                     session.token = new_token
+                    if new_refresh:
+                        session.refresh_token = new_refresh
                     session.save_session()
                 result["changed"] = True
                 QMessageBox.information(dlg, "Listo", "Contraseña actualizada exitosamente.")
@@ -595,6 +602,9 @@ class LoginWindow(QWidget):
 
         username = self.username_input.text().strip()
         token = data.get("access_token")
+        # FASE 2 — Fix 2.4: capturar también el refresh_token para que el
+        # endpoint /users/refresh pueda renovar access tokens vencidos.
+        refresh = data.get("refresh_token")
 
         payload = decode_token(token)
         role = payload.get("role")
@@ -610,6 +620,11 @@ class LoginWindow(QWidget):
             session.token = token
             session.username = username
             session.role = role
+            # FASE 2 — Fix 2.4: el refresh viejo (de este login) no servirá
+            # tras el password change porque su iat < token_revoked_at.
+            # No lo persistimos; el dialog recibirá uno nuevo de change-password
+            # y lo guardará vía session.save_session().
+            session.refresh_token = None
             # NO llamar save_session() aquí
 
             changed = self._show_change_password_dialog(self._pending_password)
@@ -618,15 +633,17 @@ class LoginWindow(QWidget):
                 session.token = None
                 session.username = None
                 session.role = None
+                session.refresh_token = None  # FASE 2 — Fix 2.4
                 return
 
-            # El dialog ya actualizó session.token con el nuevo token
-            # y llamó save_session(). No sobreescribir con el token viejo.
+            # El dialog ya actualizó session.token (y session.refresh_token)
+            # con los tokens nuevos y llamó save_session(). No sobreescribir.
             # Solo asegurar que username/role estén persistidos.
             session.save_session()
         else:
             # No requería cambio de contraseña → persistir normalmente
-            session.start_session(username, role, token)
+            # FASE 2 — Fix 2.4: incluir refresh_token en la sesión persistida
+            session.start_session(username, role, token, refresh_token=refresh)
 
         logging.debug(f"🔐 Sesión iniciada - Usuario: {username}, Rol: {role}")
 

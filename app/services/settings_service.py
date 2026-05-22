@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from app.db.models.settings import Settings
 from app.db.models.settings_audit import SettingsAuditLog
 from app.schemas.settings import SettingsOut, SettingsUpdate
+from app.utils.dt import format_cr  # FASE 2.2 — Fix 2.2: display CR
 
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ def get_audit_log(db: Session, limit: int = 50) -> list:
             "username": r.username,
             "action": r.action,
             "changes": r.changes,
-            "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else None,
+            "created_at": format_cr(r.created_at, "%Y-%m-%d %H:%M:%S") if r.created_at else None,  # FASE 2.2
         }
         for r in rows
     ]

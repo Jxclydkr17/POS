@@ -83,12 +83,18 @@ Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
 // Crear directorios necesarios post-instalacion
+// ── FASE 2 — Fix 2.2: todos los dirs persistentes bajo {app}\data\ ──
+// El backend ahora escribe cert/logo/PDFs en {app}\data\... que sobrevive
+// updates. Antes el installer creaba {app}\certs (huérfano: backend
+// escribía a {app}\_internal\app\certs, borrado en cada update).
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
     ForceDirectories(ExpandConstant('{app}\data\backups'));
     ForceDirectories(ExpandConstant('{app}\data\pdfs'));
-    ForceDirectories(ExpandConstant('{app}\certs'));
+    ForceDirectories(ExpandConstant('{app}\data\certs'));
+    ForceDirectories(ExpandConstant('{app}\data\uploads\logos'));
+    ForceDirectories(ExpandConstant('{app}\data\uploads\purchases'));
   end;
 end;

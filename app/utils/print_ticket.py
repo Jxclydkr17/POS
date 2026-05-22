@@ -2,23 +2,27 @@
 app/utils/print_ticket.py — Impresión de tickets y comprobantes
 
 Soporta:
-  1. Impresión directa a impresora térmica por red (TCP/IP)
-  2. Impresión via sistema operativo (Windows/Mac/Linux)
-  3. Flujo integrado con facturación electrónica
+  1. Impresión via sistema operativo (Windows/Mac/Linux) → funciona OK.
+  2. Envío RAW de bytes por TCP/IP (utility de bajo nivel para ESC/POS).
+  3. Flujo integrado con facturación electrónica.
 
-FASE 3 FIX:
-  - Conectado al flujo de factura electrónica
-  - Soporta impresión de PDF de comprobante con QR
-  - Lee configuración de impresora desde settings de BD
+⚠️  FASE 2 — Fix 2.5: Impresión térmica directa NO está implementada
+   Las impresoras térmicas POS (Epson TM-T20, Bixolon SRP-275, etc.)
+   hablan ESC/POS, NO PDF. Enviar bytes PDF al puerto 9100 produce
+   caracteres aleatorios impresos o cuelga la impresora.
+
+   Antes este archivo abría el PDF, leía sus bytes y los enviaba a la
+   térmica. Esa vía está deshabilitada (`use_thermal=True` ahora lanza
+   NotImplementedError) hasta que se implemente generación de comandos
+   ESC/POS con python-escpos u otra librería equivalente.
+
+   Mientras tanto use el flujo por SO (use_thermal=False, default), que
+   imprime el PDF via `os.startfile(file, "print")` en Windows
+   (`lp`/`lpr` en macOS/Linux) y sí funciona con cualquier impresora.
 
 USO:
-    from app.utils.print_ticket import print_pdf, print_to_thermal
-
-    # Imprimir PDF via SO
-    print_pdf("/ruta/al/comprobante.pdf")
-
-    # Imprimir directo a térmica
-    print_to_thermal(raw_bytes, ip="192.168.0.120", port=9100)
+    from app.utils.print_ticket import print_pdf
+    print_pdf("/ruta/al/comprobante.pdf")  # Imprime via SO (funciona)
 """
 
 import os
@@ -69,12 +73,23 @@ def print_to_thermal(
     timeout: int = 5,
 ) -> None:
     """
-    Envía datos RAW directamente a una impresora térmica por TCP/IP.
+    Utility de bajo nivel: envía bytes RAW a un puerto TCP (típicamente 9100
+    de una impresora térmica).
+
+    ⚠️  FASE 2 — Fix 2.5:
+       Esta función NO interpreta su entrada. `data` debe ser una secuencia
+       de comandos ESC/POS o texto plano que la impresora térmica entienda.
+       NO pasar bytes PDF: las térmicas POS no interpretan PDF y producen
+       caracteres aleatorios o se cuelgan.
+
+       Hoy nada en la app llama esta función con bytes válidos para POS
+       (no hay generador ESC/POS implementado todavía). Queda como
+       primitiva para una futura integración con python-escpos.
 
     Args:
-        data: Bytes a enviar (ESC/POS commands o texto plano).
+        data: Bytes ESC/POS o texto plano (NO PDF).
         ip: Dirección IP de la impresora.
-        port: Puerto (default 9100 = RAW printing).
+        port: Puerto TCP (default 9100 = "RAW printing" estándar).
         timeout: Timeout de conexión en segundos.
 
     Raises:
@@ -118,17 +133,27 @@ def print_einvoice_ticket(
 
     Flujo integrado:
     1. Genera PDF con QR via einvoice_pdf service
-    2. Imprime via SO o impresora térmica según configuración
+    2. Imprime via sistema operativo (siempre, ver nota)
+
+    ⚠️  FASE 2 — Fix 2.5:
+       `use_thermal=True` ahora lanza NotImplementedError. La vía vieja
+       enviaba bytes PDF al puerto 9100 — eso corrompe el output de las
+       impresoras térmicas POS (no entienden PDF, solo ESC/POS). Use el
+       flujo SO (use_thermal=False, default) hasta que se implemente la
+       generación ESC/POS con python-escpos u otra librería.
 
     Args:
         db: Sesión de BD
         einvoice_id: ID del ElectronicInvoice
-        use_thermal: Si True, envía a impresora térmica
-        thermal_ip: IP de la impresora (override)
-        thermal_port: Puerto de la impresora (override)
+        use_thermal: DEBE ser False. True levanta NotImplementedError.
+        thermal_ip: (reservado para futuro) IP de impresora térmica
+        thermal_port: (reservado para futuro) Puerto de impresora térmica
 
     Returns:
         Ruta del PDF generado.
+
+    Raises:
+        NotImplementedError: Si use_thermal=True.
     """
     from app.services.einvoice_pdf import generate_einvoice_pdf
     from app.core.config import get_logo_path
@@ -139,28 +164,30 @@ def print_einvoice_ticket(
     # Generar PDF
     pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
 
-    # Leer configuración de impresora desde settings si no se pasa override
+    # ── FASE 2 — Fix 2.5: la vía térmica directa está deshabilitada ──
+    # Antes acá se hacía: leer pdf_path como bytes, mandárselos al puerto
+    # 9100 con print_to_thermal(). Eso es CORROMPER el output: las térmicas
+    # POS (Epson TM-T20, Bixolon, Star TSP, etc.) hablan ESC/POS, no PDF.
+    # El comentario viejo "la mayoría de impresoras térmicas modernas
+    # aceptan PDF vía RAW" es FALSO. Solo impresoras de oficina con
+    # interpretación PJL/PostScript aceptan PDF crudo.
+    #
+    # Hasta que se implemente generación ESC/POS (con python-escpos u
+    # otra librería), bloqueamos esta vía con un error claro en lugar
+    # de basura impresa o impresora colgada.
     if use_thermal:
-        if not thermal_ip or not thermal_port:
-            try:
-                from app.db.models.settings import Settings
-                settings_row = db.query(Settings).filter(Settings.id == 1).first()
-                if settings_row:
-                    thermal_ip = thermal_ip or settings_row.printer_ip or "192.168.0.120"
-                    thermal_port = thermal_port or settings_row.printer_port or 9100
-                else:
-                    thermal_ip = thermal_ip or "192.168.0.120"
-                    thermal_port = thermal_port or 9100
-            except Exception:
-                thermal_ip = thermal_ip or "192.168.0.120"
-                thermal_port = thermal_port or 9100
+        # Aunque thermal_ip/thermal_port se sigan resolviendo y leyendo de
+        # settings, NO los usamos para enviar PDF crudo. Mejor un error claro.
+        raise NotImplementedError(
+            "Impresión directa a impresora térmica POS no está implementada "
+            "todavía: requiere generar comandos ESC/POS, no enviar PDF crudo "
+            "al puerto 9100 (eso produce caracteres aleatorios impresos o "
+            "cuelga la impresora). Use la impresión vía sistema operativo "
+            "(use_thermal=False, el default), que abre el PDF en el flujo "
+            "de impresión del SO y funciona con cualquier impresora."
+        )
 
-        # Para impresora térmica, enviamos el PDF como archivo
-        # (la mayoría de impresoras térmicas modernas aceptan PDF vía RAW)
-        with open(pdf_path, "rb") as f:
-            print_to_thermal(f.read(), ip=thermal_ip, port=thermal_port)
-    else:
-        # Imprimir via sistema operativo
-        print_pdf(pdf_path)
+    # Imprimir via sistema operativo (vía que SÍ funciona)
+    print_pdf(pdf_path)
 
     return pdf_path

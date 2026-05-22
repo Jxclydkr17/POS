@@ -10,7 +10,7 @@ from app.services.expense_service import add_expense_service
 from app.db.models.sale import Sale
 from app.db.models.customer import Customer
 from app.constants.payment_methods import ALL_PAYMENT_METHODS
-from app.utils.dt import utcnow, today_cr
+from app.utils.dt import utcnow, today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.services.settings_service import get_business_name
 from app.constants.status_enums import SaleStatus
 
@@ -336,7 +336,7 @@ def get_cash_report(
             "payment_method": s.payment_method or "Efectivo",
             "total": float(to_dec(s.total)),
             "status": s.status,
-            "created_at": s.created_at.strftime("%Y-%m-%d %H:%M:%S") if s.created_at else "",
+            "created_at": format_cr(s.created_at, "%Y-%m-%d %H:%M:%S") if s.created_at else "",  # FASE 2.2
         })
 
     movements_list = [
@@ -345,7 +345,7 @@ def get_cash_report(
             "amount": float(to_dec(m.amount)),
             "description": m.description or "",
             "source": m.source,
-            "time": m.created_at.strftime("%H:%M:%S") if m.created_at else "N/A",
+            "time": format_cr(m.created_at, "%H:%M:%S") if m.created_at else "N/A",  # FASE 2.2
         }
         for m in movements
     ]

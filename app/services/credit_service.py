@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from datetime import datetime, date, timedelta
 from decimal import Decimal
-from app.utils.dt import today_cr, TZ_CR
+from app.utils.dt import today_cr, TZ_CR, format_cr  # FASE 2.2 — Fix 2.2: display CR
 
 from app.db.models.credit import Credit
 from app.db.models.credit_sale import CreditSale
@@ -267,7 +267,7 @@ def get_credit_info(
     balance = round(total_sales - total_payments, 2)
     paid_this_month = round(float(agg.paid_this_month or 0), 2)
     last_payment_date = (
-        agg.last_payment_at.strftime("%Y-%m-%d %H:%M")
+        format_cr(agg.last_payment_at, "%Y-%m-%d %H:%M")  # FASE 2.2
         if agg.last_payment_at else None
     )
 
@@ -409,7 +409,7 @@ def get_credit_info(
             "type": m.type,
             "payment_method": m.payment_method or "N/A",
             "description": m.description,
-            "created_at": m.created_at.strftime("%Y-%m-%d %H:%M"),
+            "created_at": format_cr(m.created_at, "%Y-%m-%d %H:%M"),  # FASE 2.2
             "sale_id": None
         }
 
@@ -456,7 +456,7 @@ def get_credit_info(
                     "id": cs.id,
                     "sale_id": cs.sale_id,
                     "total_amount": float(cs.total_amount or 0),
-                    "created_at": cs.created_at.strftime("%Y-%m-%d %H:%M")
+                    "created_at": format_cr(cs.created_at, "%Y-%m-%d %H:%M")  # FASE 2.2
                 }
                 for cs in credit_sales
             ],

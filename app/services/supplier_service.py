@@ -22,6 +22,7 @@ from app.db.models.product import Product
 from app.db.models.purchase import Purchase
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
+from app.core.config import DATA_DIR  # FASE 2 — Fix 2.3: exports en DATA_DIR
 
 
 # ------------------------------------------------------------------
@@ -524,9 +525,8 @@ def export_suppliers_csv(db: Session, *, search: Optional[str] = None, is_active
 
 
 def export_suppliers_excel(db: Session, *, search: Optional[str] = None, is_active: Optional[bool] = None) -> str:
-    """Genera Excel de proveedores y retorna la ruta del archivo temporal."""
+    """Genera Excel de proveedores y retorna la ruta absoluta del archivo."""
     from openpyxl import Workbook
-    import os
     from datetime import datetime as _dt
 
     result = list_suppliers(db, search=search, is_active=is_active, skip=0, limit=999999)
@@ -570,7 +570,14 @@ def export_suppliers_excel(db: Session, *, search: Optional[str] = None, is_acti
             s.get("notes") or "",
         ])
 
-    os.makedirs("exports", exist_ok=True)
-    filepath = f"exports/proveedores_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    # ── FASE 2 — Fix 2.3: ruta absoluta bajo DATA_DIR/exports ──
+    # Antes: os.makedirs("exports", ...) + filepath relativo "exports/..."
+    # → en .exe el CWD es impredecible y los archivos terminaban en
+    # cualquier lugar (escritorio, system32, etc.). Ahora es predecible.
+    export_dir = DATA_DIR / "exports"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    filepath = str(
+        export_dir / f"proveedores_{_dt.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    )
     wb.save(filepath)
     return filepath

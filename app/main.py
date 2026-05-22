@@ -64,6 +64,15 @@ async def lifespan(app: FastAPI):
 
     # ── STARTUP ──────────────────────────────────────────────
 
+    # ── FASE 2 — Fix 2.2: Migrar directorios legacy a DATA_DIR ──
+    # Debe ir ANTES de cualquier código que dependa del cert/logo
+    # (en particular, antes de los background tasks de Hacienda).
+    try:
+        from app.core.data_migration import migrate_legacy_data_dirs
+        migrate_legacy_data_dirs()
+    except Exception as e:
+        logger.warning(f"Migración de directorios legacy no se completó: {e}")
+
     # Proformas: vencimiento automático
     from app.db.database import safe_session
     from app.db.models.proforma import Proforma

@@ -128,6 +128,9 @@ class SessionManager:
 
     def __init__(self):
         self.token: str | None = None
+        # FASE 2 — Fix 2.4: persistir refresh_token para sesión más larga (24h)
+        # que pueda sobrevivir al expirado del access_token (2h).
+        self.refresh_token: str | None = None
         self.username: str | None = None
         self.role: str | None = None
         self.load_session()
@@ -136,11 +139,16 @@ class SessionManager:
     # Manejo de sesión
     # ──────────────────────────────────────
 
-    def start_session(self, username: str, role: str, token: str):
-        """Inicia sesión y guarda los datos encriptados en session.json."""
+    def start_session(self, username: str, role: str, token: str, refresh_token: str | None = None):
+        """Inicia sesión y guarda los datos encriptados en session.json.
+
+        FASE 2 — Fix 2.4: refresh_token es opcional para mantener compatibilidad
+        con callers que aún no lo provean; cuando se provee se persiste también.
+        """
         self.username = username
         self.role = role
         self.token = token
+        self.refresh_token = refresh_token
         self.save_session()
 
     def end_session(self):
@@ -148,6 +156,7 @@ class SessionManager:
         self.username = None
         self.role = None
         self.token = None
+        self.refresh_token = None  # FASE 2 — Fix 2.4
         try:
             if os.path.exists(SESSION_FILE):
                 os.remove(SESSION_FILE)
@@ -190,11 +199,14 @@ class SessionManager:
     def save_session(self):
         """Guarda la sesión en un archivo JSON con el token encriptado."""
         encrypted_token = _encrypt_token(self.token) if self.token else None
+        # FASE 2 — Fix 2.4: persistir también el refresh_token (encriptado)
+        encrypted_refresh = _encrypt_token(self.refresh_token) if self.refresh_token else None
 
         data = {
             "username": self.username,
             "role": self.role,
             "token": encrypted_token,
+            "refresh_token": encrypted_refresh,  # FASE 2 — Fix 2.4
             # Marcador para saber que está encriptado
             "encrypted": True,
         }
@@ -233,6 +245,10 @@ class SessionManager:
             if not stored_token:
                 return
 
+            # FASE 2 — Fix 2.4: refresh_token puede no estar (sesión guardada
+            # antes del fix 2.4 o login externo que no lo provee).
+            stored_refresh = data.get("refresh_token")
+
             # Descifrar si está marcado como encriptado
             if data.get("encrypted", False):
                 decrypted = _decrypt_token(stored_token)
@@ -242,10 +258,17 @@ class SessionManager:
                     self.end_session()
                     return
                 self.token = decrypted
+                if stored_refresh:
+                    decrypted_refresh = _decrypt_token(stored_refresh)
+                    # Si el refresh no se descifra (raro), no anulamos toda
+                    # la sesión: el access aún sirve hasta que expire.
+                    self.refresh_token = decrypted_refresh
             else:
                 # Archivo legacy sin encriptación → usar directo
                 # y re-guardar encriptado para la próxima vez
                 self.token = stored_token
+                if stored_refresh:
+                    self.refresh_token = stored_refresh
                 self.save_session()  # re-guardar encriptado
 
         except (json.JSONDecodeError, KeyError, TypeError):

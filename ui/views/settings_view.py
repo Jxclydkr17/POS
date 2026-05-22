@@ -789,10 +789,17 @@ class SettingsView(QWidget):
         layout.addWidget(box)
 
         note = QLabel(
-            "ℹ️ Estos valores se usan al imprimir tickets de venta.\n"
-            "Tipo 'network': impresora en red (IP + puerto).\n"
-            "Tipo 'usb': impresora USB conectada localmente.\n"
-            "Tipo 'none': impresión deshabilitada."
+            "ℹ️ Estos valores se usan al imprimir tickets de venta.\n\n"
+            "⚠️ FASE 2 — Fix 2.5: La impresión directa a impresoras térmicas POS "
+            "(ESC/POS sobre puerto 9100) NO está implementada en esta versión. "
+            "Las opciones 'network'/'usb' acá se conservan para una futura "
+            "integración con python-escpos. Mientras tanto, la app imprime via "
+            "el flujo del sistema operativo (Windows: cuadro de diálogo de "
+            "impresión nativo) y funciona con cualquier impresora que el SO "
+            "tenga instalada como predeterminada.\n\n"
+            "Tipo 'network': impresora térmica en red (NO implementado todavía).\n"
+            "Tipo 'usb': impresora térmica USB (NO implementado todavía).\n"
+            "Tipo 'none': desactiva el botón 'Imprimir' del ticket."
         )
         note.setStyleSheet("color: #888; font-size: 12px; margin-top: 12px;")
         note.setWordWrap(True)
@@ -2556,9 +2563,12 @@ class SettingsView(QWidget):
                 _resp.raise_for_status()
                 _data = _resp.json()
                 _new_token = _data.get("access_token")
+                # FASE 2 — Fix 2.4: capturar refresh_token también para que la
+                # sesión recargada pueda renovar tokens vencidos automáticamente.
+                _new_refresh = _data.get("refresh_token")
                 _payload = _decode_token(_new_token)
                 _role = _payload.get("role", _session.role)
-                _session.start_session(_new_username, _role, _new_token)
+                _session.start_session(_new_username, _role, _new_token, refresh_token=_new_refresh)
             except Exception as _re_err:
                 logger.warning(f"Re-login automático falló: {_re_err}")
 
