@@ -36,9 +36,14 @@ def offline_queue_list(db: Session = Depends(get_db)):
     return get_queued_invoices(db)
 
 
-@router.post("/offline-queue/process", dependencies=[Depends(get_current_user)])
+# ── FASE 3 — Fix 3.4: restringir a admin ──
+# Bug previo: solo Depends(get_current_user) → cualquier usuario autenticado
+# (cajero, vendedor) podía forzar envíos a Hacienda arbitrariamente. Forzar
+# el procesamiento es una acción administrativa (consume reintentos del
+# rate limit, afecta el estado de comprobantes). Debe ser admin.
+@router.post("/offline-queue/process", dependencies=[Depends(require_role("admin"))])
 def offline_queue_process():
-    """Fuerza un ciclo de procesamiento inmediato de la cola offline."""
+    """Fuerza un ciclo de procesamiento inmediato de la cola offline (solo admin)."""
     from app.services.offline_queue import force_process_queue
     processed = force_process_queue()
     return success_response(
@@ -69,9 +74,14 @@ def check_for_updates():
     return check_update()
 
 
-@router.post("/update/download", dependencies=[Depends(get_current_user)])
+# ── FASE 3 — Fix 3.4: restringir a admin ──
+# Bug previo: solo Depends(get_current_user) → cualquier usuario autenticado
+# podía descargar e instalar actualizaciones de la app, lo cual implica
+# escribir archivos al disco y eventualmente reiniciar/reemplazar binarios.
+# Definitivamente admin-only.
+@router.post("/update/download", dependencies=[Depends(require_role("admin"))])
 def download_update():
-    """Descarga la actualización más reciente (si hay)."""
+    """Descarga la actualización más reciente, si hay (solo admin)."""
     from app.services.updater import download_update
     result = download_update()
     return success_response(

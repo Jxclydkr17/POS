@@ -58,6 +58,14 @@ def get_db():
 
 _bg_logger = logging.getLogger("app.db.background")
 
+# ── FASE 3 — Fix 3.3: ventana de espera para background tasks ──
+# Cuando un restore SQLite está en curso, safe_session() bloquea hasta
+# que el _maintenance_event se libere o se agote este timeout. 60s es
+# generoso para restores grandes (>500MB) y a la vez evita colgar
+# tasks indefinidamente. El intervalo de polling es 0.25s.
+_MAINTENANCE_WAIT_SECONDS = 60.0
+_MAINTENANCE_POLL_INTERVAL = 0.25
+
 
 @contextmanager
 def safe_session():
@@ -69,6 +77,13 @@ def safe_session():
       - pool_pre_ping (MySQL) tests the connection at checkout, so stale
         connections after pool_recycle are replaced transparently.
 
+    FASE 3 — Fix 3.3: respeta el modo mantenimiento del backup_service.
+    Si un restore SQLite está en curso (_maintenance_event activo), esta
+    función espera hasta `_MAINTENANCE_WAIT_SECONDS` a que termine. Si
+    el restore tarda más, lanza RuntimeError para que el background task
+    aborte ese ciclo y lo reintente naturalmente en la siguiente vuelta.
+    Esto evita que un task abra una conexión a la BD a medio copiar.
+
     Usage:
         from app.db.database import safe_session
 
@@ -76,6 +91,32 @@ def safe_session():
             rows = db.query(Model).all()
             db.commit()   # caller manages commit/rollback as needed
     """
+    # ── FASE 3 — Fix 3.3: respetar modo mantenimiento ──
+    # Lazy import para evitar ciclo con backup_service (que importa
+    # `engine` desde este módulo dentro de _restore_sqlite_backup).
+    _maintenance_event = None
+    try:
+        from app.services.backup_service import _maintenance_event as _ev
+        _maintenance_event = _ev
+    except Exception:
+        # Si backup_service aún no se cargó (early startup) o falla
+        # el import, continuamos sin bloqueo — modo defensivo.
+        pass
+
+    if _maintenance_event is not None and _maintenance_event.is_set():
+        import time
+        deadline = time.monotonic() + _MAINTENANCE_WAIT_SECONDS
+        while _maintenance_event.is_set() and time.monotonic() < deadline:
+            time.sleep(_MAINTENANCE_POLL_INTERVAL)
+        if _maintenance_event.is_set():
+            # El restore sigue activo tras el timeout — abortar este
+            # ciclo del background task. La excepción es manejada por
+            # el caller (cada loop hace `except Exception: logger.error`).
+            raise RuntimeError(
+                "BD en modo mantenimiento (restore en curso). "
+                "Operación abortada para evitar corrupción; se reintentará."
+            )
+
     db = SessionLocal()
     try:
         yield db

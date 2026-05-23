@@ -279,8 +279,17 @@ async def _global_exception_handler(request: Request, exc: Exception):
         exc_info=True,
     )
 
-    # En desarrollo, incluir detalle; en producción, mensaje genérico
-    if settings.app_debug:
+    # ── FASE 3 — Fix 3.5: defensa en profundidad como /docs ──
+    # Bug previo: `if settings.app_debug:` exponía type(exc).__name__ + str(exc)
+    # al cliente HTTP siempre que app_debug=true. Si alguien dejaba
+    # APP_DEBUG=true por error en producción, cada excepción no manejada
+    # filtraba detalles internos (clase de excepción, mensaje real con
+    # posibles paths, queries SQL, valores, etc.) al cliente.
+    #
+    # Mismo patrón que `_show_docs` arriba (línea ~195): en producción se
+    # ignora `app_debug` sin importar su valor. El warning de startup
+    # (líneas ~197-203) ya alerta al operador si quedó en true.
+    if settings.app_debug and not _is_production:
         detail = f"{type(exc).__name__}: {str(exc)}"
     else:
         detail = "Error interno del servidor. Contacte al administrador."

@@ -153,6 +153,51 @@ def update_expense(
                 status_code=400
             )
 
+        # ── FASE 3 — Fix 3.2 (extensión a update): bloquear cajas cerradas ──
+        # Bug previo: el bloque más abajo modificaba cash_movement.amount sin
+        # verificar el estado de la sesión. Editar un gasto cuya caja ya cerró
+        # cambia retroactivamente los totales del cierre histórico (mismo
+        # problema que delete_expense, ver Fix 3.2 en delete_expense).
+        #
+        # Misma regla por consistencia y para reforzar la inmutabilidad contable:
+        # si el gasto es "Gastos de caja" y su cash_movement pertenece a una
+        # sesión cerrada, se rechaza TODA modificación (no distinguimos campo,
+        # igual que delete). Si en el futuro se quiere permitir cambios
+        # cosméticos, se hará como feature separada con audit trail.
+        #
+        # IMPORTANTE: la verificación ocurre ANTES de update_expense_service
+        # para no dejar mutaciones a medio commitear en la sesión SQLAlchemy
+        # si fallamos (el `except HTTPException: raise` no ejecuta rollback).
+        expense_pre = db.query(Expense).filter(Expense.id == expense_id).first()
+        if expense_pre and expense_pre.category == CAT_GASTOS_CAJA:
+            cash_movement_pre = (
+                db.query(CashMovement)
+                .filter(
+                    CashMovement.source == "EXPENSE",
+                    CashMovement.reference_id == expense_id
+                )
+                .first()
+            )
+            if cash_movement_pre:
+                cash_session_pre = (
+                    db.query(CashSession)
+                    .filter(CashSession.id == cash_movement_pre.cash_session_id)
+                    .first()
+                )
+                if cash_session_pre and cash_session_pre.status == "closed":
+                    fecha = cash_session_pre.date.strftime("%d/%m/%Y")
+                    error_response(
+                        message=(
+                            f"No se puede editar este gasto: pertenece a la "
+                            f"caja del {fecha} (terminal {cash_session_pre.terminal_id}) "
+                            f"que ya fue cerrada. Modificar movimientos de cajas "
+                            f"cerradas rompe la trazabilidad contable. Para "
+                            f"corregir, registre un gasto compensatorio en la "
+                            f"caja actual."
+                        ),
+                        status_code=409,  # Conflict: estado de la sesión impide la acción
+                    )
+
         updated = update_expense_service(expense_id, updates, db)
 
         # Si cambió el monto y es "Gastos de caja", actualizar movimiento de caja
@@ -222,6 +267,36 @@ def delete_expense(
                 .first()
             )
             if cash_movement:
+                # ── FASE 3 — Fix 3.2: bloquear modificaciones a cajas cerradas ──
+                # Bug previo: si la sesión de caja del movimiento ya estaba
+                # "closed", se borraba el cash_movement igualmente. Resultado:
+                # el cierre histórico cambiaba retroactivamente (una caja
+                # cerrada con ₡200,000 en gastos aparecía después con ₡180,000)
+                # sin trazabilidad de qué se modificó.
+                #
+                # Fix: rechazar la operación cuando la sesión esté cerrada.
+                # Para corregir un gasto ya consolidado en un cierre histórico,
+                # el usuario debe registrar un gasto compensatorio en la caja
+                # abierta actual (práctica contable estándar de ajustes
+                # posteriores al cierre).
+                cash_session = (
+                    db.query(CashSession)
+                    .filter(CashSession.id == cash_movement.cash_session_id)
+                    .first()
+                )
+                if cash_session and cash_session.status == "closed":
+                    fecha = cash_session.date.strftime("%d/%m/%Y")
+                    error_response(
+                        message=(
+                            f"No se puede eliminar este gasto: pertenece a la "
+                            f"caja del {fecha} (terminal {cash_session.terminal_id}) "
+                            f"que ya fue cerrada. Modificar movimientos de cajas "
+                            f"cerradas rompe la trazabilidad contable. Para "
+                            f"corregir, registre un gasto compensatorio en la "
+                            f"caja actual."
+                        ),
+                        status_code=409,  # Conflict: estado de la sesión impide la acción
+                    )
                 db.delete(cash_movement)
 
         # -------------------------------------------------

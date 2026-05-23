@@ -376,33 +376,108 @@ def restore_backup(filename: str) -> None:
 
 def _restore_sqlite_backup(filepath: Path) -> None:
     """
-    Restaura SQLite: cierra todas las conexiones y copia el archivo .db.
+    Restaura SQLite con tres garantías de robustez:
+
+    1. **Atomicidad**: copia primero a archivo `.restore.tmp` y al final
+       hace `os.replace()` atómico al destino. Si la copia falla a mitad
+       (corte de luz, disco lleno, lectura defectuosa), la BD original
+       queda intacta — el .tmp se descarta.
+
+    2. **Verificación de integridad**: ejecuta `PRAGMA integrity_check`
+       sobre el archivo temporal antes del replace. Si el backup mismo
+       estaba corrupto, lo detectamos AQUÍ y NO sobrescribimos la BD
+       actual.
+
+    3. **Aislamiento de background tasks**: `_maintenance_event.set()`
+       hace que `safe_session()` bloquee nuevas sesiones desde otros
+       threads (offline_queue, hacienda_poller, periodic_expire). Pequeña
+       pausa después del `engine.dispose()` para que tasks "en vuelo"
+       (con conexión ya checked-out) completen su ciclo.
 
     IMPORTANTE: SQLite con WAL mode mantiene archivos -wal y -shm abiertos.
-    Si copiamos el .db mientras SQLAlchemy tiene conexiones activas,
-    el archivo puede quedar corrupto.  engine.dispose() cierra todo
-    el pool; SQLAlchemy reconecta automáticamente en la siguiente query.
+    Si copiamos el .db mientras SQLAlchemy tiene conexiones activas, el
+    archivo puede quedar corrupto. `engine.dispose()` reinicia el pool;
+    `safe_session()` bloquea nuevas conexiones durante el restore.
 
-    FASE 3 — Fix 3.3: Activa modo mantenimiento durante el restore
-    para que el middleware rechace requests concurrentes.
+    FASE 3 — Fix 3.3: atomicidad + integridad + aislamiento de background.
     """
+    import sqlite3
+    import time
     from app.db.database import engine
 
     db_path = _get_sqlite_db_path()
+    tmp_path = Path(str(db_path) + ".restore.tmp")
+
     try:
+        # 1️⃣ Activar modo mantenimiento ANTES de cualquier IO.
+        #    safe_session() ya bloquea nuevas sesiones desde este punto.
         _maintenance_event.set()
+
+        # 2️⃣ Reiniciar pool — futuras conexiones se crean limpias contra
+        #    el .db nuevo (post-replace). Conexiones ya checked-out no se
+        #    cierran activamente; se descartan al devolverse al pool.
         engine.dispose()
         logger.info("Conexiones SQLite cerradas antes de restaurar.")
-        shutil.copy2(str(filepath), str(db_path))
-        # Eliminar archivos WAL/SHM residuales del backup anterior
+
+        # 3️⃣ Pequeña espera para que tasks "en vuelo" (con conexión
+        #    abierta antes del dispose) terminen su ciclo. El polling
+        #    en safe_session() es 0.25s; 1.5s da buen margen.
+        time.sleep(1.5)
+
+        # 4️⃣ Limpiar restos de un restore previo fallido.
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+        # 5️⃣ Copiar a archivo temporal (no al destino directo). Si
+        #    copy2 falla aquí, db_path original queda intacto.
+        shutil.copy2(str(filepath), str(tmp_path))
+
+        # 6️⃣ Verificar integridad del archivo temporal antes de
+        #    promoverlo. Si el backup está corrupto, abortamos sin
+        #    tocar la BD actual.
+        conn = sqlite3.connect(str(tmp_path))
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+        finally:
+            conn.close()
+        if not row or row[0] != "ok":
+            check_result = row[0] if row else "(sin resultado)"
+            raise RuntimeError(
+                f"El backup falló la verificación de integridad: "
+                f"{check_result}. La BD actual NO fue modificada."
+            )
+
+        # 7️⃣ Replace atómico. En POSIX y Windows, os.replace() garantiza
+        #    atomicidad si origen y destino están en el mismo volumen
+        #    (mismo directorio en nuestro caso). En Windows puede fallar
+        #    con WinError 32 si alguien tiene el .db abierto — por eso el
+        #    sleep y el flag de maintenance.
+        os.replace(str(tmp_path), str(db_path))
+
+        # 8️⃣ Limpiar archivos WAL/SHM del .db viejo. Si quedaran, SQLite
+        #    intentaría aplicarlos al .db nuevo → corrupción.
         for suffix in ("-wal", "-shm"):
             residual = Path(str(db_path) + suffix)
             if residual.exists():
-                residual.unlink()
+                try:
+                    residual.unlink()
+                except OSError as e:
+                    logger.warning(f"No se pudo eliminar {residual.name}: {e}")
+
         logger.info(f"Base de datos SQLite restaurada desde: {filepath.name}")
-    except OSError as e:
+
+    except RuntimeError:
+        # Re-raise sin envolver (mensaje ya descriptivo de integrity_check)
+        raise
+    except (OSError, sqlite3.Error) as e:
         raise RuntimeError(f"Error restaurando SQLite: {e}")
     finally:
+        # Cleanup del tmp si quedó (no-op si os.replace ya lo movió).
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
         _maintenance_event.clear()
 
 

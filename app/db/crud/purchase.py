@@ -573,12 +573,34 @@ def add_credit_note(
 ) -> Purchase:
     purchase = get_purchase(db, purchase_id)
 
-    current_balance = purchase.balance
+    # ── FASE 3 — Fix 3.1: validar el AGREGADO de NCs, no solo la NC individual ──
+    # Bug previo: `if data.amount > float(purchase.amount)` validaba cada NC
+    # contra el total bruto, pero NO contra el conjunto de NCs ya emitidas.
+    # Ej.: una compra de ₡100,000 podía recibir 3 NCs de ₡40,000 cada una
+    # (₡120,000 totales) porque cada una individualmente "no excede" el total,
+    # y el balance quedaba en ₡-20,000.
+    #
+    # Regla contable: la suma de NCs nunca debe superar lo que aún se le debe
+    # al proveedor "antes de abonos en efectivo":
+    #     sum(NCs) + paid_amount  ≤  amount
+    #   ⇔  nueva_NC  ≤  amount − paid_amount − existing_NCs   (= balance actual)
+    purchase_amount = float(purchase.amount)
+    existing_cn_total = purchase.credit_notes_total
+    paid_amount = purchase.paid_amount
+    max_allowed = purchase_amount - paid_amount - existing_cn_total
 
-    if data.amount > float(purchase.amount):
+    # Tolerancia de redondeo (mismo criterio que add_payment, ver línea ~492).
+    if data.amount > max_allowed + 0.01:
+        available = max(max_allowed, 0.0)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="La nota de crédito no puede exceder el monto total de la compra.",
+            detail=(
+                f"La nota de crédito (₡{data.amount:.2f}) excede el saldo "
+                f"disponible para notas de crédito (₡{available:.2f}). "
+                f"Total compra: ₡{purchase_amount:.2f} · "
+                f"abonos: ₡{paid_amount:.2f} · "
+                f"NCs previas: ₡{existing_cn_total:.2f}."
+            ),
         )
 
     cn = PurchaseCreditNote(
