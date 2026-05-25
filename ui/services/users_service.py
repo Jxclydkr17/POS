@@ -2,12 +2,19 @@
 """
 Servicio HTTP para gestión de usuarios/cajeros.
 Fase 3: CRUD + permisos granulares.
+
+FASE 6 — Fix 6.X: Auto-refresh ante 401.
+  Antes: `import requests` directo.
+  Ahora: `from ui.api import http as requests`. El wrapper intercepta
+  401, intenta /users/refresh con session.refresh_token y reintenta
+  el request UNA vez con el nuevo access_token. Si el refresh falla,
+  retorna el 401 original tal cual (el caller verá r.raise_for_status()
+  como antes).
 """
 
-import requests
 import logging
 from ui.session_manager import session
-from ui.api import BASE_URL
+from ui.api import BASE_URL, http as requests
 
 logger = logging.getLogger(__name__)
 

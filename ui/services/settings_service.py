@@ -2,13 +2,28 @@
 """
 Servicio HTTP para la vista de configuración.
 Fase 6: backup, restore, system-info, export/import config.
+
+FASE 6 — Fix 6.X: Auto-refresh ante 401.
+  `from ui.api import http as requests`. El wrapper es drop-in:
+  acepta `files=`, `stream=True`, `params=`, etc. tal cual los pasa
+  al `requests` real. La única diferencia es el reintento transparente
+  cuando un 401 puede resolverse con /users/refresh.
+
+  Nota sobre uploads y stream:
+    - Files (upload_logo, restore_backup, import_config) — el wrapper
+      pasa `files=` tal cual; el body se cierra y se reenvía si hay
+      retry. Como los uploads se hacen dentro de `with open(...)` y el
+      retry solo dispara al primer 401 (antes de tocar el body de
+      respuesta), el caso normal funciona sin tocar nada.
+    - Stream (create_backup) — el primer 401 lo cerramos antes del
+      retry (resp.close()), así que el iter_content corre solo sobre
+      el response del retry exitoso.
 """
 
-import requests
 import logging
 import os
 from ui.session_manager import session
-from ui.api import BASE_URL
+from ui.api import BASE_URL, http as requests
 
 logger = logging.getLogger(__name__)
 

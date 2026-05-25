@@ -21,6 +21,7 @@ import json
 import os
 import stat
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -133,6 +134,11 @@ class SessionManager:
         self.refresh_token: str | None = None
         self.username: str | None = None
         self.role: str | None = None
+        # ── FASE 6 — Fix 6.X: Auto-refresh client-side ──
+        # Lock para serializar intentos concurrentes de refresh. Si 3 requests
+        # reciben 401 al mismo tiempo, solo una pega a /users/refresh y las
+        # otras esperan y reutilizan el access_token renovado.
+        self._refresh_lock = threading.Lock()
         self.load_session()
 
     # ──────────────────────────────────────
@@ -191,6 +197,102 @@ class SessionManager:
             logger.warning("Error al validar el token. Cerrando sesión.")
             self.end_session()
             return False
+
+    # ──────────────────────────────────────
+    # FASE 6 — Fix 6.X: Auto-refresh client-side
+    # ──────────────────────────────────────
+
+    def try_refresh_access_token(self, expired_token: str | None = None) -> bool:
+        """
+        Intenta renovar el access_token usando el refresh_token persistido.
+
+        Retorna True si al final hay un access_token válido (ya sea porque
+        este thread lo renovó, o porque otro thread ya lo hizo mientras
+        esperábamos el lock). Retorna False si no hay refresh_token, si
+        /users/refresh respondió error, o si la red falló.
+
+        Single-flight:
+          Múltiples requests concurrentes pueden recibir 401 con el mismo
+          token expirado. Solo el primero en tomar el lock dispara el POST
+          a /users/refresh; los demás, al entrar al lock, detectan que
+          session.token ya cambió y retornan True sin hacer nada.
+
+        Args:
+          expired_token: el access_token que recibió 401. Se usa para
+              detectar si otro thread ya renovó mientras esperábamos.
+              Si es None, siempre se intenta el refresh (caso "expirado
+              detectado proactivamente, no por respuesta 401").
+        """
+        if not self.refresh_token:
+            return False
+
+        with self._refresh_lock:
+            # Otro thread ya renovó mientras esperábamos. Nuestro retry con
+            # el token actual debería funcionar.
+            if expired_token is not None and self.token != expired_token:
+                return True
+
+            # Recheck por si end_session() ocurrió mientras esperábamos.
+            if not self.refresh_token:
+                return False
+
+            try:
+                # Import local para evitar ciclo con ui.api → ui.session_manager.
+                import requests as _requests  # noqa: WPS433
+                from ui.api import BASE_URL    # noqa: WPS433
+            except Exception as e:
+                logger.warning(f"No se pudo importar dependencias para refresh: {e}")
+                return False
+
+            try:
+                resp = _requests.post(
+                    f"{BASE_URL}/users/refresh",
+                    json={"refresh_token": self.refresh_token},
+                    timeout=(5, 10),
+                )
+            except _requests.exceptions.RequestException as e:
+                # Sin red: no podemos renovar. El caller verá AUTH_EXPIRED
+                # y mostrará el diálogo de re-login.
+                logger.info(f"Refresh falló por red ({e.__class__.__name__}); "
+                            f"se requerirá re-login.")
+                return False
+            except Exception as e:
+                logger.warning(f"Error inesperado refrescando token: {e}")
+                return False
+
+            if resp.status_code != 200:
+                # 401: refresh expirado/revocado. 403: usuario desactivado.
+                # En cualquier caso, el refresh_token actual ya no sirve →
+                # limpiarlo para no reintentar en cada 401 subsecuente.
+                logger.info(
+                    f"/users/refresh respondió {resp.status_code}; "
+                    f"invalidando refresh_token local."
+                )
+                self.refresh_token = None
+                self.save_session()
+                return False
+
+            try:
+                data = resp.json()
+            except Exception as e:
+                logger.warning(f"Respuesta de /users/refresh no es JSON válido: {e}")
+                return False
+
+            new_access = data.get("access_token")
+            if not new_access:
+                logger.warning("Respuesta de /users/refresh sin access_token.")
+                return False
+
+            # El backend actual no rota el refresh_token, pero si algún día
+            # lo hace, lo aceptamos sin cambios adicionales.
+            new_refresh = data.get("refresh_token")
+
+            self.token = new_access
+            if new_refresh:
+                self.refresh_token = new_refresh
+            self.save_session()
+            logger.info("Access token renovado silenciosamente vía /users/refresh.")
+            return True
 
     # ──────────────────────────────────────
     # Guardado y carga (con encriptación)

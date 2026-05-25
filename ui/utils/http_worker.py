@@ -45,11 +45,30 @@ La única diferencia visible es que los callbacks se invocan ANTES
 de que `api_call` retorne, no después. Como casi todo el código
 del proyecto sólo espera resultados vía callbacks, esto es
 transparente.
+
+═══════════════════════════════════════════════════════════════
+FASE 6 — Fix 6.X: Auto-refresh client-side ante 401
+═══════════════════════════════════════════════════════════════
+
+Antes: cualquier 401 emitía AUTH_EXPIRED_SENTINEL → el caller
+abría el diálogo de re-login.
+
+Ahora: cuando llega un 401 en un endpoint que NO es de auth, se
+intenta /users/refresh con el refresh_token persistido y, si
+funciona, se reintenta el request UNA vez con el nuevo
+access_token. Solo si el refresh falla (o no hay refresh_token)
+emitimos AUTH_EXPIRED_SENTINEL como antes.
+
+Esto es transparente para todos los callers existentes: no cambian
+firma ni semántica. La única diferencia visible es que un
+access_token expirado deja de molestar al usuario cuando hay
+refresh_token válido.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any, Callable, Optional
+from urllib.parse import urlsplit
 
 import requests
 from PySide6.QtCore import QEventLoop, Qt, QObject
@@ -65,6 +84,15 @@ CONNECT_TIMEOUT = 5
 
 # Señal especial que indica que el token expiró (401)
 AUTH_EXPIRED_SENTINEL = "__AUTH_EXPIRED__"
+
+# ── FASE 6 — Fix 6.X: Endpoints que NO disparan refresh+retry ──
+# Reintentar un 401 sobre /users/login o /users/refresh entraría en
+# loop: el refresh devuelve 401, intentamos refrescar de nuevo, etc.
+_AUTH_PATHS_NO_RETRY = (
+    "/users/login",
+    "/users/refresh",
+    "/users/setup",
+)
 
 # Una única Session global. Como TODAS las requests corren en el
 # main thread (síncronas), no hay race condition de threads.
@@ -140,6 +168,76 @@ def _extract_error_detail(resp) -> str:
     return f"Error del servidor (código {resp.status_code})"
 
 
+def _is_auth_endpoint(url: str) -> bool:
+    """True si la URL apunta a un endpoint propio de auth (no reintentar)."""
+    try:
+        path = urlsplit(url).path
+    except Exception:
+        return False
+    return any(path.endswith(p) for p in _AUTH_PATHS_NO_RETRY)
+
+
+def _replace_auth_header(headers, new_token: str):
+    """Devuelve copia de `headers` con Authorization actualizado.
+
+    Si headers es None o no contiene Authorization, retorna headers
+    intacto. No agregamos Authorization si el caller no la pasó: eso
+    cambiaría la semántica del request original.
+    """
+    if not headers:
+        return headers
+    new_headers = dict(headers)
+    for k in list(new_headers.keys()):
+        if isinstance(k, str) and k.lower() == "authorization":
+            new_headers[k] = f"Bearer {new_token}"
+    return new_headers
+
+
+def _try_refresh_and_retry(method: str, url: str, **kwargs):
+    """
+    FASE 6 — Fix 6.X: Si recibimos 401 en un endpoint NO-auth y hay
+    refresh_token, intentamos /users/refresh y reintentamos UNA vez.
+
+    Retorna:
+      - Response del retry si el refresh tuvo éxito.
+      - None si no se intentó (sin refresh_token, endpoint de auth,
+        o refresh falló). El caller debe tratar el 401 original.
+    """
+    if _is_auth_endpoint(url):
+        return None
+
+    # Import local para evitar ciclos al importar este módulo en startup.
+    try:
+        from ui.session_manager import session  # noqa: WPS433
+    except Exception:
+        return None
+
+    if not session.refresh_token:
+        return None
+
+    expired_token = session.token
+    if not session.try_refresh_access_token(expired_token=expired_token):
+        # Sin red, refresh expirado, usuario desactivado, etc.
+        return None
+
+    # Renovado: reintentar con Authorization actualizado.
+    new_kwargs = dict(kwargs)
+    new_kwargs["headers"] = _replace_auth_header(kwargs.get("headers"), session.token)
+
+    fn = getattr(_http_session, method.lower(), None)
+    if fn is None:
+        return None
+
+    try:
+        logger.debug("Auto-refresh: reintentando %s %s con token renovado", method, url)
+        return fn(url, **new_kwargs)
+    except Exception as e:
+        # Si el retry mismo explota (red caída entre refresh y retry),
+        # devolvemos None y el caller verá el AUTH_EXPIRED del 401 original.
+        logger.warning(f"Retry tras refresh falló: {e}")
+        return None
+
+
 def _do_request(method: str, url: str, **kwargs):
     """
     Ejecuta el request HTTP y devuelve (success, payload_or_msg, status_code, auth_expired).
@@ -148,6 +246,10 @@ def _do_request(method: str, url: str, **kwargs):
     success=False → payload es el mensaje de error legible.
 
     No lanza excepciones: todas se capturan y se traducen.
+
+    FASE 6 — Fix 6.X: Si vuelve 401 en endpoint NO-auth y hay refresh_token,
+    se intenta refrescar el access_token y reintentar UNA vez antes de
+    devolver AUTH_EXPIRED_SENTINEL.
     """
     # Timeout obligatorio
     if "timeout" not in kwargs:
@@ -160,11 +262,26 @@ def _do_request(method: str, url: str, **kwargs):
 
         resp = fn(url, **kwargs)
 
-        # Auth expirado
+        # ── Auth expirado: intentar refresh+retry antes de rendirse ──
         if resp.status_code == 401:
-            return False, AUTH_EXPIRED_SENTINEL, 401, True
+            # Liberar el socket del 401 antes de emitir el retry.
+            try:
+                resp.close()
+            except Exception:
+                pass
 
-        # Error HTTP
+            retried = _try_refresh_and_retry(method, url, **kwargs)
+            if retried is not None:
+                resp = retried
+                # Si el retry también dio 401, ahí sí: AUTH_EXPIRED real.
+                if resp.status_code == 401:
+                    return False, AUTH_EXPIRED_SENTINEL, 401, True
+            else:
+                # No se pudo refrescar (sin refresh_token, endpoint de auth,
+                # refresh expirado…). 401 original es definitivo.
+                return False, AUTH_EXPIRED_SENTINEL, 401, True
+
+        # Error HTTP (incluye 401 si llegamos aquí por algún edge case raro)
         if not resp.ok:
             return False, _extract_error_detail(resp), resp.status_code, False
 
@@ -233,6 +350,11 @@ def api_call(
       2. Si error → on_error(msg)
       3. Si 401   → on_auth_expired() + on_error(AUTH_EXPIRED_SENTINEL)
       4. Siempre  → on_finished()
+
+    FASE 6 — Fix 6.X: on_auth_expired solo se dispara si el refresh
+    automático también falló. Si el refresh tuvo éxito y el retry
+    devolvió 200, esto es transparente: on_success se invoca como
+    si nada hubiera pasado.
     """
     _label = f"{method.upper()} {url}"
     logger.debug("api_call ⇒ %s", _label)
@@ -324,13 +446,31 @@ def api_request(
     FASE 2.8 — Fix 2.8: muestra cursor de espera durante la llamada,
     aunque sea bloqueante, para que el cajero vea que la app está
     trabajando y no piense que se colgó.
+
+    FASE 6 — Fix 6.X: Si vuelve 401 en endpoint NO-auth y hay
+    refresh_token, intenta /users/refresh y reintenta UNA vez. El
+    Response retornado es el del retry si éste se ejecutó, o el del
+    request original (probablemente 401) si el refresh falló o no
+    se intentó. El caller no necesita cambios.
     """
     kwargs["timeout"] = (CONNECT_TIMEOUT, timeout)
     fn = getattr(_http_session, method.lower())
 
     _set_busy(True)
     try:
-        return fn(url, **kwargs)
+        resp = fn(url, **kwargs)
+
+        # FASE 6 — Fix 6.X: auto-refresh+retry transparente.
+        if resp.status_code == 401:
+            try:
+                resp.close()
+            except Exception:
+                pass
+            retried = _try_refresh_and_retry(method, url, **kwargs)
+            if retried is not None:
+                resp = retried
+
+        return resp
     finally:
         _set_busy(False)
 

@@ -1,7 +1,13 @@
-import requests
+# ui/services/dashboard_metrics_service.py
+"""
+FASE 6 — Fix 6.X: Auto-refresh ante 401.
+  `from ui.api import http as requests` para que un access_token
+  expirado dispare /users/refresh transparente y reintente el
+  request sin que el usuario vea un re-login en medio del dashboard.
+"""
 from datetime import datetime, timedelta
 from ui.session_manager import session
-from ui.api import BASE_URL
+from ui.api import BASE_URL, http as requests
 
 API_AI_INSIGHTS = f"{BASE_URL}/ai/insights/today"
 API_SALES_TODAY = f"{BASE_URL}/sales/today"

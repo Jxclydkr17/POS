@@ -16,11 +16,53 @@ Uso legacy (sigue funcionando):
     from ui.api import API, BASE_URL
     url = API["products"]                # string fijo
     url = API["product_by_id"](42)       # lambda
+
+
+─────────────────────────────────────────────────────────────────
+FASE 6 — Fix 6.X: Auto-refresh client-side (interceptor de 401)
+─────────────────────────────────────────────────────────────────
+
+Cuando un endpoint protegido responde 401 (access_token expirado),
+queremos que el cliente intente automáticamente /users/refresh con el
+refresh_token persistido y reintente el request original, sin molestar
+al usuario con un diálogo de re-login.
+
+Solución: `http`, un objeto drop-in compatible con `requests` que
+expone get/post/put/delete/patch/request. Migración por archivo:
+
+    # Antes:
+    import requests
+    r = requests.get(url, headers=_headers(), timeout=10)
+
+    # Después (cambio de una línea):
+    from ui.api import http as requests
+    r = requests.get(url, headers=_headers(), timeout=10)
+
+`http.exceptions`, `http.Session`, `http.adapters` y `http.Response` son
+passthroughs al módulo real, así que `except requests.exceptions.X`
+sigue funcionando tras el rename.
+
+Qué hace internamente:
+  1. Ejecuta el request normalmente.
+  2. Si vuelve 401 y hay refresh_token y no es endpoint de auth:
+       a) llama session.try_refresh_access_token() (single-flight).
+       b) si tuvo éxito, actualiza el header Authorization con el
+          nuevo token y reintenta UNA vez.
+       c) si falló, retorna la respuesta 401 original tal cual.
+  3. En cualquier otro caso retorna el Response sin tocar nada.
+
+Endpoints excluidos del retry (para no entrar en loop):
+  /users/login, /users/refresh, /users/setup.
 """
+import logging
 import os
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+
+import requests as _requests
 
 BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+
+logger = logging.getLogger(__name__)
 
 
 class ApiUrls:
@@ -168,3 +210,151 @@ api = ApiUrls()
 # El código existente usa `from ui.api import API, BASE_URL`
 # Esto sigue funcionando sin cambiar nada.
 API = api
+
+
+# ═══════════════════════════════════════════════════════════════
+# FASE 6 — Fix 6.X: HTTP client con auto-refresh de access_token
+# ═══════════════════════════════════════════════════════════════
+
+# Paths (sin host) que NO deben disparar refresh+retry — son los propios
+# endpoints de auth, donde un 401 ES la respuesta correcta y reintentar
+# sería un loop infinito (refresh → 401 → refresh → 401 …).
+_AUTH_PATHS_NO_RETRY = (
+    "/users/login",
+    "/users/refresh",
+    "/users/setup",
+)
+
+
+def _is_auth_endpoint(url: str) -> bool:
+    """True si la URL apunta a un endpoint de autenticación.
+
+    Comparamos por path (no por substring sobre el URL completo) para evitar
+    falsos positivos si el host o un query param contienen las palabras
+    'login' o 'refresh' por casualidad.
+    """
+    try:
+        path = urlsplit(url).path
+    except Exception:
+        return False
+    return any(path.endswith(p) for p in _AUTH_PATHS_NO_RETRY)
+
+
+def _replace_auth_header(headers, new_token: str):
+    """Devuelve una copia de `headers` con Authorization actualizado.
+
+    - Preserva el case del nombre del header tal como lo pasó el caller
+      (algunos servers son case-sensitive, aunque HTTP no lo exige).
+    - Si no había Authorization, no lo agrega: si el caller no lo
+      mandó originalmente, asumimos que el endpoint no lo necesita y
+      no queremos cambiar la semántica del request.
+    - Acepta dict o None; siempre retorna dict o None.
+    """
+    if not headers:
+        return headers
+    new_headers = dict(headers)
+    for k in list(new_headers.keys()):
+        if isinstance(k, str) and k.lower() == "authorization":
+            new_headers[k] = f"Bearer {new_token}"
+    return new_headers
+
+
+class _HttpClient:
+    """Wrapper drop-in de `requests` con auto-refresh ante 401.
+
+    Expone la misma superficie que el módulo `requests` para los métodos
+    más usados de la app (get/post/put/delete/patch/request) más los
+    atributos que el código existente referencia por dotted-access
+    (exceptions, Session, adapters, Response).
+
+    Uso:
+        from ui.api import http as requests
+        r = requests.get(url, headers=_headers(), timeout=10)
+        # Si vuelve 401, se intenta /users/refresh y se reintenta UNA vez.
+    """
+
+    # ── Passthrough al módulo `requests` real ────────────────
+    # Permite que `from ui.api import http as requests` siga funcionando
+    # cuando el código hace `requests.exceptions.X`, `requests.Session()`,
+    # `requests.adapters.HTTPAdapter`, etc.
+    exceptions = _requests.exceptions
+    Session = _requests.Session
+    adapters = _requests.adapters
+    Response = _requests.Response
+
+    # ── Métodos HTTP ──────────────────────────────────────────
+    def get(self, url, **kwargs):
+        return self.request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.request("POST", url, **kwargs)
+
+    def put(self, url, **kwargs):
+        return self.request("PUT", url, **kwargs)
+
+    def delete(self, url, **kwargs):
+        return self.request("DELETE", url, **kwargs)
+
+    def patch(self, url, **kwargs):
+        return self.request("PATCH", url, **kwargs)
+
+    def head(self, url, **kwargs):
+        return self.request("HEAD", url, **kwargs)
+
+    def options(self, url, **kwargs):
+        return self.request("OPTIONS", url, **kwargs)
+
+    def request(self, method, url, **kwargs):
+        """Ejecuta el request; si 401 y procede, refresca y reintenta UNA vez."""
+        # stream=True / files=... también funcionan sin tocar nada: se pasan
+        # tal cual a requests.request.
+        resp = _requests.request(method, url, **kwargs)
+
+        # ── Decisiones para auto-refresh ──
+        if resp.status_code != 401:
+            return resp
+        if _is_auth_endpoint(url):
+            return resp
+
+        # Import local para evitar ciclo a nivel de módulo
+        # (session_manager → app.core.config → … podría tocar ui.api).
+        try:
+            from ui.session_manager import session  # noqa: WPS433
+        except Exception:
+            return resp
+
+        if not session.refresh_token:
+            return resp
+
+        # Token que ya falló. Lo usamos como "marca" para que
+        # try_refresh_access_token() detecte si otro thread ya renovó.
+        expired_token = session.token
+
+        if not session.try_refresh_access_token(expired_token=expired_token):
+            # No se pudo renovar (sin red, refresh expirado, etc.).
+            # El caller verá el 401 original y mostrará el diálogo
+            # de re-login como hasta ahora.
+            return resp
+
+        # Cerramos el primer response para liberar la conexión del pool
+        # antes de emitir el segundo. requests no lo hace solo si el body
+        # no fue leído.
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+        # Actualizar Authorization si el caller la había pasado.
+        new_kwargs = dict(kwargs)
+        new_kwargs["headers"] = _replace_auth_header(kwargs.get("headers"), session.token)
+
+        logger.debug("Auto-refresh: reintentando %s %s con token renovado", method, url)
+        return _requests.request(method, url, **new_kwargs)
+
+
+# Instancia global del cliente HTTP con auto-refresh.
+#
+# Convención de uso recomendada:
+#     from ui.api import http as requests
+#     r = requests.get(url, headers=_headers(), timeout=10)
+http = _HttpClient()
