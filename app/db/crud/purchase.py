@@ -487,17 +487,28 @@ def add_payment(
             detail="Esta compra ya está pagada en su totalidad.",
         )
 
+    # ── FASE 4 — Fix 4.6: normalizar amount a Decimal de inmediato ──
+    # El schema declara `amount: float` (pydantic v2 lo coacciona). Pero
+    # la columna `PurchasePayment.amount` es DECIMAL(12,2). En MySQL el
+    # adaptador convierte float→Decimal al persistir; en SQLite NO. Si
+    # se agregan ≥2 abonos en la misma sesión, los ya persistidos se
+    # recargan como Decimal y el recién creado queda como float en
+    # memoria. Cuando `paid_amount` hace `sum(p.amount for p in payments)`
+    # se mezclan tipos y lanza TypeError. Convertir vía str() preserva la
+    # representación decimal del float sin arrastrar ruido IEEE 754.
+    amount_dec = Decimal(str(data.amount))
+
     current_balance = purchase.balance
 
-    if data.amount > current_balance + 0.01:  # tolerancia redondeo
+    if amount_dec > current_balance + 0.01:  # tolerancia redondeo (Decimal > float OK)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"El abono (₡{data.amount:.2f}) excede el saldo pendiente (₡{current_balance:.2f}).",
+            detail=f"El abono (₡{amount_dec:.2f}) excede el saldo pendiente (₡{current_balance:.2f}).",
         )
 
     payment = PurchasePayment(
         purchase_id=purchase.id,
-        amount=data.amount,
+        amount=amount_dec,
         payment_method=data.payment_method,
         date=data.date or today_cr(),
         notes=data.notes,
@@ -509,7 +520,7 @@ def add_payment(
     expense_payload = {
         "category": CAT_COMPRAS_PROVEEDORES,
         "description": f"Abono factura #{purchase.invoice_number}",
-        "amount": float(data.amount),
+        "amount": float(amount_dec),
         "payment_method": data.payment_method,
         "date": (data.date or today_cr()).strftime("%Y-%m-%d"),
     }
@@ -573,6 +584,13 @@ def add_credit_note(
 ) -> Purchase:
     purchase = get_purchase(db, purchase_id)
 
+    # ── FASE 4 — Fix 4.6: normalizar amount a Decimal de inmediato ──
+    # Mismo motivo que en add_payment: el schema es float, la columna es
+    # DECIMAL(12,2), y SQLite no coacciona al insertar como sí lo hace
+    # MySQL. Sin esta normalización, sumar credit_notes mezcladas
+    # (existentes en Decimal, recién creada en float) lanza TypeError.
+    amount_dec = Decimal(str(data.amount))
+
     # ── FASE 3 — Fix 3.1: validar el AGREGADO de NCs, no solo la NC individual ──
     # Bug previo: `if data.amount > float(purchase.amount)` validaba cada NC
     # contra el total bruto, pero NO contra el conjunto de NCs ya emitidas.
@@ -590,12 +608,15 @@ def add_credit_note(
     max_allowed = purchase_amount - paid_amount - existing_cn_total
 
     # Tolerancia de redondeo (mismo criterio que add_payment, ver línea ~492).
-    if data.amount > max_allowed + 0.01:
+    # `Decimal > float` funciona en Python 3 sin coacción; lo que NO funciona
+    # es `Decimal + float`, por eso `0.01` y `max_allowed` se mantienen como
+    # float (la suma queda en float y la comparación es Decimal vs float, OK).
+    if amount_dec > max_allowed + 0.01:
         available = max(max_allowed, 0.0)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"La nota de crédito (₡{data.amount:.2f}) excede el saldo "
+                f"La nota de crédito (₡{amount_dec:.2f}) excede el saldo "
                 f"disponible para notas de crédito (₡{available:.2f}). "
                 f"Total compra: ₡{purchase_amount:.2f} · "
                 f"abonos: ₡{paid_amount:.2f} · "
@@ -605,7 +626,7 @@ def add_credit_note(
 
     cn = PurchaseCreditNote(
         purchase_id=purchase.id,
-        amount=data.amount,
+        amount=amount_dec,
         reason=data.reason,
         date=data.date or today_cr(),
         product_id=data.product_id,

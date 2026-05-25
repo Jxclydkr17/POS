@@ -694,10 +694,11 @@ class ChatPanel(QWidget):
         # ──────────────────────────────────────────────────────────────
 
         # FASE 7: Cargar alertas proactivas al iniciar (con delay)
-        # QTimer.singleShot(500, self._load_proactive_alerts)
+        # Usa api_call (síncrono, sin QThread) para evitar crashes.
+        QTimer.singleShot(400, self._load_proactive_alerts_safe)
 
         # FASE 5 AI: Cargar indicador de proveedor
-        # QTimer.singleShot(800, self._load_ai_provider_indicator)
+        QTimer.singleShot(800, self._load_ai_provider_indicator)
 
     # ══════════════════════════════════════════════
     # Fondo con imagen
@@ -749,31 +750,72 @@ class ChatPanel(QWidget):
 
         self._alerts_thread.start()
 
-    def _on_alerts_loaded(self, data: dict):
-        """Callback cuando llegan las alertas proactivas."""
+    def _load_proactive_alerts_safe(self):
+        """Carga alertas proactivas usando api_call (síncrono, sin QThread) para evitar crashes."""
+        if self._alerts_loaded:
+            return
+        self._alerts_loaded = True
+
+        from ui.utils.http_worker import api_call
+        from datetime import datetime
+
+        # Saludo según hora del día
+        hour = datetime.now().hour
+        if hour < 12:
+            greeting = "¡Buenos días! ☀️"
+        elif hour < 19:
+            greeting = "¡Buenas tardes! 👋"
+        else:
+            greeting = "¡Buenas noches! 🌙"
+
+        self._greeting_text = greeting
+
+        token = self._get_token()
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+
+        api_call(
+            "get", f"{API_URL}/ai/proactive-alerts",
+            headers=headers,
+            on_success=self._on_alerts_loaded_safe,
+            on_error=self._on_alerts_failed_safe,
+        )
+
+    def _on_alerts_loaded_safe(self, data: dict):
+        """Callback cuando llegan las alertas proactivas (versión safe)."""
+        greeting = getattr(self, "_greeting_text", "¡Hola!")
         message = data.get("message", "")
         suggestions = data.get("suggestions", [])
 
         if message:
-            self._add_bubble(message, is_user=False)
-            self._record_message("assistant", message)
+            full_message = f"{greeting}\n\n{message}"
+        else:
+            full_message = f"{greeting} ¿En qué te puedo ayudar?"
+
+        self._add_bubble(full_message, is_user=False)
+        self._record_message("assistant", full_message)
 
         if suggestions:
             self.suggestion_chips.set_suggestions(suggestions)
 
+    def _on_alerts_failed_safe(self, error: str):
+        """Fallback si no se pueden cargar alertas (versión safe)."""
+        greeting = getattr(self, "_greeting_text", "¡Hola!")
+        self._add_bubble(f"{greeting} ¿En qué te puedo ayudar?", is_user=False)
+
+    def _on_alerts_loaded(self, data: dict):
+        """Legado — ya no se usa, reemplazado por _on_alerts_loaded_safe."""
         self._alerts_thread = None
         self._alerts_worker = None
 
     def _on_alerts_failed(self, error: str):
-        """Fallback si no se pueden cargar alertas."""
-        self._add_bubble("👋 ¿En qué te puedo ayudar?", is_user=False)
+        """Legado — ya no se usa, reemplazado por _on_alerts_failed_safe."""
         self._alerts_thread = None
         self._alerts_worker = None
 
     def reload_alerts(self):
-        """Recarga alertas (llamar al re-abrir el chat)."""
-        self._alerts_loaded = False
-        self._load_proactive_alerts()
+        """Recarga alertas solo si el chat aún no tiene mensajes (evita duplicados)."""
+        if not self._alerts_loaded:
+            self._load_proactive_alerts_safe()
 
     # ══════════════════════════════════════════════
     # FASE 5 AI: Indicador de proveedor activo

@@ -14,11 +14,13 @@ SEGURIDAD:
 import sys
 import argparse
 import logging
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from app.services.backup_service import restore_backup, list_backups, create_backup
+from app.utils.dt import format_cr  # FASE 4 — Fix 4.2: mostrar fecha en hora CR
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,9 @@ def main():
 
         logger.info(f"\n📦 Backups disponibles ({len(backups)}):\n" + "─" * 60)
         for i, b in enumerate(backups, 1):
-            logger.info(f"  [{i}] {b['filename']}  ({b['size_mb']} MB)  {b['created_at']}")
+            # FASE 4 — Fix 4.2: convertir ISO UTC → hora CR para display.
+            created = format_cr(datetime.fromisoformat(b['created_at']))
+            logger.info(f"  [{i}] {b['filename']}  ({b['size_mb']} MB)  {created}")
         logger.info("")
 
         try:

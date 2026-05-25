@@ -32,7 +32,7 @@ import subprocess
 import shutil
 import threading
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone  # FASE 4 — Fix 4.2: timezone para UTC explícito
 
 from app.core.config import settings, is_sqlite, APP_DIR, DATA_DIR
 from app.utils.dt import now_cr
@@ -48,6 +48,13 @@ logger = logging.getLogger(__name__)
 BACKUP_DIR = DATA_DIR / "backups"
 MAX_BACKUPS = 30          # Mantener últimos 30 backups
 BACKUP_INTERVAL = 86400   # 24 horas en segundos
+# ── FASE 4 — Fix 4.3: delay antes del primer backup tras startup ──
+# Antes el loop dormía 24h ANTES del primer backup, así que apps que
+# se reinician seguido (ej. cierre nocturno de la ferretería) nunca
+# llegaban a hacer un backup automático. Ahora se dispara el primero
+# ~5 min después del startup (si toca), y luego sigue cada 24h. Si
+# el último backup fue muy reciente, se espera el resto del intervalo.
+FIRST_BACKUP_DELAY = 300  # 5 minutos en segundos
 
 # ── FASE 3 — Fix 3.3: Flag de modo mantenimiento ──
 # Activo durante restore para que el middleware rechace requests
@@ -533,7 +540,14 @@ def list_backups() -> list[dict]:
     Lista los backups disponibles ordenados del más reciente al más viejo.
 
     Returns:
-        Lista de dicts con: filename, size_bytes, size_mb, created_at
+        Lista de dicts con: filename, size_bytes, size_mb, created_at.
+
+    Nota (FASE 4 — Fix 4.2): `created_at` se retorna como ISO 8601 con
+    offset UTC explícito (ej. "2026-05-23T20:30:25.123456+00:00").
+    Antes era un naive ISO interpretado como hora local del servidor,
+    lo cual era ambiguo si el server corría en TZ distinta a la del
+    consumidor. Los consumidores que muestren la fecha al usuario deben
+    convertir a hora CR con `app.utils.dt.format_cr`.
     """
     _ensure_backup_dir()
     backups = []
@@ -550,7 +564,8 @@ def list_backups() -> list[dict]:
             "filename": path.name,
             "size_bytes": stat.st_size,
             "size_mb": round(stat.st_size / (1024 * 1024), 2),
-            "created_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            # FASE 4 — Fix 4.2: tz=UTC explícito para evitar ambigüedad.
+            "created_at": datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
         })
 
     return backups
@@ -573,13 +588,65 @@ def _rotate_backups() -> None:
 _backup_task = None
 
 
+def _compute_initial_delay() -> int:
+    """
+    FASE 4 — Fix 4.3: Calcula segundos hasta el próximo backup automático.
+
+    - Si nunca hubo un backup exitoso → FIRST_BACKUP_DELAY (5 min).
+    - Si el último backup fue hace ≥ BACKUP_INTERVAL → FIRST_BACKUP_DELAY.
+    - Si el último backup fue hace < BACKUP_INTERVAL → tiempo restante
+      hasta completar el intervalo (con piso de FIRST_BACKUP_DELAY para
+      dar aire al startup y no encadenar backups si la app reinició
+      justo después del último).
+
+    Esto evita dos problemas:
+      1) Bug original: dormir 24h ANTES del primer backup hacía que las
+         apps con reinicios diarios nunca dispararan uno.
+      2) Spam: si la app reinicia varias veces al día, NO crea un backup
+         en cada arranque — respeta el intervalo desde el último exitoso.
+
+    Lee `_last_backup_status` (cargado de disco en _load_backup_status),
+    por lo que persiste entre reinicios.
+    """
+    last_success_iso = _last_backup_status.get("last_success_at")
+    if not last_success_iso:
+        return FIRST_BACKUP_DELAY
+
+    try:
+        last_dt = datetime.fromisoformat(last_success_iso)
+        # Defensivo: si por alguna razón vino naive, asumir UTC.
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        elapsed = (datetime.now(timezone.utc) - last_dt).total_seconds()
+        remaining = BACKUP_INTERVAL - elapsed
+        if remaining <= 0:
+            return FIRST_BACKUP_DELAY
+        return max(int(remaining), FIRST_BACKUP_DELAY)
+    except (ValueError, TypeError) as e:
+        logger.warning(
+            f"No pude parsear last_success_at='{last_success_iso}': {e}. "
+            f"Usando FIRST_BACKUP_DELAY como fallback."
+        )
+        return FIRST_BACKUP_DELAY
+
+
 def start_scheduled_backups() -> None:
     """Inicia un background task que crea backups periódicamente."""
     global _backup_task
 
     async def _backup_loop():
+        # ── FASE 4 — Fix 4.3 ─────────────────────────────────────
+        # Primer backup poco después del startup (o al completar el
+        # intervalo restante si el último fue reciente). El sleep
+        # del intervalo queda DESPUÉS del backup, no antes.
+        initial_delay = _compute_initial_delay()
+        logger.info(
+            f"Primer backup automático en {initial_delay}s "
+            f"(~{initial_delay // 60} min)"
+        )
+        await asyncio.sleep(initial_delay)
+
         while True:
-            await asyncio.sleep(BACKUP_INTERVAL)
             try:
                 path = create_backup(tag="auto")
                 logger.info(f"Backup automático creado: {path}")
@@ -594,6 +661,7 @@ def start_scheduled_backups() -> None:
                         f"ALERTA: {failures} backups automáticos consecutivos han fallado. "
                         f"Último error: {e}. Verifique el espacio en disco y los permisos."
                     )
+            await asyncio.sleep(BACKUP_INTERVAL)
 
     _backup_task = asyncio.ensure_future(_backup_loop())
     logger.info(

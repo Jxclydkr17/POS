@@ -83,14 +83,14 @@ class Toast(QWidget):
 
 
 def show_toast(message, success=True, parent=None, duration=3000):
-    """Muestra el toast en la esquina inferior derecha de la ventana padre."""
+    """Muestra el toast centrado horizontalmente en la ventana padre."""
     toast = Toast(message, success=success, duration=duration, parent=parent)
 
-    # Posición respecto a la ventana principal
+    # Posición centrada respecto a la ventana principal
     if parent:
         geo = parent.geometry()
-        x = geo.x() + geo.width() - toast.width() - 20
-        y = geo.y() + geo.height() - toast.height() - 40
+        x = geo.x() + (geo.width() - toast.width()) // 2
+        y = geo.y() + (geo.height() - toast.height()) // 2
     else:
         # Si no hay ventana padre, lo muestra en una posición fija
         x, y = 100, 100
