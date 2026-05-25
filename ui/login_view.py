@@ -220,8 +220,22 @@ class LoginWindow(QWidget):
         self.setFixedSize(800, 500)
         self.setStyleSheet(f"background-color: {PANEL_BG};")
         self._setup_ui()
-        # ── FASE 3 — Fix 3.4: Verificar si necesita setup inicial ──
-        self._check_needs_setup()
+        # ── FIX: race condition con setup wizard ──
+        # _check_needs_setup() arrancaba el thread en __init__, antes de que
+        # la ventana fuera visible. El QTimer.singleShot del thread podía
+        # disparar antes de que el event loop estuviera procesando sobre una
+        # ventana mostrada, y el QDialog modal no aparecía. Lo movemos a
+        # showEvent con un pequeño delay para asegurarnos de que la ventana
+        # ya está en pantalla cuando el diálogo intente mostrarse.
+        self._setup_checked = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._setup_checked:
+            self._setup_checked = True
+            # 150ms es suficiente para que Qt termine de pintar la ventana
+            # y mucho menos que la percepción humana de "lento al abrir".
+            QTimer.singleShot(150, self._check_needs_setup)
 
     def _setup_ui(self):
         root = QHBoxLayout(self)
@@ -315,15 +329,35 @@ class LoginWindow(QWidget):
         """Consulta al backend si la BD tiene cero usuarios (sin bloquear UI)."""
         import threading
 
+        logger = logging.getLogger(__name__)
+
         def _check():
             try:
-                resp = requests.get(f"{BASE_URL}/users/needs-setup", timeout=5)
-                if resp.status_code == 200 and resp.json().get("needs_setup"):
-                    # Volver al hilo principal de Qt para mostrar el diálogo
-                    from PySide6.QtCore import QTimer
-                    QTimer.singleShot(0, self._show_setup_dialog)
-            except Exception:
-                pass  # Si el backend no responde, mostrar login normal
+                # Timeout=10s (antes 5s): Windows con AV puede demorar la
+                # primera conexión a localhost por la inspección del socket.
+                resp = requests.get(f"{BASE_URL}/users/needs-setup", timeout=10)
+                if resp.status_code == 200:
+                    needs = resp.json().get("needs_setup", False)
+                    if needs:
+                        # Volver al hilo principal de Qt para mostrar el diálogo
+                        QTimer.singleShot(0, self._show_setup_dialog)
+                    else:
+                        logger.info(
+                            "Setup wizard no requerido: la BD ya tiene usuarios."
+                        )
+                else:
+                    logger.warning(
+                        "needs-setup respondió con status=%s body=%r",
+                        resp.status_code, resp.text[:200]
+                    )
+            except Exception as e:
+                # Antes: `except Exception: pass` se tragaba todo en silencio.
+                # Ahora loggeamos para que el usuario pueda diagnosticar si
+                # el wizard nunca aparece (ver data/logs/).
+                logger.warning(
+                    "Error verificando setup inicial (wizard no se mostrará): %s",
+                    e, exc_info=True
+                )
 
         threading.Thread(target=_check, daemon=True).start()
 
