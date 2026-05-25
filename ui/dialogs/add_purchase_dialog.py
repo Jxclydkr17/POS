@@ -85,18 +85,20 @@ class AddPurchaseDialog(QDialog):
         add_line_layout.addWidget(QLabel("Producto:"))
         add_line_layout.addWidget(self.product_search)
 
-        # Popup de búsqueda
+        # Dropdown de busqueda - widget flotante sin robar foco
         self._search_popup = QListWidget(self)
-        self._search_popup.setWindowFlags(Qt.Popup)
+        self._search_popup.setWindowFlags(Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        self._search_popup.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self._search_popup.setFocusPolicy(Qt.NoFocus)
-        self._search_popup.setMaximumHeight(180)
+        self._search_popup.setFixedHeight(180)
         self._search_popup.setStyleSheet("""
             QListWidget {
-                border: 1px solid #555;
-                background-color: #2b2b2b;
+                border: 2px solid #3c6e9e;
+                background-color: #1e1e2e;
                 color: #f0f0f0;
                 font-size: 13px;
             }
+            QListWidget::item { padding: 4px 8px; }
             QListWidget::item:hover { background-color: #3c6e9e; }
             QListWidget::item:selected { background-color: #1a5276; }
         """)
@@ -299,8 +301,9 @@ class AddPurchaseDialog(QDialog):
 
         pos = self.product_search.mapToGlobal(self.product_search.rect().bottomLeft())
         self._search_popup.move(pos)
-        self._search_popup.setFixedWidth(self.product_search.width())
+        self._search_popup.setFixedWidth(max(self.product_search.width(), 350))
         self._search_popup.show()
+        self._search_popup.raise_()
 
     def _on_product_selected(self, item):
         product = item.data(Qt.UserRole)
@@ -318,8 +321,11 @@ class AddPurchaseDialog(QDialog):
 
     def eventFilter(self, obj, event):
         from PySide6.QtCore import QEvent
-        if obj == self.product_search and event.type() == QEvent.FocusOut:
-            QTimer.singleShot(150, self._search_popup.hide)
+        # Cerrar el popup si el usuario presiona Escape o Tab
+        if obj == self.product_search and event.type() == QEvent.KeyPress:
+            from PySide6.QtCore import Qt as _Qt
+            if event.key() in (_Qt.Key_Escape, _Qt.Key_Tab):
+                self._search_popup.hide()
         return super().eventFilter(obj, event)
 
     # -------------------------------------------------------
