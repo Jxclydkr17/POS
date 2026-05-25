@@ -313,7 +313,12 @@ class AddPurchaseDialog(QDialog):
         self.product_search.blockSignals(False)
         self.cost_spin.setValue(float(product.get("cost") or 0.0))
         # Pre-seleccionar IVA del producto si está guardado, si no 13 %
-        product_iva = product.get("tax_rate") or product.get("iva") or 13
+        # tax_rate se almacena como decimal (0.13) → convertir a entero %
+        raw_iva = product.get("tax_rate") or product.get("iva")
+        if raw_iva is not None:
+            product_iva = round(float(raw_iva) * 100) if float(raw_iva) <= 1.0 else int(float(raw_iva))
+        else:
+            product_iva = 13
         idx = self.iva_combo.findData(int(product_iva))
         if idx >= 0:
             self.iva_combo.setCurrentIndex(idx)
@@ -345,12 +350,14 @@ class AddPurchaseDialog(QDialog):
         # ── Validar consistencia del IVA con el producto registrado ──
         registered_iva = self.selected_product.get("tax_rate")
         if registered_iva is not None:
-            if int(iva_pct) != int(registered_iva):
+            # tax_rate se guarda como decimal (0.13) → convertir a entero %
+            registered_iva_pct = round(float(registered_iva) * 100) if float(registered_iva) <= 1.0 else int(float(registered_iva))
+            if int(iva_pct) != registered_iva_pct:
                 QMessageBox.warning(
                     self,
                     "⚠️ IVA Inconsistente",
                     f"El producto «{product_name}» tiene registrado un IVA del "
-                    f"{int(registered_iva)}%, pero seleccionaste {iva_pct}%.\n\n"
+                    f"{registered_iva_pct}%, pero seleccionaste {iva_pct}%.\n\n"
                     f"Corregí el IVA antes de agregar la línea."
                 )
                 return
