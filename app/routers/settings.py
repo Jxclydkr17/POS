@@ -652,6 +652,84 @@ def _mask(value: str) -> str:
 
 
 # ============================================================
+# Fix 2.5 (cerrado): Endpoint de prueba de impresión ESC/POS.
+# Útil para que el botón "Probar impresión" en Settings → Impresora
+# valide IP/puerto/USB sin tener que armar una venta completa.
+# ============================================================
+@router.post("/printer-test", dependencies=[Depends(require_role("admin"))])
+def printer_test_endpoint(db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    """
+    Imprime una página de prueba ESC/POS a la impresora configurada.
+
+    Lee la config de Settings (printer_type / IP / USB IDs / perfil /
+    ancho de papel) y manda un ticket corto. Si el printer_type es
+    "none", informa que está deshabilitado en lugar de fallar.
+    """
+    try:
+        from app.utils.print_ticket import print_test_page
+        from app.services.settings_service import get_settings
+
+        settings = get_settings(db)
+        if not settings:
+            raise HTTPException(status_code=400, detail="No hay configuración cargada.")
+
+        printer_type = (settings.printer_type or "none").lower()
+        if printer_type == "none":
+            return success_response(
+                message="Impresora deshabilitada (printer_type=none)",
+                data={"printed": False}
+            )
+
+        def _parse_usb_id(v):
+            if not v:
+                return None
+            s = str(v).strip().lower()
+            if s.startswith("0x"):
+                s = s[2:]
+            try:
+                return int(s, 16)
+            except ValueError:
+                return None
+
+        kwargs = dict(
+            thermal_kind=printer_type,
+            paper_width_mm=getattr(settings, "printer_paper_width_mm", None) or 80,
+            profile=getattr(settings, "printer_profile", None),
+        )
+        if printer_type == "network":
+            kwargs["thermal_ip"] = settings.printer_ip
+            kwargs["thermal_port"] = settings.printer_port
+        elif printer_type == "usb":
+            kwargs["thermal_usb_vendor_id"] = _parse_usb_id(
+                getattr(settings, "printer_usb_vendor_id", None)
+            )
+            kwargs["thermal_usb_product_id"] = _parse_usb_id(
+                getattr(settings, "printer_usb_product_id", None)
+            )
+
+        print_test_page(**kwargs)
+
+        return success_response(
+            message="Página de prueba enviada a la impresora",
+            data={"printed": True, "mode": printer_type}
+        )
+    except ValueError as e:
+        # Falta config (IP no seteada, USB IDs vacíos).
+        raise HTTPException(status_code=400, detail=str(e))
+    except ConnectionError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"Error en página de prueba: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error inesperado en printer-test")
+        raise HTTPException(status_code=500, detail=f"Error interno: {e}")
+
+
+# ============================================================
 # FASE 2 AI: Configuración del Asistente IA
 # ============================================================
 

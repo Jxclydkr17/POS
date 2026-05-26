@@ -4,6 +4,7 @@
 # pytest, pyinstaller y herramientas de build van en requirements-dev.txt.
 #
 # FASE 2 — Fix 2.1: python-jose reemplazado por PyJWT.
+# FASE 2 — Fix 2.5 (cerrado): python-escpos + pyusb para impresión térmica.
 #
 # Instalar: pip install -r requirements.txt
 
@@ -84,6 +85,20 @@ cycler==0.12.1
 fonttools==4.62.1
 kiwisolver==1.5.0
 pyparsing==3.3.2
+
+# ── Impresión térmica ESC/POS (Fix 2.5 cerrado) ──
+# python-escpos genera comandos ESC/POS y maneja los transportes de
+# red (sock TCP), serie y USB. Trae su propio escpos-printer-db con
+# perfiles para impresoras Epson, Bixolon, Star, etc.
+#
+# pyusb es OPCIONAL: solo se necesita si `printer_type='usb'` en
+# Settings. Para impresoras en red (`printer_type='network'`) y para
+# impresión vía sistema operativo (PDF al spool de Windows/macOS/
+# Linux) NO se requiere pyusb. Lo incluimos para que los usuarios
+# con impresora USB no tengan que instalar nada manualmente; en
+# Linux puede requerir además libusb del sistema y reglas udev.
+python-escpos==3.1
+pyusb==1.2.1
 
 # ── Utilidades ──
 python-dotenv==1.0.1

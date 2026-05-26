@@ -3,6 +3,7 @@ app/schemas/settings.py — Schemas de configuración general.
 
 Fase 5: Validaciones y seguridad.
 Fase 6: 6.2 Moneda configurable.
+Fix 2.5 (cerrado): Campos USB + perfil + ancho de papel para ESC/POS real.
 """
 
 from pydantic import BaseModel, EmailStr, Field, field_validator, ConfigDict
@@ -26,7 +27,16 @@ ID_NUMBER_RULES = {
     "DIMEX":   (11, 12,  "DIMEX debe tener entre 11 y 12 dígitos"),
 }
 
+# Fix 2.5 (cerrado): el enum sigue como estaba a propósito.
+# Antes "network"/"usb" eran placeholders sin implementación; ahora
+# están implementados. NO removemos valores para no romper configs
+# existentes en producción (cualquier user con printer_type='network'
+# guardado seguiría siendo válido). Si en un futuro se decide retirar
+# alguno, hay que hacer migración Alembic con default seguro.
 PRINTER_TYPES_VALID = {"network", "usb", "none"}
+
+# Anchos de papel típicos. 58 → POS pequeño, 80 → más común.
+PRINTER_PAPER_WIDTHS = {58, 80}
 
 # 6.2: Monedas soportadas
 CURRENCY_VALID = {"CRC", "USD"}
@@ -60,6 +70,41 @@ def _validate_currency(v):
     return v
 
 
+def _validate_printer_paper_width(v):
+    if v is not None and v not in PRINTER_PAPER_WIDTHS:
+        raise ValueError(
+            f"printer_paper_width_mm debe ser uno de: {', '.join(map(str, sorted(PRINTER_PAPER_WIDTHS)))}"
+        )
+    return v
+
+
+def _validate_usb_id(v):
+    """
+    Acepta vendor_id/product_id en hex (e.g. '0x04b8', '04b8', '0x4B8').
+    Convierte mayúsculas y normaliza al formato '0xXXXX'. Vacío → None.
+    """
+    if v is None:
+        return None
+    v = str(v).strip()
+    if not v:
+        return None
+    # Acepta con o sin prefijo 0x. int(v, 16) parsea ambos siempre que
+    # le quitemos el 0x manualmente.
+    raw = v.lower()
+    if raw.startswith("0x"):
+        raw = raw[2:]
+    try:
+        n = int(raw, 16)
+    except ValueError:
+        raise ValueError(
+            f"USB ID inválido '{v}'. Use formato hex (e.g. '0x04b8' o '04b8')."
+        )
+    # USB IDs caben en 16 bits.
+    if not (0 <= n <= 0xFFFF):
+        raise ValueError(f"USB ID '{v}' fuera de rango (debe ser 0x0000–0xFFFF).")
+    return f"0x{n:04x}"
+
+
 # ─────────────────────────────────────────────────────────
 # SettingsBase
 # ─────────────────────────────────────────────────────────
@@ -88,6 +133,11 @@ class SettingsBase(BaseModel):
     printer_type: Optional[str] = None
     printer_ip: Optional[str] = None
     printer_port: Optional[int] = None
+    # Fix 2.5 (cerrado): nuevos campos para ESC/POS USB
+    printer_usb_vendor_id: Optional[str] = None
+    printer_usb_product_id: Optional[str] = None
+    printer_profile: Annotated[Optional[str], Field(max_length=40)] = None
+    printer_paper_width_mm: Optional[int] = None
 
     # Solo lectura
     cabys_last_update: Optional[datetime] = None
@@ -115,6 +165,11 @@ class SettingsBase(BaseModel):
     def check_currency(cls, v):
         return _validate_currency(v)
 
+    @field_validator("printer_paper_width_mm")
+    @classmethod
+    def check_printer_paper_width(cls, v):
+        return _validate_printer_paper_width(v)
+
 
 # ─────────────────────────────────────────────────────────
 # SettingsOut
@@ -128,7 +183,7 @@ class SettingsOut(SettingsBase):
 
 
 # ─────────────────────────────────────────────────────────
-# SettingsUpdate (5.1 + 5.6 + 6.2)
+# SettingsUpdate (5.1 + 5.6 + 6.2 + Fix 2.5 cerrado)
 # ─────────────────────────────────────────────────────────
 
 class SettingsUpdate(BaseModel):
@@ -155,6 +210,11 @@ class SettingsUpdate(BaseModel):
     printer_type: Optional[str] = None
     printer_ip: Annotated[Optional[str], Field(max_length=45)] = None
     printer_port: Optional[int] = Field(default=None, ge=1, le=65535)
+    # Fix 2.5 (cerrado): nuevos campos USB + perfil + ancho papel
+    printer_usb_vendor_id: Annotated[Optional[str], Field(max_length=10)] = None
+    printer_usb_product_id: Annotated[Optional[str], Field(max_length=10)] = None
+    printer_profile: Annotated[Optional[str], Field(max_length=40)] = None
+    printer_paper_width_mm: Optional[int] = None
 
     @field_validator("id_type")
     @classmethod
@@ -175,6 +235,21 @@ class SettingsUpdate(BaseModel):
     @classmethod
     def check_currency(cls, v):
         return _validate_currency(v)
+
+    @field_validator("printer_paper_width_mm")
+    @classmethod
+    def check_printer_paper_width(cls, v):
+        return _validate_printer_paper_width(v)
+
+    @field_validator("printer_usb_vendor_id")
+    @classmethod
+    def check_usb_vendor(cls, v):
+        return _validate_usb_id(v)
+
+    @field_validator("printer_usb_product_id")
+    @classmethod
+    def check_usb_product(cls, v):
+        return _validate_usb_id(v)
 
     @field_validator("id_number")
     @classmethod

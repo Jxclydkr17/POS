@@ -658,31 +658,102 @@ def generate_pdf(einvoice_id: int, db: Session = Depends(get_db)):
 # FASE 3: Impresión de ticket térmico conectada al flujo electrónico
 # ================================================================
 @router.post("/{einvoice_id}/print-ticket", dependencies=[Depends(get_current_user)])
-def print_einvoice_ticket(einvoice_id: int, db: Session = Depends(get_db)):
+def print_einvoice_ticket_endpoint(einvoice_id: int, db: Session = Depends(get_db)):
     """
-    Genera el PDF del comprobante y lo envía a la impresora configurada.
-    Conecta el flujo de facturación electrónica con la impresión física.
+    Imprime un comprobante electrónico respetando la configuración de
+    impresora del usuario (Settings → Impresora).
+
+    Modos según `printer_type`:
+      - "network": ESC/POS por TCP a printer_ip:printer_port.
+      - "usb":     ESC/POS por USB a printer_usb_vendor_id/_product_id.
+      - "none":    no imprime, solo retorna el path del PDF para que
+                   el frontend lo muestre o lo abra manualmente.
+      - cualquier otro / NULL: fallback a PDF via SO (universal).
+
+    Siempre se genera el PDF (sirve de respaldo y para visualizar
+    desde la UI), aunque se imprima por térmica directa.
+
+    Fix 2.5 (cerrado): antes este endpoint mandaba el PDF al spool del
+    SO sin distinguir el tipo de impresora configurado. Ahora cumple
+    la promesa que la UI hacía (vista de Settings) y SÍ usa la térmica
+    cuando está configurada.
     """
+    # NOTA: renombrado de print_einvoice_ticket → print_einvoice_ticket_endpoint
+    # para evitar colisión de nombre con la función homónima de
+    # app.utils.print_ticket que importamos abajo. El path de FastAPI
+    # /einvoices/{id}/print-ticket no cambia (lo controla @router.post).
     try:
+        from app.utils.print_ticket import print_einvoice_ticket as _print
         from app.services.einvoice_pdf import generate_einvoice_pdf
-        from app.utils.print_ticket import print_pdf
+        from app.services.settings_service import get_settings
 
-        # Generar PDF
-        logo = get_logo_path()
+        settings = get_settings(db)
+        printer_type = (settings.printer_type or "").lower() if settings else ""
 
-        pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
+        # Modo "none" → no imprimimos, solo generamos el PDF.
+        if printer_type == "none":
+            logo = get_logo_path()
+            pdf_path = generate_einvoice_pdf(db, einvoice_id, logo_path=logo)
+            return success_response(
+                message="Impresión deshabilitada en Configuración (PDF generado)",
+                data={"einvoice_id": einvoice_id, "pdf_path": pdf_path, "printed": False}
+            )
 
-        # Enviar a impresora
-        print_pdf(pdf_path)
+        # Térmica directa (ESC/POS) vs PDF via SO
+        use_thermal = printer_type in ("network", "usb")
+
+        # Parser de USB IDs: vienen como hex string "0x04b8" → int.
+        def _parse_usb_id(v):
+            if not v:
+                return None
+            s = str(v).strip().lower()
+            if s.startswith("0x"):
+                s = s[2:]
+            try:
+                return int(s, 16)
+            except ValueError:
+                return None
+
+        kwargs = dict(
+            use_thermal=use_thermal,
+            thermal_kind=printer_type if use_thermal else "network",
+        )
+        if use_thermal and printer_type == "network":
+            kwargs["thermal_ip"] = settings.printer_ip if settings else None
+            kwargs["thermal_port"] = settings.printer_port if settings else None
+        elif use_thermal and printer_type == "usb":
+            kwargs["thermal_usb_vendor_id"] = _parse_usb_id(
+                getattr(settings, "printer_usb_vendor_id", None)
+            )
+            kwargs["thermal_usb_product_id"] = _parse_usb_id(
+                getattr(settings, "printer_usb_product_id", None)
+            )
+
+        if use_thermal:
+            kwargs["paper_width_mm"] = getattr(settings, "printer_paper_width_mm", None) or 80
+            kwargs["profile"] = getattr(settings, "printer_profile", None)
+
+        pdf_path = _print(db, einvoice_id, **kwargs)
 
         return success_response(
             message="Ticket enviado a impresora",
-            data={"einvoice_id": einvoice_id, "pdf_path": pdf_path, "printed": True}
+            data={
+                "einvoice_id": einvoice_id,
+                "pdf_path": pdf_path,
+                "printed": True,
+                "mode": printer_type or "system",
+            },
         )
     except ValueError as e:
+        # Configuración faltante (e.g. USB sin vendor_id) o einvoice
+        # inexistente — 400 es el código correcto.
         raise HTTPException(status_code=400, detail=str(e))
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except ConnectionError as e:
+        # Térmica de red caída / USB no encontrada.
+        logger.error(f"Conectividad de impresora para einvoice {einvoice_id}: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
     except RuntimeError as e:
         logger.error(f"Error de impresión para einvoice {einvoice_id}: {e}")
         raise HTTPException(status_code=500, detail="Error interno al enviar a impresora.")

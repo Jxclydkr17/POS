@@ -39,6 +39,8 @@ API_URL_SYSTEM_INFO = f"{BASE_URL}/settings/system-info"
 API_URL_EXPORT_CONFIG = f"{BASE_URL}/settings/export-config"
 API_URL_IMPORT_CONFIG = f"{BASE_URL}/settings/import-config"
 API_URL_AUDIT_LOG = f"{BASE_URL}/settings/audit-log"
+# Fix 2.5 (cerrado): prueba de impresión ESC/POS desde la UI.
+API_URL_PRINTER_TEST = f"{BASE_URL}/settings/printer-test"
 
 
 def _headers():
@@ -189,6 +191,23 @@ def fetch_audit_log(limit: int = 50) -> list:
     r = requests.get(API_URL_AUDIT_LOG, headers=_headers(), params={"limit": limit}, timeout=10)
     r.raise_for_status()
     return r.json().get("data", [])
+
+
+# ─────────────────────────────────────────────────────────
+# Fix 2.5 (cerrado): Prueba de impresión ESC/POS
+# ─────────────────────────────────────────────────────────
+
+def test_printer() -> dict:
+    """
+    Pide al backend imprimir una página de prueba ESC/POS con la
+    configuración actual (printer_type / IP / USB / perfil / ancho).
+    Retorna el dict de la respuesta del backend.
+    """
+    # Timeout amplio: una térmica USB puede tardar varios segundos en
+    # responder si está dormida o si el SO inicializa el driver USB.
+    r = requests.post(API_URL_PRINTER_TEST, headers=_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json()
 
 
 # ─────────────────────────────────────────────────────────

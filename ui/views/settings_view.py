@@ -760,7 +760,7 @@ class SettingsView(QWidget):
         return scroll
 
     # ----------------------------------------------------------
-    # Tab: Impresora (Fase 4.3)
+    # Tab: Impresora (Fase 4.3 + Fix 2.5 cerrado)
     # ----------------------------------------------------------
     def _build_tab_impresora(self) -> QWidget:
         tab = QWidget()
@@ -770,10 +770,15 @@ class SettingsView(QWidget):
 
         box = QGroupBox("🖨️ Impresora Térmica")
         form = QFormLayout()
+        form.setSpacing(10)
 
         self.combo_printer_type = QComboBox()
+        # Fix 2.5 (cerrado): los tres modos ahora funcionan de verdad.
+        # 'network' → ESC/POS por TCP, 'usb' → ESC/POS por USB,
+        # 'none' → desactiva el botón "Imprimir" del ticket.
         self.combo_printer_type.addItems(["network", "usb", "none"])
 
+        # ── Campos para "network" ──
         self.input_printer_ip = QLineEdit()
         self.input_printer_ip.setPlaceholderText("192.168.0.120")
 
@@ -781,25 +786,87 @@ class SettingsView(QWidget):
         self.input_printer_port.setRange(1, 65535)
         self.input_printer_port.setValue(9100)
 
+        # ── Campos para "usb" ──
+        # Vendor/Product IDs como strings hex ("0x04b8") — el user los
+        # copia textualmente desde lsusb o Administrador de dispositivos.
+        # Validación final ocurre en el schema Pydantic del backend.
+        self.input_printer_usb_vendor = QLineEdit()
+        self.input_printer_usb_vendor.setPlaceholderText("0x04b8 (ej. Epson)")
+        self.input_printer_usb_vendor.setMaxLength(10)
+
+        self.input_printer_usb_product = QLineEdit()
+        self.input_printer_usb_product.setPlaceholderText("0x0202 (ej. TM-T20)")
+        self.input_printer_usb_product.setMaxLength(10)
+
+        # ── Campos comunes (network + usb) ──
+        self.input_printer_profile = QLineEdit()
+        self.input_printer_profile.setPlaceholderText("(opcional) TM-T20II, TM-T88III…")
+        self.input_printer_profile.setMaxLength(40)
+
+        self.combo_printer_paper_width = QComboBox()
+        self.combo_printer_paper_width.addItem("80 mm (común)", 80)
+        self.combo_printer_paper_width.addItem("58 mm (POS pequeño)", 58)
+
+        # Filas del form. Guardamos referencia a las filas USB para
+        # mostrarlas/ocultarlas según printer_type.
         form.addRow("Tipo de conexión:", self.combo_printer_type)
-        form.addRow("Dirección IP:", self.input_printer_ip)
-        form.addRow("Puerto:", self.input_printer_port)
+
+        # Etiquetas en variables para poder ocultarlas también (QFormLayout
+        # asocia un label con cada field; setRowVisible las maneja juntas
+        # en Qt6 pero acá guardamos refs para .setVisible explícito).
+        self._lbl_printer_ip = QLabel("Dirección IP:")
+        form.addRow(self._lbl_printer_ip, self.input_printer_ip)
+
+        self._lbl_printer_port = QLabel("Puerto:")
+        form.addRow(self._lbl_printer_port, self.input_printer_port)
+
+        self._lbl_printer_usb_vendor = QLabel("USB Vendor ID:")
+        form.addRow(self._lbl_printer_usb_vendor, self.input_printer_usb_vendor)
+
+        self._lbl_printer_usb_product = QLabel("USB Product ID:")
+        form.addRow(self._lbl_printer_usb_product, self.input_printer_usb_product)
+
+        self._lbl_printer_profile = QLabel("Perfil python-escpos:")
+        form.addRow(self._lbl_printer_profile, self.input_printer_profile)
+
+        self._lbl_printer_paper_width = QLabel("Ancho de papel:")
+        form.addRow(self._lbl_printer_paper_width, self.combo_printer_paper_width)
 
         box.setLayout(form)
         layout.addWidget(box)
 
+        # ── Botón "Probar impresión" (Fix 2.5 cerrado) ──
+        btn_row_test = QHBoxLayout()
+        self.btn_test_printer = QPushButton("🧾 Probar impresión")
+        self.btn_test_printer.setMinimumHeight(34)
+        self.btn_test_printer.setStyleSheet("""
+            QPushButton {
+                background-color: #10b981; color: white;
+                font-weight: bold; font-size: 13px;
+                padding: 6px 20px; border-radius: 8px; border: none;
+            }
+            QPushButton:hover { background-color: #059669; }
+            QPushButton:disabled { background-color: #555; color: #999; }
+        """)
+        self.btn_test_printer.clicked.connect(self._on_test_printer)
+        btn_row_test.addWidget(self.btn_test_printer)
+        btn_row_test.addStretch()
+        layout.addLayout(btn_row_test)
+
         note = QLabel(
-            "ℹ️ Estos valores se usan al imprimir tickets de venta.\n\n"
-            "⚠️ FASE 2 — Fix 2.5: La impresión directa a impresoras térmicas POS "
-            "(ESC/POS sobre puerto 9100) NO está implementada en esta versión. "
-            "Las opciones 'network'/'usb' acá se conservan para una futura "
-            "integración con python-escpos. Mientras tanto, la app imprime via "
-            "el flujo del sistema operativo (Windows: cuadro de diálogo de "
-            "impresión nativo) y funciona con cualquier impresora que el SO "
-            "tenga instalada como predeterminada.\n\n"
-            "Tipo 'network': impresora térmica en red (NO implementado todavía).\n"
-            "Tipo 'usb': impresora térmica USB (NO implementado todavía).\n"
-            "Tipo 'none': desactiva el botón 'Imprimir' del ticket."
+            "ℹ️ Estos valores se usan al imprimir tickets de venta y "
+            "comprobantes electrónicos.\n\n"
+            "Tipo 'network': impresora térmica en red — envía ESC/POS por TCP "
+            "al puerto configurado (típicamente 9100, modo RAW).\n"
+            "Tipo 'usb': impresora térmica USB — requiere instalar `pyusb` "
+            "y conocer Vendor/Product IDs (consulte `lsusb` en Linux o el "
+            "Administrador de dispositivos en Windows).\n"
+            "Tipo 'none': desactiva el botón 'Imprimir' del ticket; el PDF "
+            "se sigue generando para visualización.\n\n"
+            "💡 Antes de guardar cambios, use 'Probar impresión' para validar "
+            "la conectividad con un ticket corto. La primera vez que se "
+            "imprime puede tardar unos segundos mientras el SO inicializa "
+            "el driver USB."
         )
         note.setStyleSheet("color: #888; font-size: 12px; margin-top: 12px;")
         note.setWordWrap(True)
@@ -859,9 +926,127 @@ class SettingsView(QWidget):
         self.combo_printer_type.currentIndexChanged.connect(self._mark_dirty)
         self.input_printer_ip.textChanged.connect(self._mark_dirty)
         self.input_printer_port.valueChanged.connect(self._mark_dirty)
+        self.input_printer_usb_vendor.textChanged.connect(self._mark_dirty)
+        self.input_printer_usb_product.textChanged.connect(self._mark_dirty)
+        self.input_printer_profile.textChanged.connect(self._mark_dirty)
+        self.combo_printer_paper_width.currentIndexChanged.connect(self._mark_dirty)
+
+        # Mostrar/ocultar campos según printer_type seleccionado.
+        # Conectamos DESPUÉS del dirty para que la sincronización
+        # inicial (al cargar settings) no marque dirty=True.
+        self.combo_printer_type.currentTextChanged.connect(self._sync_printer_fields_visibility)
 
         layout.addStretch()
         return tab
+
+    # ----------------------------------------------------------
+    # Fix 2.5 (cerrado): muestra/oculta campos según el tipo de
+    # impresora seleccionado. Mantiene la UI limpia: no tiene sentido
+    # mostrar el IP cuando elegiste USB.
+    # ----------------------------------------------------------
+    def _sync_printer_fields_visibility(self, *_args):
+        printer_type = self.combo_printer_type.currentText().lower()
+        is_network = printer_type == "network"
+        is_usb = printer_type == "usb"
+        is_active = is_network or is_usb  # "none" oculta todo lo demás
+
+        # Network-only
+        self._lbl_printer_ip.setVisible(is_network)
+        self.input_printer_ip.setVisible(is_network)
+        self._lbl_printer_port.setVisible(is_network)
+        self.input_printer_port.setVisible(is_network)
+
+        # USB-only
+        self._lbl_printer_usb_vendor.setVisible(is_usb)
+        self.input_printer_usb_vendor.setVisible(is_usb)
+        self._lbl_printer_usb_product.setVisible(is_usb)
+        self.input_printer_usb_product.setVisible(is_usb)
+
+        # Comunes (solo cuando hay impresora activa)
+        self._lbl_printer_profile.setVisible(is_active)
+        self.input_printer_profile.setVisible(is_active)
+        self._lbl_printer_paper_width.setVisible(is_active)
+        self.combo_printer_paper_width.setVisible(is_active)
+
+        # Botón de prueba se deshabilita si está en "none"
+        self.btn_test_printer.setEnabled(is_active)
+
+    # ----------------------------------------------------------
+    # Fix 2.5 (cerrado): Botón "Probar impresión"
+    # Llama al endpoint POST /settings/printer-test que envía una
+    # página corta ESC/POS usando la config actual GUARDADA en la
+    # BD (no los valores en pantalla todavía sin guardar).
+    # ----------------------------------------------------------
+    def _on_test_printer(self):
+        if self._dirty:
+            reply = QMessageBox.question(
+                self, "Cambios sin guardar",
+                "La prueba usa la configuración guardada en la base de datos, "
+                "no los valores actuales en pantalla.\n\n"
+                "¿Querés guardar primero y luego probar?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+            )
+            if reply == QMessageBox.Cancel:
+                return
+            if reply == QMessageBox.Yes:
+                # Guardar y dejar al usuario disparar la prueba después.
+                # No encadenamos automáticamente para no esconder errores
+                # de guardado bajo "prueba falló".
+                self._on_save()
+                show_toast(
+                    "Guardando… pulsá 'Probar impresión' de nuevo cuando termine.",
+                    success=True, parent=self.main_window,
+                )
+                return
+
+        self.btn_test_printer.setEnabled(False)
+        self.btn_test_printer.setText("Enviando…")
+
+        def _do_test():
+            from ui.services.settings_service import test_printer
+            import requests as _req
+            try:
+                return test_printer()
+            except _req.HTTPError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e))
+                except Exception:
+                    detail = str(e)
+                raise RuntimeError(detail) from None
+
+        def _on_ok(result):
+            data = (result or {}).get("data") or {}
+            msg = (result or {}).get("message", "OK")
+            printed = data.get("printed", False)
+            if printed:
+                show_toast(f"✅ {msg}", success=True, parent=self.main_window)
+            else:
+                # printed=False cubre el caso "printer_type=none"; no es
+                # un error, solo informativo.
+                show_toast(f"ℹ️ {msg}", success=True, parent=self.main_window)
+
+        def _on_err(msg):
+            QMessageBox.warning(
+                self, "Error de impresión",
+                f"No se pudo imprimir la página de prueba:\n\n{msg}\n\n"
+                "Verifique IP/puerto (network) o Vendor/Product ID (USB) "
+                "y que la impresora esté encendida y accesible."
+            )
+
+        def _on_done():
+            self.btn_test_printer.setEnabled(
+                self.combo_printer_type.currentText().lower() != "none"
+            )
+            self.btn_test_printer.setText("🧾 Probar impresión")
+
+        from ui.utils.http_worker import run_async
+        run_async(
+            _do_test,
+            on_success=_on_ok,
+            on_error=_on_err,
+            on_finished=_on_done,
+            owner=self,
+        )
 
     # ----------------------------------------------------------
     # Tab: Avanzado (CABYS + info)
@@ -1026,13 +1211,33 @@ class SettingsView(QWidget):
         rate = data.get("exchange_rate")
         self.input_exchange_rate.setValue(float(rate) if rate else 1.00)
 
-        # --- Tab Impresora (4.3) ---
+        # --- Tab Impresora (4.3 + Fix 2.5 cerrado) ---
         pt = data.get("printer_type", "network") or "network"
         idx_pt = self.combo_printer_type.findText(pt)
         if idx_pt >= 0:
             self.combo_printer_type.setCurrentIndex(idx_pt)
         self.input_printer_ip.setText(data.get("printer_ip", "192.168.0.120") or "192.168.0.120")
         self.input_printer_port.setValue(data.get("printer_port", 9100) or 9100)
+
+        # Fix 2.5 (cerrado): campos USB + perfil + ancho papel.
+        # Si la BD viene sin estos campos (instalación previa a la
+        # migración g7b8c9d0e1f2), get(...) devuelve None y los
+        # widgets quedan vacíos — que es lo correcto.
+        self.input_printer_usb_vendor.setText(data.get("printer_usb_vendor_id") or "")
+        self.input_printer_usb_product.setText(data.get("printer_usb_product_id") or "")
+        self.input_printer_profile.setText(data.get("printer_profile") or "")
+
+        paper_width = data.get("printer_paper_width_mm") or 80
+        idx_pw = self.combo_printer_paper_width.findData(int(paper_width))
+        if idx_pw >= 0:
+            self.combo_printer_paper_width.setCurrentIndex(idx_pw)
+
+        # Sincronizar visibilidad de campos según el tipo cargado.
+        # Esto NO marca dirty porque ya conectamos la señal de visibilidad
+        # con currentTextChanged y el setCurrentIndex de arriba dispara
+        # ese mismo callback como efecto colateral. Llamamos explícito
+        # acá por si el índice no cambió (ya estaba en "network").
+        self._sync_printer_fields_visibility()
 
         # --- Tab Facturación (4.1): Issuer Profile ---
         self._populate_issuer(issuer)
@@ -1150,10 +1355,14 @@ class SettingsView(QWidget):
             "default_tax": self.input_default_tax.currentText(),
             "rounding_enabled": self.input_rounding.currentIndex() == 1,
             "default_supplier_id": self.combo_default_supplier.currentData(),
-            # Fase 4.3
+            # Fase 4.3 + Fix 2.5 (cerrado)
             "printer_type": self.combo_printer_type.currentText(),
             "printer_ip": self.input_printer_ip.text(),
             "printer_port": self.input_printer_port.value(),
+            "printer_usb_vendor_id": self.input_printer_usb_vendor.text(),
+            "printer_usb_product_id": self.input_printer_usb_product.text(),
+            "printer_profile": self.input_printer_profile.text(),
+            "printer_paper_width_mm": self.combo_printer_paper_width.currentData(),
             # Fase 6.2
             "default_currency": self.combo_currency.currentText(),
             "exchange_rate": self.input_exchange_rate.value(),

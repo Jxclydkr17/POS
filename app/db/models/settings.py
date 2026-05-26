@@ -33,10 +33,31 @@ class Settings(Base):
 
     supplier = relationship("Supplier", lazy="joined")
 
-    # Fase 4.3: Configuración de impresora térmica
+    # ── Fase 4.3 + Fix 2.5 cerrado: Configuración de impresora térmica ──
+    # printer_type sigue siendo {"network", "usb", "none"} para no forzar
+    # migración de configs existentes (ver schemas/settings.py).
+    # - "network": ESC/POS por TCP/IP — usa printer_ip + printer_port.
+    # - "usb":     ESC/POS por USB — usa printer_usb_vendor_id + _product_id.
+    # - "none":    desactivado (el botón "Imprimir" muestra mensaje).
     printer_type = Column(String(20), nullable=True, default="network")
     printer_ip = Column(String(45), nullable=True, default="192.168.0.120")
     printer_port = Column(Integer, nullable=True, default=9100)
+
+    # Fix 2.5 cerrado: USB requiere vendor/product IDs.
+    # Almacenados como strings hex ("0x04b8") para que el usuario pueda
+    # copiarlos textualmente de `lsusb` / Administrador de dispositivos.
+    # El parser de runtime los convierte a int con int(value, 0).
+    printer_usb_vendor_id = Column(String(10), nullable=True)
+    printer_usb_product_id = Column(String(10), nullable=True)
+
+    # Perfil python-escpos opcional (e.g. "TM-T20II", "TM-T88III").
+    # NULL → la librería usa "default", que funciona en la mayoría de
+    # impresoras Epson y compatibles.
+    printer_profile = Column(String(40), nullable=True)
+
+    # Ancho de papel en mm (58 o 80). El default 80 es el más común en
+    # ferreterías/comercios; 58 se ve en POS de cafetería.
+    printer_paper_width_mm = Column(Integer, nullable=True, default=80)
 
     # Información del CABYS
     cabys_last_update = Column(DateTime, nullable=True)
