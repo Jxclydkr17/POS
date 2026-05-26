@@ -9,7 +9,7 @@ No requiere caja abierta, método de pago ni tipo de documento.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QSpinBox, QTextEdit,
-    QComboBox, QMessageBox, QCompleter, QFrame,
+    QComboBox, QMessageBox, QCompleter, QFrame, QWidget, QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer, QStringListModel
 from PySide6.QtGui import QDoubleValidator
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 API_PRODUCTS = f"{BASE_URL}/products/"
 API_CUSTOMERS = f"{BASE_URL}/customers/"
 API_PROFORMAS = f"{BASE_URL}/proformas"
+CABYS_SEARCH_URL = f"{BASE_URL}/cabys/search"
 
 
 class CreateProformaDialog(QDialog):
@@ -308,6 +309,14 @@ class CreateProformaDialog(QDialog):
             "discount_percent": 0.0,
             "is_common": True,
             "common_description": "",
+            # ── CABYS por línea (Hacienda) ──
+            # Cada producto común puede llevar su propio CABYS. Si la
+            # proforma se convierte luego en venta, este código viaja al
+            # SaleDetail y de ahí al XML de Hacienda. NULL → fallback
+            # genérico "8399000000000" en xml_builder_v44.py.
+            "common_cabys_code": None,
+            "common_cabys_name": None,
+            "tax_rate": 0.0,   # IVA del CABYS elegido (0/1/2/4/13)
         }
         self._refresh_cart()
 
@@ -323,11 +332,63 @@ class CreateProformaDialog(QDialog):
 
             # Col 0: Nombre (editable si es común)
             if is_common:
+                # Container con: [descripción editable] + [botón CABYS].
+                # Reemplaza el QLineEdit suelto por un widget compuesto
+                # para que el usuario pueda asignar el CABYS de Hacienda
+                # sin salir de la fila ni abrir un modal pesado.
+                container = QWidget()
+                h = QHBoxLayout(container)
+                h.setContentsMargins(0, 0, 0, 0)
+                h.setSpacing(4)
+
                 txt = QLineEdit(item.get("common_description", ""))
                 txt.setPlaceholderText("Descripción del producto…")
-                txt.setStyleSheet("QLineEdit{background:#1e293b;color:#e5e7eb;border:none;padding:4px;}")
-                txt.textChanged.connect(lambda text, p=pid: self._update_common_desc(p, text))
-                self.cart_table.setCellWidget(row, 0, txt)
+                txt.setStyleSheet(
+                    "QLineEdit{background:#1e293b;color:#e5e7eb;border:none;padding:4px;}"
+                )
+                txt.textChanged.connect(
+                    lambda text, p=pid: self._update_common_desc(p, text)
+                )
+                h.addWidget(txt, 1)
+
+                # Botón CABYS: cambia de label y color según si hay
+                # código asignado. Click → abre el flujo búsqueda+selector.
+                cabys_code = item.get("common_cabys_code")
+                btn_cabys = QPushButton()
+                btn_cabys.setFixedHeight(26)
+                btn_cabys.setCursor(Qt.PointingHandCursor)
+                if cabys_code:
+                    iva_pct = item.get("tax_rate") or 0
+                    btn_cabys.setText(f"✓ {cabys_code}")
+                    btn_cabys.setToolTip(
+                        f"CABYS: {cabys_code}\n"
+                        f"{item.get('common_cabys_name') or ''}\n"
+                        f"IVA: {iva_pct}%\n"
+                        f"(Clic para cambiar)"
+                    )
+                    btn_cabys.setStyleSheet(
+                        "QPushButton{background:#15803d;color:white;"
+                        "border-radius:4px;padding:0 8px;font-size:11px;}"
+                        "QPushButton:hover{background:#166534;}"
+                    )
+                else:
+                    btn_cabys.setText("CABYS")
+                    btn_cabys.setToolTip(
+                        "Asignar código CABYS de Hacienda.\n"
+                        "Si no se asigna, se usará el genérico "
+                        "8399000000000 (Otros servicios n.c.p.)."
+                    )
+                    btn_cabys.setStyleSheet(
+                        "QPushButton{background:#1e3a8a;color:white;"
+                        "border-radius:4px;padding:0 8px;font-size:11px;}"
+                        "QPushButton:hover{background:#1d4ed8;}"
+                    )
+                btn_cabys.clicked.connect(
+                    lambda _, p=pid: self._pick_cabys_for_common(p)
+                )
+                h.addWidget(btn_cabys)
+
+                self.cart_table.setCellWidget(row, 0, container)
             else:
                 name = item["product"].get("name", "")
                 self.cart_table.setItem(row, 0, QTableWidgetItem(name))
@@ -406,6 +467,80 @@ class CreateProformaDialog(QDialog):
         if pid in self.cart:
             self.cart[pid]["common_description"] = text
 
+    def _pick_cabys_for_common(self, pid):
+        """Flujo de selección de CABYS para una línea común de la proforma.
+
+        Misma mecánica que `CommonProductDialog.search_cabys` en ventas:
+        pide al usuario un término, llama a /cabys/search y abre el
+        `CabysSelectorDialog` para que escoja. El IVA del CABYS elegido
+        se persiste como `tax_rate` de la línea — coherente con la
+        propagación que hace `proforma_crud.convert_to_sale`.
+        """
+        if pid not in self.cart:
+            return
+
+        # Pre-cargamos el campo de búsqueda con la descripción ya escrita
+        # (si la hay), para ahorrarle al usuario re-tipear "tornillos"
+        # cuando ya lo puso en la descripción.
+        prefill = (self.cart[pid].get("common_description") or "").strip()
+
+        keyword, ok = QInputDialog.getText(
+            self,
+            "Buscar CABYS",
+            "Escriba el nombre o código del bien/servicio:",
+            QLineEdit.Normal,
+            prefill,
+        )
+        if not ok:
+            return
+        keyword = (keyword or "").strip()
+        if not keyword:
+            QMessageBox.warning(
+                self, "CABYS",
+                "Escriba el nombre o el código CABYS para buscar."
+            )
+            return
+
+        def _on_results(payload):
+            data = payload.get("data", []) if isinstance(payload, dict) else []
+            if not data:
+                QMessageBox.information(
+                    self, "CABYS", "No se encontraron coincidencias."
+                )
+                return
+
+            from ui.dialogs.cabys_selector_dialog import CabysSelectorDialog
+            dialog = CabysSelectorDialog(data)
+            if dialog.exec() == QDialog.Accepted and dialog.selected:
+                cabys = dialog.selected
+                if pid not in self.cart:
+                    # La línea fue removida entre el clic y la selección
+                    return
+
+                # Persistir en el cart
+                try:
+                    iva_int = int(cabys.get("iva") or 0)
+                except (TypeError, ValueError):
+                    iva_int = 13   # default razonable si llega raro
+
+                self.cart[pid]["common_cabys_code"] = cabys.get("code") or None
+                self.cart[pid]["common_cabys_name"] = cabys.get("description") or None
+                self.cart[pid]["tax_rate"] = float(iva_int)
+
+                # Refrescar para que el botón cambie a estado verde
+                self._refresh_cart()
+
+        api_call(
+            "get", CABYS_SEARCH_URL,
+            headers=self._auth_headers(),
+            params={"q": keyword},
+            on_success=_on_results,
+            on_error=lambda msg: QMessageBox.critical(
+                self, "Error CABYS", msg
+            ),
+            owner=self,
+        )
+
     def _remove_from_cart(self, pid):
         if pid in self.cart:
             del self.cart[pid]
@@ -449,6 +584,14 @@ class CreateProformaDialog(QDialog):
                         "discount_percent": float(d.get("discount_percent", 0)),
                         "is_common": True,
                         "common_description": d.get("common_description", ""),
+                        # Restaurar CABYS guardado previamente. El backend
+                        # devuelve `common_cabys_code` en cada detail (ver
+                        # proforma_crud._enriched_detail). `common_cabys_name`
+                        # no se persiste, así que queda None — el botón
+                        # aún muestra el código y el % de IVA.
+                        "common_cabys_code": d.get("common_cabys_code"),
+                        "common_cabys_name": None,
+                        "tax_rate": float(d.get("tax_rate") or 0),
                     }
                 else:
                     pid = d.get("product_id")
@@ -497,6 +640,16 @@ class CreateProformaDialog(QDialog):
             if item.get("is_common"):
                 entry["product_id"] = None
                 entry["common_description"] = item.get("common_description", "Producto común")
+                # ── CABYS y tax_rate por línea ──
+                # Se envían solo si el usuario los asignó. Si no, el
+                # backend persiste NULL/0 y, al convertir esta proforma
+                # a venta, xml_builder_v44.py usará el CABYS genérico.
+                cc = item.get("common_cabys_code")
+                if cc:
+                    entry["common_cabys_code"] = cc
+                tr = float(item.get("tax_rate") or 0)
+                if tr > 0:
+                    entry["tax_rate"] = tr
             else:
                 entry["product_id"] = pid
             details.append(entry)
