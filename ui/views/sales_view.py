@@ -1611,10 +1611,27 @@ class SalesView(QWidget):
                 description=data["description"],
                 quantity=data["quantity"],
                 price=data["price"],
+                cabys_code=data.get("cabys_code"),
+                cabys_name=data.get("cabys_name"),
+                tax_rate=data.get("tax_rate", 0.0),
             )
 
-    def add_common_to_cart(self, description: str, quantity: int, price: float):
-        """Agrega un producto común al carrito con ID virtual negativo."""
+    def add_common_to_cart(
+        self,
+        description: str,
+        quantity: int,
+        price: float,
+        cabys_code: str = None,
+        cabys_name: str = None,
+        tax_rate: float = 0.0,
+    ):
+        """Agrega un producto común al carrito con ID virtual negativo.
+
+        CABYS y tax_rate son opcionales para no romper a llamadores
+        antiguos que solo pasen los 3 campos originales. Si vienen,
+        se incluyen en el payload de la venta y llegan al XML de
+        Hacienda como CodigoCABYS específico de la línea.
+        """
         self._common_seq -= 1
         pid = self._common_seq  # IDs negativos: -1, -2, -3...
 
@@ -1625,6 +1642,14 @@ class SalesView(QWidget):
             "discount_percent": 0.0,
             "is_common": True,
             "common_description": description.strip(),
+            # ── Campos CABYS ──
+            # cabys_code = None significa "usar default del backend"
+            # ("8399000000000" — Otros servicios n.c.p.).
+            "common_cabys_code": (cabys_code or "").strip() or None,
+            "common_cabys_name": (cabys_name or "").strip() or None,
+            # tax_rate del CABYS (0, 1, 2, 4 o 13). Se usa tanto en
+            # update_totals (UI) como en el payload de la venta.
+            "tax_rate": float(tax_rate or 0),
         }
 
         self.refresh_cart_table()
@@ -1862,11 +1887,17 @@ class SalesView(QWidget):
             qty = float(item["quantity"])                # 📏 float para soportar fracciones
             percent = float(item.get("discount_percent") or 0)
 
-            # ─── Obtener tasa de impuesto real del producto ───
+            # ─── Obtener tasa de impuesto real ───
+            # Para productos comunes el tax_rate vive en el item del
+            # carrito (lo puso CommonProductDialog desde el CABYS elegido).
+            # Para productos del inventario viene del producto.
             product = item.get("product") or {}
             raw_rate = 0.0
             try:
-                raw_rate = float(product.get("tax_rate") or 0)
+                if item.get("is_common", False):
+                    raw_rate = float(item.get("tax_rate") or 0)
+                else:
+                    raw_rate = float(product.get("tax_rate") or 0)
             except (ValueError, TypeError):
                 raw_rate = 0.0
 
@@ -2188,6 +2219,19 @@ class SalesView(QWidget):
             if is_common:
                 detail_entry["product_id"] = None
                 detail_entry["common_description"] = item.get("common_description", "Producto común")
+                # ── CABYS por línea ──
+                # Si el usuario eligió un CABYS específico en el diálogo,
+                # va en el payload. Si quedó NULL, el backend lo persiste
+                # como NULL y xml_builder_v44.py usa el default genérico.
+                cc = item.get("common_cabys_code")
+                if cc:
+                    detail_entry["common_cabys_code"] = cc
+                # tax_rate del CABYS (0/1/2/4/13). El schema ya lo acepta
+                # como Optional con default 0; lo enviamos solo si es > 0
+                # para no inflar payloads de ventas exentas.
+                tr = float(item.get("tax_rate") or 0)
+                if tr > 0:
+                    detail_entry["tax_rate"] = tr
             else:
                 detail_entry["product_id"] = pid
 

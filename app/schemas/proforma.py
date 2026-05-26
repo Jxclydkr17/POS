@@ -73,6 +73,7 @@ class ProformaDetailOut(BaseModel):
     tax_amount: Optional[float] = 0
     is_common: bool = False
     common_description: Optional[str] = None
+    common_cabys_code: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

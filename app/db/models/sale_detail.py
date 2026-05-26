@@ -25,6 +25,10 @@ class SaleDetail(Base):
     # PRODUCTO COMÚN: línea sin inventario
     is_common = Column(Boolean, default=False, nullable=False)
     common_description = Column(String(200), nullable=True)
+    # CABYS por línea para productos comunes (13 dígitos oficiales;
+    # 20 por consistencia con `cabys.code`). NULL → xml_builder_v44.py
+    # cae al default DEFAULT_COMMON_CABYS_CODE ("8399000000000").
+    common_cabys_code = Column(String(20), nullable=True)
 
     # Relación con Sale
     sale = relationship("Sale", back_populates="details")

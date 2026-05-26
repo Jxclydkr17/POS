@@ -27,6 +27,9 @@ class ProformaDetail(Base):
     # Producto común (línea sin inventario)
     is_common = Column(Boolean, default=False, nullable=False)
     common_description = Column(String(200), nullable=True)
+    # CABYS por línea (mismo esquema que SaleDetail). Se propaga al
+    # SaleDetail correspondiente cuando la proforma se convierte a venta.
+    common_cabys_code = Column(String(20), nullable=True)
 
     # Relación con Proforma
     proforma = relationship("Proforma", back_populates="details")

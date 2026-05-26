@@ -128,6 +128,11 @@ def _process_proforma_lines(db: Session, proforma_id: int, items) -> Decimal:
                 tax_amount=tax_amount,
                 is_common=True,
                 common_description=(item.common_description or "Producto común").strip(),
+                # CABYS por línea: se propaga al SaleDetail cuando la
+                # proforma se convierte a venta (ver convert_to_sale).
+                common_cabys_code=(
+                    getattr(item, "common_cabys_code", None) or None
+                ),
             ))
             continue
         # ─── FIN PRODUCTO COMÚN ───
@@ -343,6 +348,7 @@ def get_proforma_detail(db: Session, proforma_id: int) -> dict:
             "tax_amount": float(d.tax_amount or 0),
             "is_common": bool(d.is_common),
             "common_description": d.common_description,
+            "common_cabys_code": d.common_cabys_code,
             "unit_type": _ut,
         })
 
@@ -525,6 +531,13 @@ def convert_to_sale(
         if d.is_common:
             item_data["product_id"] = None
             item_data["common_description"] = d.common_description or "Producto común"
+            # Propagar CABYS y tax_rate de la línea de la proforma a la venta.
+            # Si la proforma fue creada antes de existir estos campos, vienen
+            # NULL y el sale_crud + xml_builder usarán defaults.
+            if getattr(d, "common_cabys_code", None):
+                item_data["common_cabys_code"] = d.common_cabys_code
+            if d.tax_rate is not None:
+                item_data["tax_rate"] = float(d.tax_rate)
         else:
             # Revalidar producto (desde mapa prefetcheado)
             product = conv_products_map.get(d.product_id)

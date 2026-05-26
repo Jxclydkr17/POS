@@ -275,6 +275,12 @@ def _process_sale_lines(
                 tax_amount=tax_amount,
                 is_common=True,
                 common_description=(item.common_description or "Producto común").strip(),
+                # CABYS por línea: si el frontend lo envía, lo persistimos;
+                # si no, queda NULL y xml_builder_v44.py usa el default
+                # "8399000000000" (Otros servicios n.c.p.).
+                common_cabys_code=(
+                    getattr(item, "common_cabys_code", None) or None
+                ),
             ))
             continue
         # ─── FIN PRODUCTO COMÚN ───

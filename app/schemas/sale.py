@@ -41,6 +41,16 @@ class SaleItemBase(BaseModel):
         max_length=200,
         description="Descripción libre del producto común"
     )
+    # ── CABYS por línea para productos comunes ──
+    # Cada producto común puede llevar su propio CABYS (ej. tornillos
+    # con su código específico). Si viene NULL, xml_builder_v44.py cae
+    # al default "8399000000000" (Otros servicios n.c.p.).
+    # Los códigos oficiales son 13 dígitos; 20 da margen.
+    common_cabys_code: Optional[str] = Field(
+        default=None,
+        max_length=20,
+        description="Código CABYS de la línea (solo aplica a productos comunes)"
+    )
 
     # ── FASE 3 — Fix 3.1: IVA para productos comunes ──
     # Para productos normales se toma del catálogo (Product.tax_rate).
@@ -161,6 +171,7 @@ class SaleDetailOut(BaseModel):
     # ✅ PRODUCTO COMÚN
     is_common: bool = False
     common_description: Optional[str] = None
+    common_cabys_code: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
