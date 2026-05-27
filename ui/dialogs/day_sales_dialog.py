@@ -23,6 +23,7 @@ from app.utils.print_ticket import print_pdf
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.utils.http_worker import api_call, run_async
+from app.core.config import get_pdf_dir
 
 
 API_URL = BASE_URL
@@ -342,7 +343,7 @@ class DaySalesDialog(QDialog):
         return {"Authorization": f"Bearer {session.token}"}
 
     def _pdf_path_for_sale(self, sale_id: int) -> str:
-        return os.path.abspath(f"app/pdfs/venta_{sale_id}.pdf")
+        return str(get_pdf_dir() / f"venta_{sale_id}.pdf")
 
     # ------------------------------------------------------------------
     # Data

@@ -18,6 +18,7 @@ from datetime import datetime, date
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.http_worker import api_call, run_async
+from app.core.config import get_pdf_dir
 
 API_URL = BASE_URL
 
@@ -496,7 +497,7 @@ class CustomerCreditView(QDialog):
         if sale_id is None:
             QMessageBox.warning(self, "Error", "No se pudo determinar el ticket de esta venta."); return
         try:
-            pdf_path = os.path.abspath(f"app/pdfs/venta_{sale_id}.pdf")
+            pdf_path = str(get_pdf_dir() / f"venta_{sale_id}.pdf")
             if not os.path.exists(pdf_path):
                 reply = QMessageBox.question(self, "PDF no encontrado", "No existe el PDF para esta venta.\n¿Desea regenerarlo?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
                 if reply != QMessageBox.Yes: return

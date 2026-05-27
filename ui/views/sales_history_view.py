@@ -34,6 +34,7 @@ from ui.session_manager import session
 from ui.utils.calendar_fix import fix_calendar_colors
 from ui.utils.http_worker import api_call, api_request
 from ui.components.toast_notifier import show_toast
+from app.core.config import get_pdf_dir
 
 API_URL = BASE_URL
 logger = logging.getLogger(__name__)
@@ -1272,7 +1273,7 @@ class SalesHistoryView(QWidget):
             if not sale_id:
                 return
 
-            pdf_path = os.path.abspath(f"app/pdfs/venta_{sale_id}.pdf")
+            pdf_path = str(get_pdf_dir() / f"venta_{sale_id}.pdf")
 
             if not os.path.exists(pdf_path):
                 reply = QMessageBox.question(
