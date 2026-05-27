@@ -69,8 +69,26 @@ def _ensure_secret_key() -> str:
             else:
                 content += f"\nSECRET_KEY={new_key}\n"
             env_path.write_text(content, encoding="utf-8")
+        # DESPUÉS — Si no hay .env, copia desde .env.example o crea uno completo
         else:
-            env_path.write_text(f"SECRET_KEY={new_key}\n", encoding="utf-8")
+            env_example = APP_DIR / ".env.example"
+            if env_example.exists():
+                import shutil
+                shutil.copy2(env_example, env_path)
+                # Ahora sí, reemplaza el SECRET_KEY dentro del template copiado
+                content = env_path.read_text(encoding="utf-8")
+                import re
+                content = re.sub(
+                    r"^SECRET_KEY=.*$",
+                    f"SECRET_KEY={new_key}",
+                    content,
+                    flags=re.MULTILINE,
+                )
+                env_path.write_text(content, encoding="utf-8")
+            else:
+                # Fallback mínimo pero honesto
+                env_path.write_text(f"SECRET_KEY={new_key}\n", encoding="utf-8")
+            logger.warning("SECRET_KEY genérica detectada. Se generó una nueva clave.")
         logger.warning("SECRET_KEY genérica detectada. Se generó una nueva.")
     except OSError as e:
         logger.error(
