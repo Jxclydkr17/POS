@@ -135,12 +135,24 @@ def _build_details(
     items: List[PurchaseItemCreate],
 ) -> Decimal:
     """
-    Construye los PurchaseDetail y devuelve el total calculado.
+    Construye los PurchaseDetail y devuelve el total calculado (suma de total_line).
 
     FASE 1 — Fix 1.1: Toda la aritmética usa Decimal para evitar
     errores de redondeo IEEE 754 (ej. 3 × ₡1,333.33 = ₡3,999.99
     exacto, no ₡3,999.98).
+
+    Lógica de facturación electrónica CR V4.4:
+        subtotal_bruto  = qty × unit_cost
+        discount_amount = subtotal_bruto × (discount_pct / 100)
+        subtotal_neto   = subtotal_bruto − discount_amount   ← base imponible
+        iva_amount      = subtotal_neto  × (iva_pct / 100)
+        total_line      = subtotal_neto  + iva_amount
+
+    El campo `subtotal` del modelo almacena el subtotal_neto (base imponible).
+    El `purchase.amount` acumula la suma de total_line (con IVA descontado).
     """
+    _D100 = Decimal("100")
+
     # Prefetch productos en UNA query
     product_ids = [item.product_id for item in items if item.product_id]
     products_map = {}
@@ -148,7 +160,7 @@ def _build_details(
         products = db.query(Product).filter(Product.id.in_(set(product_ids))).all()
         products_map = {p.id: p for p in products}
 
-    total = Decimal("0")
+    grand_total = Decimal("0")
     for item in items:
         product = products_map.get(item.product_id)
         if not product:
@@ -157,9 +169,11 @@ def _build_details(
                 detail=f"Producto ID {item.product_id} no encontrado.",
             )
 
-        # quantity ya es Decimal (schema); unit_cost puede ser float → convertir
-        qty = Decimal(str(item.quantity))
+        # quantity ya es Decimal (schema); los demás pueden ser float → convertir
+        qty  = Decimal(str(item.quantity))
         cost = Decimal(str(item.unit_cost))
+        disc_pct = Decimal(str(getattr(item, "discount_pct", 0) or 0))
+        iva_pct  = Decimal(str(getattr(item, "iva_pct",  13) or 13))
 
         # FASE 3 — Fix 3.3: Validar valores positivos (consistente con sale_crud.py)
         if qty <= 0:
@@ -172,20 +186,36 @@ def _build_details(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Costo unitario inválido para '{product.name}': {cost}. Debe ser mayor a 0.",
             )
+        if not (Decimal("0") <= disc_pct <= _D100):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Descuento inválido para '{product.name}': {disc_pct}%. Debe estar entre 0 y 100.",
+            )
 
-        subtotal = (qty * cost).quantize(_Q2, rounding=ROUND_HALF_UP)
-        total += subtotal
+        # ── Cálculo conforme facturación electrónica CR V4.4 ──
+        subtotal_bruto  = (qty * cost).quantize(_Q2, rounding=ROUND_HALF_UP)
+        discount_amount = (subtotal_bruto * disc_pct / _D100).quantize(_Q2, rounding=ROUND_HALF_UP)
+        subtotal_neto   = (subtotal_bruto - discount_amount).quantize(_Q2, rounding=ROUND_HALF_UP)
+        iva_amount      = (subtotal_neto  * iva_pct  / _D100).quantize(_Q2, rounding=ROUND_HALF_UP)
+        total_line      = (subtotal_neto  + iva_amount).quantize(_Q2, rounding=ROUND_HALF_UP)
+
+        grand_total += total_line
 
         detail = PurchaseDetail(
-            purchase_id=purchase.id,
-            product_id=item.product_id,
-            quantity=item.quantity,
-            unit_cost=cost,
-            subtotal=subtotal,
+            purchase_id     = purchase.id,
+            product_id      = item.product_id,
+            quantity        = item.quantity,
+            unit_cost       = cost,
+            subtotal        = subtotal_neto,   # base imponible
+            discount_pct    = disc_pct,
+            discount_amount = discount_amount,
+            iva_pct         = iva_pct,
+            iva_amount      = iva_amount,
+            total_line      = total_line,
         )
         db.add(detail)
 
-    return total.quantize(_Q2, rounding=ROUND_HALF_UP)
+    return grand_total.quantize(_Q2, rounding=ROUND_HALF_UP)
 
 
 def _sync_payment_status(purchase: Purchase):

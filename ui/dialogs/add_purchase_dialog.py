@@ -22,8 +22,8 @@ class AddPurchaseDialog(QDialog):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("➕ Agregar Factura / Compra")
-        self.setMinimumWidth(780)
-        self.setMinimumHeight(640)
+        self.setMinimumWidth(920)
+        self.setMinimumHeight(660)
         self.pdf_file_path = None
         self.products_list = []      # cache de productos
         self.detail_rows = []        # líneas de detalle actuales
@@ -73,13 +73,13 @@ class AddPurchaseDialog(QDialog):
         # --------------------------
         layout.addWidget(self._label("📦 Detalle de productos (opcional)"))
 
-        # Fila de entrada: Producto | Cant | Costo unit | %IVA | [Agregar]
+        # Fila de entrada: Producto | Cant | Costo unit | %Desc | %IVA | [Agregar]
         add_line_layout = QHBoxLayout()
 
         # -- Buscador de producto --
         self.product_search = QLineEdit()
-        self.product_search.setPlaceholderText("🔍 Buscar por nombre o código de barras...")
-        self.product_search.setMinimumWidth(200)
+        self.product_search.setPlaceholderText("🔍 Buscar por nombre o código...")
+        self.product_search.setMinimumWidth(180)
         self.product_search.textChanged.connect(self._on_search_changed)
         self.product_search.installEventFilter(self)
         add_line_layout.addWidget(QLabel("Producto:"))
@@ -122,6 +122,22 @@ class AddPurchaseDialog(QDialog):
         add_line_layout.addWidget(QLabel("Costo unit:"))
         add_line_layout.addWidget(self.cost_spin)
 
+        # -- % Descuento (NUEVO) --
+        self.discount_spin = QDoubleSpinBox()
+        self.discount_spin.setMinimum(0.0)
+        self.discount_spin.setMaximum(100.0)
+        self.discount_spin.setDecimals(2)
+        self.discount_spin.setSuffix(" %")
+        self.discount_spin.setValue(0.0)
+        self.discount_spin.setFixedWidth(80)
+        self.discount_spin.setToolTip(
+            "Porcentaje de descuento por línea.\n"
+            "Se aplica sobre el Subtotal Bruto antes de calcular el IVA.\n"
+            "(Ej.: 10% → base imponible = Subtotal × 0.90)"
+        )
+        add_line_layout.addWidget(QLabel("Desc.:"))
+        add_line_layout.addWidget(self.discount_spin)
+
         # -- % IVA --
         self.iva_combo = QComboBox()
         self.iva_combo.setFixedWidth(72)
@@ -143,26 +159,28 @@ class AddPurchaseDialog(QDialog):
 
         layout.addLayout(add_line_layout)
 
-        # Tabla de líneas  (7 cols: Producto | Cant | Costo Unit. | Subtotal | %IVA | IVA ₡ | Total | 🗑)
+        # ──────────────────────────────────────────────────────────────────
+        # Tabla de líneas  (10 cols):
+        # Producto | Cant. | Costo Unit. | Subtotal Bruto | % Desc. | Desc. ₡ | %IVA | IVA ₡ | Total | 🗑
+        # ──────────────────────────────────────────────────────────────────
         self.items_table = QTableWidget()
-        self.items_table.setColumnCount(8)
+        self.items_table.setColumnCount(10)
         self.items_table.setHorizontalHeaderLabels([
-            "Producto", "Cant.", "Costo Unit.", "Subtotal", "%IVA", "IVA ₡", "Total", ""
+            "Producto", "Cant.", "Costo Unit.", "Subtotal Bruto",
+            "% Desc.", "Desc. ₡", "%IVA", "IVA ₡", "Total", ""
         ])
         hh = self.items_table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.Stretch)
-        hh.setSectionResizeMode(1, QHeaderView.Fixed)
-        hh.setSectionResizeMode(4, QHeaderView.Fixed)
-        hh.setSectionResizeMode(7, QHeaderView.Fixed)
-        self.items_table.setColumnWidth(1, 50)
-        self.items_table.setColumnWidth(4, 55)
-        self.items_table.setColumnWidth(7, 50)
+        # Columnas de ancho fijo (no se estiran)
+        for col, width in [(1, 50), (4, 58), (5, 72), (6, 55), (9, 40)]:
+            hh.setSectionResizeMode(col, QHeaderView.Fixed)
+            self.items_table.setColumnWidth(col, width)
         self.items_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.items_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.items_table.setMaximumHeight(200)
         layout.addWidget(self.items_table)
 
-        # --- Resumen de totales (subtotal / IVA / total) ---
+        # --- Resumen de totales (subtotal bruto / descuento / IVA / total) ---
         totals_frame = QFrame()
         totals_frame.setStyleSheet(
             "QFrame { background-color: #1e1e2e; border-radius: 6px; padding: 4px; }"
@@ -170,8 +188,11 @@ class AddPurchaseDialog(QDialog):
         totals_layout = QHBoxLayout(totals_frame)
         totals_layout.setContentsMargins(12, 6, 12, 6)
 
-        self.lbl_subtotal = QLabel("Subtotal: ₡ 0.00")
+        self.lbl_subtotal = QLabel("Subtotal Bruto: ₡ 0.00")
         self.lbl_subtotal.setStyleSheet("font-size: 13px; color: #aaaaaa;")
+
+        self.lbl_discount_total = QLabel("Descuento: ₡ 0.00")
+        self.lbl_discount_total.setStyleSheet("font-size: 13px; color: #e67e22; font-weight: bold;")
 
         self.lbl_iva_total = QLabel("IVA: ₡ 0.00")
         self.lbl_iva_total.setStyleSheet("font-size: 13px; color: #f0ad4e;")
@@ -182,6 +203,8 @@ class AddPurchaseDialog(QDialog):
         )
 
         totals_layout.addWidget(self.lbl_subtotal)
+        totals_layout.addStretch()
+        totals_layout.addWidget(self.lbl_discount_total)
         totals_layout.addStretch()
         totals_layout.addWidget(self.lbl_iva_total)
         totals_layout.addStretch()
@@ -312,7 +335,7 @@ class AddPurchaseDialog(QDialog):
         self.product_search.setText(product["name"])
         self.product_search.blockSignals(False)
         self.cost_spin.setValue(float(product.get("cost") or 0.0))
-        # Pre-seleccionar IVA del producto si está guardado, si no 13 %
+        # Pre-seleccionar IVA del producto si está guardado, si no 13%
         # tax_rate se almacena como decimal (0.13) → convertir a entero %
         raw_iva = product.get("tax_rate") or product.get("iva")
         if raw_iva is not None:
@@ -345,13 +368,18 @@ class AddPurchaseDialog(QDialog):
         product_name = self.selected_product["name"]
         qty          = self.qty_spin.value()
         unit_cost    = self.cost_spin.value()
-        iva_pct      = self.iva_combo.currentData()   # entero: 0, 1, 2, 4, 8 ó 13
+        discount_pct = self.discount_spin.value()       # 0.00 – 100.00
+        iva_pct      = self.iva_combo.currentData()     # entero: 0, 1, 2, 4, 8 ó 13
 
         # ── Validar consistencia del IVA con el producto registrado ──
         registered_iva = self.selected_product.get("tax_rate")
         if registered_iva is not None:
             # tax_rate se guarda como decimal (0.13) → convertir a entero %
-            registered_iva_pct = round(float(registered_iva) * 100) if float(registered_iva) <= 1.0 else int(float(registered_iva))
+            registered_iva_pct = (
+                round(float(registered_iva) * 100)
+                if float(registered_iva) <= 1.0
+                else int(float(registered_iva))
+            )
             if int(iva_pct) != registered_iva_pct:
                 QMessageBox.warning(
                     self,
@@ -362,19 +390,34 @@ class AddPurchaseDialog(QDialog):
                 )
                 return
 
-        subtotal     = round(qty * unit_cost, 2)
-        iva_amount   = round(subtotal * iva_pct / 100, 2)
-        total_line   = round(subtotal + iva_amount, 2)
+        # ── Cálculo conforme facturación electrónica Costa Rica (V4.4) ──
+        # 1. Subtotal bruto (base antes de descuentos)
+        subtotal_bruto  = round(qty * unit_cost, 2)
+
+        # 2. Monto del descuento
+        discount_amount = round(subtotal_bruto * (discount_pct / 100), 2)
+
+        # 3. Base imponible (subtotal neto = base para el IVA)
+        subtotal_neto   = round(subtotal_bruto - discount_amount, 2)
+
+        # 4. IVA calculado sobre la base imponible
+        iva_amount      = round(subtotal_neto * (iva_pct / 100), 2)
+
+        # 5. Total de la línea
+        total_line      = round(subtotal_neto + iva_amount, 2)
 
         self.detail_rows.append({
-            "product_id":   product_id,
-            "product_name": product_name,
-            "quantity":     qty,
-            "unit_cost":    unit_cost,
-            "subtotal":     subtotal,
-            "iva_pct":      iva_pct,
-            "iva_amount":   iva_amount,
-            "total_line":   total_line,
+            "product_id":      product_id,
+            "product_name":    product_name,
+            "quantity":        qty,
+            "unit_cost":       unit_cost,
+            "subtotal_bruto":  subtotal_bruto,
+            "discount_pct":    discount_pct,
+            "discount_amount": discount_amount,
+            "subtotal_neto":   subtotal_neto,
+            "iva_pct":         iva_pct,
+            "iva_amount":      iva_amount,
+            "total_line":      total_line,
         })
 
         # Limpiar campos para la próxima línea
@@ -384,6 +427,7 @@ class AddPurchaseDialog(QDialog):
         self.product_search.blockSignals(False)
         self.cost_spin.setValue(0.0)
         self.qty_spin.setValue(1)
+        self.discount_spin.setValue(0.0)          # ← reiniciar descuento
         self.iva_combo.setCurrentIndex(IVA_RATES.index(13))
 
         self._refresh_items_table()
@@ -394,34 +438,70 @@ class AddPurchaseDialog(QDialog):
     def _refresh_items_table(self):
         self.items_table.setRowCount(len(self.detail_rows))
 
-        grand_subtotal = 0.0
-        grand_iva      = 0.0
-        grand_total    = 0.0
+        grand_subtotal_bruto  = 0.0
+        grand_discount_amount = 0.0
+        grand_iva             = 0.0
+        grand_total           = 0.0
 
         for row, item in enumerate(self.detail_rows):
+            # Col 0 – Producto
             self.items_table.setItem(row, 0, QTableWidgetItem(item["product_name"]))
-            self.items_table.setItem(row, 1, QTableWidgetItem(str(item["quantity"])))
+
+            # Col 1 – Cantidad
+            qty_cell = QTableWidgetItem(str(item["quantity"]))
+            qty_cell.setTextAlignment(Qt.AlignCenter)
+            self.items_table.setItem(row, 1, qty_cell)
+
+            # Col 2 – Costo unitario
             self.items_table.setItem(row, 2, QTableWidgetItem(f"₡ {item['unit_cost']:,.2f}"))
-            self.items_table.setItem(row, 3, QTableWidgetItem(f"₡ {item['subtotal']:,.2f}"))
 
-            iva_cell = QTableWidgetItem(f"{item['iva_pct']}%")
-            iva_cell.setTextAlignment(Qt.AlignCenter)
-            self.items_table.setItem(row, 4, iva_cell)
+            # Col 3 – Subtotal bruto
+            self.items_table.setItem(row, 3, QTableWidgetItem(f"₡ {item['subtotal_bruto']:,.2f}"))
 
-            self.items_table.setItem(row, 5, QTableWidgetItem(f"₡ {item['iva_amount']:,.2f}"))
-            self.items_table.setItem(row, 6, QTableWidgetItem(f"₡ {item['total_line']:,.2f}"))
+            # Col 4 – % Descuento
+            disc_pct_cell = QTableWidgetItem(f"{item['discount_pct']:.2f}%")
+            disc_pct_cell.setTextAlignment(Qt.AlignCenter)
+            if item["discount_pct"] > 0:
+                disc_pct_cell.setForeground(Qt.yellow)
+            self.items_table.setItem(row, 4, disc_pct_cell)
 
+            # Col 5 – Monto descuento
+            disc_amt_cell = QTableWidgetItem(f"₡ {item['discount_amount']:,.2f}")
+            if item["discount_amount"] > 0:
+                disc_amt_cell.setForeground(Qt.yellow)
+            self.items_table.setItem(row, 5, disc_amt_cell)
+
+            # Col 6 – % IVA
+            iva_pct_cell = QTableWidgetItem(f"{item['iva_pct']}%")
+            iva_pct_cell.setTextAlignment(Qt.AlignCenter)
+            self.items_table.setItem(row, 6, iva_pct_cell)
+
+            # Col 7 – IVA ₡
+            self.items_table.setItem(row, 7, QTableWidgetItem(f"₡ {item['iva_amount']:,.2f}"))
+
+            # Col 8 – Total línea
+            total_cell = QTableWidgetItem(f"₡ {item['total_line']:,.2f}")
+            total_cell.setForeground(Qt.green)
+            self.items_table.setItem(row, 8, total_cell)
+
+            # Col 9 – Botón eliminar
             btn_del = QPushButton("🗑️")
-            btn_del.setFixedWidth(40)
+            btn_del.setFixedWidth(38)
             btn_del.clicked.connect(lambda checked, r=row: self._remove_line(r))
-            self.items_table.setCellWidget(row, 7, btn_del)
+            self.items_table.setCellWidget(row, 9, btn_del)
 
-            grand_subtotal += item["subtotal"]
-            grand_iva      += item["iva_amount"]
-            grand_total    += item["total_line"]
+            grand_subtotal_bruto  += item["subtotal_bruto"]
+            grand_discount_amount += item["discount_amount"]
+            grand_iva             += item["iva_amount"]
+            grand_total           += item["total_line"]
 
         # Actualizar etiquetas de resumen
-        self.lbl_subtotal.setText(f"Subtotal: ₡ {grand_subtotal:,.2f}")
+        self.lbl_subtotal.setText(f"Subtotal Bruto: ₡ {grand_subtotal_bruto:,.2f}")
+        self.lbl_discount_total.setText(
+            f"Descuento: ₡ {grand_discount_amount:,.2f}"
+            if grand_discount_amount > 0
+            else "Descuento: ₡ 0.00"
+        )
         self.lbl_iva_total.setText(f"IVA: ₡ {grand_iva:,.2f}")
         self.lbl_total.setText(f"TOTAL: ₡ {grand_total:,.2f}")
 
@@ -476,12 +556,14 @@ class AddPurchaseDialog(QDialog):
             if self.detail_rows:
                 data["items"] = [
                     {
-                        "product_id": item["product_id"],
-                        "quantity":   item["quantity"],
-                        "unit_cost":  item["unit_cost"],
-                        "iva_pct":    item["iva_pct"],
-                        "iva_amount": item["iva_amount"],
-                        "total_line": item["total_line"],
+                        "product_id":      item["product_id"],
+                        "quantity":        item["quantity"],
+                        "unit_cost":       item["unit_cost"],
+                        "discount_pct":    item["discount_pct"],
+                        "discount_amount": item["discount_amount"],
+                        "iva_pct":         item["iva_pct"],
+                        "iva_amount":      item["iva_amount"],
+                        "total_line":      item["total_line"],
                     }
                     for item in self.detail_rows
                 ]

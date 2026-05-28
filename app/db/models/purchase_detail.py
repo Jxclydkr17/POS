@@ -23,14 +23,27 @@ class PurchaseDetail(Base):
     )
 
     # 📏 Cantidad — DECIMAL(12,3) para soportar fracciones (0.500 kg, 1.750 m)
-    quantity = Column(DECIMAL(12, 3), nullable=False)
-
+    quantity  = Column(DECIMAL(12, 3), nullable=False)
     unit_cost = Column(DECIMAL(12, 2), nullable=False)
-    subtotal = Column(DECIMAL(12, 2), nullable=False)
+
+    # subtotal almacena el subtotal_neto (base imponible = subtotal_bruto − descuento)
+    subtotal  = Column(DECIMAL(12, 2), nullable=False)
+
+    # ── Descuento por línea (facturación electrónica CR V4.4) ──
+    # Valores por defecto 0 para mantener compatibilidad con registros anteriores.
+    discount_pct    = Column(DECIMAL(5, 2),  nullable=False, server_default="0.00")
+    discount_amount = Column(DECIMAL(12, 2), nullable=False, server_default="0.00")
+
+    # ── IVA por línea ──
+    iva_pct    = Column(DECIMAL(5, 2),  nullable=False, server_default="13.00")
+    iva_amount = Column(DECIMAL(12, 2), nullable=False, server_default="0.00")
+
+    # Total de la línea (subtotal_neto + iva_amount) — auditabilidad
+    total_line = Column(DECIMAL(12, 2), nullable=False, server_default="0.00")
 
     # -- Relaciones --
     purchase = relationship("Purchase", back_populates="details")
-    product = relationship("Product")
+    product  = relationship("Product")
 
     @property
     def product_name(self) -> str:
@@ -39,5 +52,6 @@ class PurchaseDetail(Base):
     def __repr__(self):
         return (
             f"<PurchaseDetail(purchase_id={self.purchase_id}, "
-            f"product_id={self.product_id}, qty={self.quantity})>"
+            f"product_id={self.product_id}, qty={self.quantity}, "
+            f"disc={self.discount_pct}%, total={self.total_line})>"
         )
