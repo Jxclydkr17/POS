@@ -506,7 +506,9 @@ def register_payment(
     user: dict = Depends(get_current_user),
 ):
     try:
-        purchase = add_payment(db, purchase_id, payload)
+        # ── Fix auditoría: propagar user_id para que el gasto operativo ──
+        # ── generado por el abono conserve quién lo registró.            ──
+        purchase = add_payment(db, purchase_id, payload, user_id=user.id)
         db.commit()
         return APIResponse(message="Abono registrado correctamente", data=purchase)
     except HTTPException:
@@ -578,7 +580,13 @@ def pay_purchase(
     user: dict = Depends(get_current_user),
 ):
     try:
-        purchase = mark_as_paid(db, purchase_id, payment_method=payload.payment_method)
+        # ── Fix auditoría: propagar user_id al gasto generado por el cierre. ──
+        purchase = mark_as_paid(
+            db,
+            purchase_id,
+            payment_method=payload.payment_method,
+            user_id=user.id,
+        )
         db.commit()
         return APIResponse(message="Compra marcada como pagada", data=purchase)
     except HTTPException:

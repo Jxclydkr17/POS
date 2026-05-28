@@ -478,6 +478,7 @@ def add_payment(
     db: Session,
     purchase_id: int,
     data: PurchasePaymentCreate,
+    user_id: int | None = None,   # ── Auditoría: quién registró el abono ──
 ) -> Purchase:
     purchase = get_purchase(db, purchase_id)
 
@@ -524,7 +525,8 @@ def add_payment(
         "payment_method": data.payment_method,
         "date": (data.date or today_cr()).strftime("%Y-%m-%d"),
     }
-    add_expense_service(expense_payload, db)
+    # ── Fix auditoría: el gasto operativo conserva quién registró el abono. ──
+    add_expense_service(expense_payload, db, user_id=user_id)
 
     # Si la compra tiene detalles y NO fue recibida, recibirla automáticamente al saldar
     db.refresh(purchase)
@@ -695,6 +697,7 @@ def mark_as_paid(
     db: Session,
     purchase_id: int,
     payment_method: Optional[str] = None,
+    user_id: int | None = None,   # ── Auditoría: quién marca la compra como pagada ──
 ) -> Purchase:
     purchase = get_purchase(db, purchase_id)
 
@@ -718,7 +721,7 @@ def mark_as_paid(
         notes="Pago total del saldo restante",
     )
 
-    return add_payment(db, purchase_id, payment_data)
+    return add_payment(db, purchase_id, payment_data, user_id=user_id)
 
 
 # ------------------------------------------------------------

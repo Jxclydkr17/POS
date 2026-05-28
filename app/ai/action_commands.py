@@ -223,9 +223,14 @@ def add_product_stock(db: Session, product_query: str, quantity) -> dict:
 # ═════════════════════════════════════════════════════
 
 def register_expense(db: Session, amount: float, description: str,
-                     category: str = "Otros", payment_method: str = "Efectivo") -> dict:
+                     category: str = "Otros", payment_method: str = "Efectivo",
+                     user_id: int | None = None) -> dict:
     """
     Registra un gasto desde el chat.
+
+    `user_id` — opcional, identifica al usuario que ejecutó el comando desde
+    el asistente. Si llega `None` el gasto queda sin auditoría (compatibilidad
+    hacia atrás con llamadores antiguos).
     """
     if amount <= 0:
         return {
@@ -245,7 +250,7 @@ def register_expense(db: Session, amount: float, description: str,
             "date": today_cr().strftime("%Y-%m-%d"),
         }
 
-        new_expense = add_expense_service(expense_data, db)
+        new_expense = add_expense_service(expense_data, db, user_id=user_id)
         db.commit()
 
         return {

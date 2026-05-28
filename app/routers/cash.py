@@ -99,7 +99,16 @@ def create_movement(
         return error_response("La caja ya está cerrada.", 400)
 
     try:
-        mov = add_movement(db, cash_session_id=session.id, data=data)
+        # ── Fix auditoría: pasar user_id para que el gasto generado quede ──
+        # ── trazado a quien hizo el egreso desde el POS. Sin esto, los    ──
+        # ── "Gastos de caja" creados vía /cash/movements aparecían con la ──
+        # ── columna Usuario vacía en el Registro de Gastos Operativos.    ──
+        mov = add_movement(
+            db,
+            cash_session_id=session.id,
+            data=data,
+            user_id=current_user.id,
+        )
         # FASE 1 — Fix 1.2: Router es dueño del commit
         db.commit()
 

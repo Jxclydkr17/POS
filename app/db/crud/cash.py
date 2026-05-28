@@ -168,7 +168,12 @@ def open_session(db: Session, opening_amount: float, terminal_id: str = "T1") ->
 # ==========================================================
 # 🟨 Agregar movimiento de caja
 # ==========================================================
-def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
+def add_movement(
+    db: Session,
+    cash_session_id: int,
+    data,
+    user_id: int | None = None,   # ── Auditoría: quién registró el movimiento ──
+) -> CashMovement:
     # ── FASE 1: Decimal para almacenamiento ──
     amount_dec = to_dec(data.amount)
 
@@ -193,7 +198,11 @@ def add_movement(db: Session, cash_session_id: int, data) -> CashMovement:
             "payment_method": "Efectivo",
             "date": today_cr().strftime("%Y-%m-%d"),
         }
-        add_expense_service(expense_payload, db)
+        # ── Fix auditoría: propagar el user_id al gasto generado ──
+        # Antes: add_expense_service(expense_payload, db) → expense.user_id quedaba NULL
+        # y la columna "Usuario" del Registro de Gastos aparecía vacía cuando el
+        # gasto venía del botón "Egreso" del POS (que pasa create_expense=True).
+        add_expense_service(expense_payload, db, user_id=user_id)
 
     # FASE 1 — Fix 1.2: flush only; router owns commit
     db.flush()

@@ -184,6 +184,61 @@ def _find_mysqldump() -> str | None:
     return None
 
 
+# ──────────────────────────────────────────────────────────────
+# Filtro de ruido de mysqldump
+# ──────────────────────────────────────────────────────────────
+# mysqldump emite ciertos warnings en stderr que no son fatales y dependen
+# de privilegios del usuario MySQL configurado para la app, no de un fallo
+# real del backup. El más común es:
+#
+#   mysqldump: Couldn't execute 'FLUSH /*!40101 LOCAL */ TABLES': Access
+#   denied; you need (at least one of) the RELOAD or FLUSH_TABLES
+#   privilege(s) for this operation (1227)
+#
+# Esto pasa porque mysqldump intenta hacer un FLUSH TABLES inicial (modo
+# consistente). Como usamos --single-transaction el dump SIGUE siendo
+# consistente para tablas InnoDB sin ese FLUSH, así que el backup se
+# completa bien. La solución "correcta" es darle al usuario MySQL el
+# privilegio RELOAD o FLUSH_TABLES:
+#
+#   GRANT RELOAD ON *.* TO 'pos_user'@'%';
+#   FLUSH PRIVILEGES;
+#
+# Como esto es una buena práctica NO darle RELOAD al usuario de app,
+# filtramos el warning en el log para no asustar al usuario final.
+_BENIGN_MYSQLDUMP_PATTERNS = (
+    "FLUSH /*!40101 LOCAL */ TABLES",      # FLUSH TABLES sin privilegio RELOAD
+    "Access denied",                         # Aparece junto al FLUSH cuando el privilegio falta
+    "you need (at least one of) the RELOAD",
+    "FLUSH_TABLES privilege",
+    "Using a password on the command line",  # Falso positivo: usamos --defaults-extra-file
+)
+
+
+def _filter_mysqldump_noise(stderr_text: str) -> str:
+    """
+    Filtra líneas benignas del stderr de mysqldump.
+
+    Devuelve solo las líneas que NO coinciden con patrones conocidos como
+    inofensivos. Si no queda nada después de filtrar, retorna "" para
+    indicar que no hay que loguear nada.
+    """
+    if not stderr_text:
+        return ""
+
+    kept = []
+    for line in stderr_text.splitlines():
+        line_strip = line.strip()
+        if not line_strip:
+            continue
+        # Descartar líneas que coincidan con cualquiera de los patrones benignos
+        if any(pat in line_strip for pat in _BENIGN_MYSQLDUMP_PATTERNS):
+            continue
+        kept.append(line_strip)
+
+    return "\n".join(kept)
+
+
 def _find_mysql() -> str | None:
     """Busca el cliente mysql en el PATH y ubicaciones comunes."""
     path = shutil.which("mysql")
@@ -302,6 +357,8 @@ def _create_mysql_backup(timestamp: str, suffix: str) -> str:
         db_name=settings.db_name,
         extra_args=[
             "--single-transaction",   # Consistencia sin bloquear tablas
+            "--skip-lock-tables",     # Refuerza --single-transaction; evita LOCK TABLES READ
+            "--no-tablespaces",       # No requiere PROCESS privilege en MySQL 8.0+
             "--routines",             # Incluir procedimientos almacenados
             "--triggers",             # Incluir triggers
             "--add-drop-table",       # DROP TABLE antes de CREATE
@@ -325,7 +382,10 @@ def _create_mysql_backup(timestamp: str, suffix: str) -> str:
             if "error" in stderr.lower() and "warning" not in stderr.lower():
                 filepath.unlink(missing_ok=True)
                 raise RuntimeError(f"mysqldump falló: {stderr}")
-            logger.warning(f"mysqldump warnings: {stderr}")
+            # Filtrar warnings benignos antes de loguear (ver _filter_mysqldump_noise)
+            filtered = _filter_mysqldump_noise(stderr)
+            if filtered:
+                logger.warning(f"mysqldump warnings: {filtered}")
 
         size = filepath.stat().st_size
         logger.info(f"Backup creado: {filename} ({size:,} bytes)")
