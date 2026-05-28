@@ -218,6 +218,45 @@ def _make_first_run_splash():
     return dlg, bridge, app
 
 
+def _bootstrap_db_engine_if_needed():
+    """Wizard de selección de motor de BD para el primer arranque.
+
+    Se ejecuta ANTES de cualquier `from app.core...` porque:
+      - `app.core.config` en su import llama `_ensure_secret_key()` que
+        crea un .env por defecto desde .env.example.
+      - `app.core.logger` importa `app.core.config`, así que cualquier
+        import indirecto también lo dispara.
+    Si esos efectos ocurrieran antes del wizard, el .env ya tendría
+    `DB_ENGINE=sqlite` por defecto (copiado del template) y el wizard
+    no aparecería nunca.
+
+    Si el usuario cierra el wizard sin elegir, ya se le mostró una
+    advertencia desde el propio wizard; aquí solo cerramos la app.
+    """
+    # Determinar APP_DIR localmente, replicando la lógica de
+    # app.core.config.get_app_dir(), sin importar config.
+    if getattr(sys, 'frozen', False):
+        app_dir = Path(sys.executable).parent
+    else:
+        app_dir = Path(__file__).resolve().parent
+
+    # `ui.setup_wizard` está aislado: no importa nada de app.core.*.
+    from ui.setup_wizard import is_setup_needed, run_setup_wizard
+
+    if not is_setup_needed(app_dir):
+        return  # ya configurado en arranques previos → flujo normal
+
+    logger.info(
+        "Primer arranque: no se encontró DB_ENGINE en .env. "
+        "Lanzando wizard de selección de base de datos."
+    )
+    ok = run_setup_wizard(app_dir)
+    if not ok:
+        logger.info("Wizard cancelado por el usuario. Cerrando Violette POS.")
+        sys.exit(0)
+    logger.info("Wizard completado. Continuando con el arranque normal.")
+
+
 def _first_run_check():
     """Verifica si es la primera ejecución y ejecuta setup inicial.
 
@@ -1187,6 +1226,13 @@ def _attempt_restore(backup_path: str) -> bool:
 
 def main():
     """Flujo principal: setup → backend → UI."""
+    # ── Wizard de selección de BD (solo en primer arranque) ──
+    # DEBE ejecutarse antes de cualquier `from app.core...` porque ese
+    # import dispara `_ensure_secret_key()` (que crea .env por defecto)
+    # y `_auto_detect_engine()` (que fija DB_ENGINE=sqlite si no está
+    # definido). Ver docstring de _bootstrap_db_engine_if_needed.
+    _bootstrap_db_engine_if_needed()
+
     # Ahora que app está en el path, usar el logger estructurado
     from app.core.logger import logger as app_logger
     app_logger.info("=" * 50)
