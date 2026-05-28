@@ -415,6 +415,32 @@ class LoginWindow(QWidget):
         info.setStyleSheet(f"font-size: 12px; color: {TEXT_MUTED}; margin-bottom: 4px;")
         layout.addWidget(info)
 
+        # ── Banner CABYS si la descarga inicial falló ──
+        # LAST_RUN_RESULT vive en el mismo proceso que el seed (el launcher
+        # corre el seed en main thread y luego arranca esta UI), por lo que
+        # podemos leerlo directamente sin pasar por el backend.
+        try:
+            from app.scripts.seed_db import LAST_RUN_RESULT
+            if LAST_RUN_RESULT.get("cabys_status") == "failed":
+                cabys_warn = QLabel(
+                    "⚠  El catálogo CABYS no se pudo descargar del BCCR "
+                    "(probablemente sin internet). Podrá actualizarlo "
+                    "más tarde desde Configuración → CABYS."
+                )
+                cabys_warn.setWordWrap(True)
+                cabys_warn.setStyleSheet(
+                    "font-size: 11px; color: #fbbf24; "  # amber-400
+                    "background-color: rgba(251, 191, 36, 0.08); "
+                    "border: 1px solid rgba(251, 191, 36, 0.3); "
+                    "border-radius: 6px; padding: 8px 10px; margin-top: 4px;"
+                )
+                layout.addWidget(cabys_warn)
+        except Exception:
+            # Si por algún motivo no podemos leer el estado del seed
+            # (ej. import circular en una refactorización futura), no
+            # rompemos el wizard.
+            pass
+
         # Campos
         lbl_user = QLabel("Usuario")
         lbl_user.setStyleSheet("font-size: 13px; font-weight: 600;")

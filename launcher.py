@@ -94,6 +94,130 @@ DEFAULT_PORT_RANGE_START = 8000
 DEFAULT_PORT_RANGE_END = 8009
 
 
+# ──────────────────────────────────────────────────────────────
+# Splash de primera ejecución
+#
+# Se muestra UNA sola vez en la vida de una instalación, mientras corre
+# el seed inicial (que incluye la descarga del catálogo CABYS desde el
+# BCCR, paso lento de ~20-30s). Sin esto, el launcher parecería
+# "congelado" durante toda la descarga.
+#
+# El splash se construye con QApplication temprana — el mismo
+# QApplication singleton es reutilizado luego por _start_ui() (la
+# llamada a QApplication.instance() devuelve la existente).
+# ──────────────────────────────────────────────────────────────
+_ASSETS_DIR = Path(__file__).resolve().parent / "ui" / "assets"
+
+
+def _make_first_run_splash():
+    """
+    Crea (no muestra todavía) el QDialog de splash + el QObject puente
+    para recibir señales de progreso desde el thread del seed.
+
+    Retorna: (splash, bridge, app) donde:
+      - splash: QDialog con label de paso actualizable
+      - bridge: QObject con signals `step(str)` y `finished()`
+      - app:    QApplication (creado si no existía)
+    """
+    from PySide6.QtWidgets import (
+        QApplication, QDialog, QLabel, QVBoxLayout, QProgressBar, QFrame,
+    )
+    from PySide6.QtCore import Qt, QObject, Signal
+    from PySide6.QtGui import QPixmap, QColor
+
+    # Paleta consistente con login_view BrandPanel.
+    PANEL_BG     = "#12091f"
+    VIOLET_ACCENT = "#8b5cf6"
+    TEXT_PRIMARY = "#f0e8ff"
+    TEXT_MUTED   = "#8b7aaa"
+    INPUT_BORDER = "#3b2170"
+
+    app = QApplication.instance() or QApplication(sys.argv)
+
+    class _Bridge(QObject):
+        step = Signal(str)
+        finished = Signal()
+    bridge = _Bridge()
+
+    dlg = QDialog()
+    dlg.setWindowFlags(Qt.SplashScreen | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+    dlg.setFixedSize(440, 240)
+    dlg.setStyleSheet(f"""
+        QDialog {{
+            background-color: {PANEL_BG};
+            border: 1px solid {INPUT_BORDER};
+            border-radius: 12px;
+        }}
+        QLabel#title  {{ color: {TEXT_PRIMARY}; font-size: 18px; font-weight: 700; }}
+        QLabel#sub    {{ color: {TEXT_MUTED};   font-size: 12px; }}
+        QLabel#step   {{ color: {TEXT_PRIMARY}; font-size: 13px; font-weight: 500; }}
+        QLabel#hint   {{ color: {TEXT_MUTED};   font-size: 10px; font-style: italic; }}
+        QProgressBar  {{
+            background-color: {INPUT_BORDER};
+            border: none;
+            border-radius: 4px;
+            height: 6px;
+        }}
+        QProgressBar::chunk {{
+            background-color: {VIOLET_ACCENT};
+            border-radius: 4px;
+        }}
+    """)
+
+    layout = QVBoxLayout(dlg)
+    layout.setContentsMargins(28, 24, 28, 22)
+    layout.setSpacing(8)
+
+    # Logo (si existe el asset; si no, omitir sin error)
+    logo_path = _ASSETS_DIR / "violette_assistant_icon.png"
+    if logo_path.exists():
+        logo = QLabel()
+        logo.setAlignment(Qt.AlignCenter)
+        pix = QPixmap(str(logo_path)).scaled(
+            56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        logo.setPixmap(pix)
+        layout.addWidget(logo)
+        layout.addSpacing(4)
+
+    title = QLabel("Violette POS")
+    title.setObjectName("title")
+    title.setAlignment(Qt.AlignCenter)
+    layout.addWidget(title)
+
+    sub = QLabel("Configurando la base de datos por primera vez")
+    sub.setObjectName("sub")
+    sub.setAlignment(Qt.AlignCenter)
+    layout.addWidget(sub)
+
+    layout.addSpacing(14)
+
+    step_label = QLabel("Iniciando...")
+    step_label.setObjectName("step")
+    step_label.setAlignment(Qt.AlignCenter)
+    step_label.setWordWrap(True)
+    layout.addWidget(step_label)
+
+    progress = QProgressBar()
+    progress.setRange(0, 0)  # indeterminate
+    progress.setTextVisible(False)
+    layout.addWidget(progress)
+
+    hint = QLabel("Este paso solo ocurre una vez. Los próximos arranques serán inmediatos.")
+    hint.setObjectName("hint")
+    hint.setAlignment(Qt.AlignCenter)
+    hint.setWordWrap(True)
+    layout.addWidget(hint)
+
+    # Conectar signal del bridge al label (cross-thread safe: el bridge
+    # vive en main thread; la signal queue automáticamente).
+    bridge.step.connect(step_label.setText)
+
+    # Atributos auxiliares para que el llamador centre la ventana, etc.
+    dlg._step_label = step_label
+    return dlg, bridge, app
+
+
 def _first_run_check():
     """Verifica si es la primera ejecución y ejecuta setup inicial.
 
@@ -355,6 +479,12 @@ def _initialize_database():
     rota), se usa `create_all` como red de seguridad. En ese caso se
     advierte en logs porque la BD quedará con `alembic_version` vacío y
     las migraciones futuras pueden requerir intervención manual.
+
+    REVISIÓN CABYS-AUTO: el seed ahora descarga el catálogo CABYS del
+    BCCR (paso lento de ~20-30s). Para no congelar al usuario sin
+    feedback, el seed se ejecuta en un thread y un splash muestra el
+    progreso. Si CABYS falla, se avisa con un QMessageBox amigable y
+    se continúa — la tabla queda vacía y el usuario actualiza después.
     """
     try:
         # Cargar todos los modelos (registra en Base.metadata para fallback)
@@ -374,18 +504,102 @@ def _initialize_database():
 
         # Datos iniciales (seed) — solo después de que las tablas existen
         logger.info("Insertando datos iniciales...")
-        from app.scripts.seed_db import run as run_seed
-        run_seed(force=False)
+        _run_seed_with_splash()
 
         logger.info("Base de datos inicializada correctamente.")
 
     except MigrationFailedError:
-        # Propagar para que main() ofrezca recovery (aunque en first-run
-        # no hay backup que restaurar; el handler hará lo correcto).
         raise
     except Exception as e:
         logger.error(f"Error inicializando BD: {e}")
         raise
+
+
+def _run_seed_with_splash():
+    """
+    Ejecuta el seed inicial mostrando un splash con progreso.
+
+    Diseño:
+      - QApplication se crea acá (si no existe). _start_ui() la reusa.
+      - El seed corre en un threading.Thread daemon — NO en el main
+        thread — para que el event loop de Qt pueda repintar el splash
+        durante las llamadas bloqueantes de `requests.get()` y openpyxl.
+      - La comunicación thread→UI se hace exclusivamente vía signals
+        Qt sobre un QObject puente (cross-thread safe en PySide6).
+      - El main thread espera con QEventLoop (no busy-loop).
+      - Cualquier excepción crítica del seed se re-lanza en main thread
+        para que el flujo de error existente (_first_run_check) la
+        capture y limpie la BD parcial.
+      - Si CABYS falla (sub-fallo del seed, no crítico) se muestra un
+        QMessageBox amigable. El resto del seed se completó bien.
+    """
+    import threading
+    from PySide6.QtCore import QEventLoop
+    from PySide6.QtWidgets import QMessageBox
+
+    splash, bridge, app = _make_first_run_splash()
+
+    # Centrar en pantalla
+    screen = app.primaryScreen().availableGeometry() if app.primaryScreen() else None
+    if screen is not None:
+        splash.move(
+            screen.center().x() - splash.width() // 2,
+            screen.center().y() - splash.height() // 2,
+        )
+
+    splash.show()
+    app.processEvents()  # asegurar que se pinta antes de empezar
+
+    # Resultado del thread (capturado por closure)
+    result = {"critical_error": None}
+
+    def _worker():
+        try:
+            from app.scripts.seed_db import run as run_seed
+            # progress_callback es llamado desde este thread; Qt mueve
+            # el slot al main thread automáticamente al ser una signal.
+            run_seed(
+                force=False,
+                progress_callback=lambda msg: bridge.step.emit(msg),
+            )
+        except Exception as e:
+            # Solo errores CRÍTICOS llegan acá (seed_cabys nunca propaga).
+            result["critical_error"] = e
+        finally:
+            bridge.finished.emit()
+
+    loop = QEventLoop()
+    bridge.finished.connect(loop.quit)
+
+    t = threading.Thread(target=_worker, daemon=True, name="violette-seed")
+    t.start()
+
+    loop.exec()  # bloquea hasta que finished se emita
+    t.join(timeout=2)  # ya terminó, pero por higiene
+
+    splash.close()
+    app.processEvents()
+
+    # Propagar errores críticos (BD se borrará desde _first_run_check)
+    if result["critical_error"] is not None:
+        raise result["critical_error"]
+
+    # Aviso amigable si CABYS no se pudo descargar — el resto del seed
+    # sí terminó bien, así que el arranque continúa normalmente.
+    from app.scripts.seed_db import LAST_RUN_RESULT
+    if LAST_RUN_RESULT.get("cabys_status") == "failed":
+        QMessageBox.information(
+            None,
+            "Catálogo CABYS no disponible",
+            "No se pudo descargar el catálogo CABYS del Banco Central de "
+            "Costa Rica en este momento.\n\n"
+            "Esto suele deberse a falta de conexión a internet durante la "
+            "instalación. Violette POS arrancará normalmente y podrá usar "
+            "el sistema; solo el campo CABYS de los productos quedará "
+            "vacío hasta que actualice el catálogo.\n\n"
+            "Para descargarlo más tarde:\n"
+            "    Configuración → CABYS → Actualizar catálogo",
+        )
 
 
 def _initialize_via_alembic() -> bool:
