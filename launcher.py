@@ -1088,7 +1088,15 @@ def _start_ui():
     from ui.utils.http_worker import configure_thread_pool
     configure_thread_pool()
 
-    app = QApplication(sys.argv)
+    # ── FASE 3.3 — Fix: reutilizar el QApplication existente ──
+    # El wizard de primer arranque (_bootstrap_db_engine_if_needed) ya crea
+    # un QApplication para poder mostrarse. Qt solo admite UNA instancia de
+    # QApplication por proceso, así que crear otra aquí lanzaba:
+    #   "Please destroy the QApplication singleton before creating a new
+    #    QApplication instance"
+    # y abortaba el arranque justo después de completar el wizard. Reutilizamos
+    # la instancia si ya existe (mismo patrón que el resto del launcher).
+    app = QApplication.instance() or QApplication(sys.argv)
     app.setApplicationName("Violette POS")
     app.setOrganizationName("Violette")
 
