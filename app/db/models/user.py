@@ -1,5 +1,4 @@
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text
-from datetime import datetime
 from app.utils.dt import utcnow
 from app.db.database import Base
 import json

@@ -11,7 +11,6 @@ Las funciones de exportación a PDF (reportlab) no cambiaron.
 from openpyxl import Workbook
 from reportlab.lib.pagesizes import landscape, letter
 from reportlab.pdfgen import canvas
-from datetime import datetime
 from pathlib import Path
 from app.utils.dt import now_cr
 from app.core.config import DATA_DIR  # FASE 2 — Fix 2.3: exports en DATA_DIR

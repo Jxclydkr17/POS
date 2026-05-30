@@ -1,5 +1,4 @@
-from PySide6.QtWidgets import QDialog, QGridLayout, QPushButton, QVBoxLayout, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QDialog, QGridLayout, QPushButton, QVBoxLayout
 
 ICON_OPTIONS = [
     "📦","🛒","🍎","🥤","🍬","🥖","🥩","🥫","🧴","🧼",

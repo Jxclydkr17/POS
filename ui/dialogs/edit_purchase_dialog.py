@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QSpinBox, QDoubleSpinBox,
 )
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import QDate
 from ui.session_manager import session
 from ui.utils.http_worker import api_call, run_async
 from ui.api import BASE_URL

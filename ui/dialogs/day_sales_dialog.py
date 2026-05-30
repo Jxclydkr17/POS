@@ -474,7 +474,7 @@ class DaySalesDialog(QDialog):
                 reply = QMessageBox.question(
                     self,
                     "PDF no encontrado",
-                    f"No existe el PDF para esta venta.\n¿Desea regenerarlo?",
+                    "No existe el PDF para esta venta.\n¿Desea regenerarlo?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes,
                 )
@@ -533,7 +533,7 @@ class DaySalesDialog(QDialog):
                 reply = QMessageBox.question(
                     self,
                     "PDF no encontrado",
-                    f"No existe el PDF para esta venta.\n¿Desea regenerarlo antes de imprimir?",
+                    "No existe el PDF para esta venta.\n¿Desea regenerarlo antes de imprimir?",
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.Yes,
                 )

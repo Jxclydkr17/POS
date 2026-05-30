@@ -46,7 +46,7 @@ def main():
     logger.info("\n💾 Creando backup de la base de datos...\n")
     try:
         path = create_backup(tag=args.tag)
-        logger.info(f"✅ Backup creado exitosamente:")
+        logger.info("✅ Backup creado exitosamente:")
         logger.info(f"   📁 {path}\n")
     except RuntimeError as e:
         logger.error(f"❌ Error: {e}\n")

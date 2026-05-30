@@ -8,7 +8,7 @@ discrepancias, y permite al usuario decidir antes de confirmar.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QMessageBox, QComboBox, QSpinBox, QWidget,
+    QMessageBox, QComboBox, QSpinBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor

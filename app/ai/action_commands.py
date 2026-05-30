@@ -13,14 +13,13 @@ Cubre:
 from __future__ import annotations
 
 import re
-from datetime import date
-from typing import Any, Optional
+from typing import Optional
 
 from sqlalchemy.orm import Session
 
 from app.utils.dt import today_cr
 
-from app.ai.fuzzy import normalize_text, fix_typos, keyword_in_text, any_keyword_in_text
+from app.ai.fuzzy import normalize_text, keyword_in_text
 
 
 # ─────────────────────────────────────────────────────

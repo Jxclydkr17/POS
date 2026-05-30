@@ -6,7 +6,7 @@ Solo al convertir a venta se invoca sale_crud.create_sale() que ya maneja todo.
 """
 import math
 from datetime import timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException

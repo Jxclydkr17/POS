@@ -120,10 +120,10 @@ def _make_first_run_splash():
       - app:    QApplication (creado si no existía)
     """
     from PySide6.QtWidgets import (
-        QApplication, QDialog, QLabel, QVBoxLayout, QProgressBar, QFrame,
+        QApplication, QDialog, QLabel, QVBoxLayout, QProgressBar,
     )
     from PySide6.QtCore import Qt, QObject, Signal
-    from PySide6.QtGui import QPixmap, QColor
+    from PySide6.QtGui import QPixmap
 
     # Paleta consistente con login_view BrandPanel.
     PANEL_BG     = "#12091f"
@@ -439,7 +439,7 @@ def _verify_schema_consistency(expected_head: str | None = None) -> tuple[bool, 
     try:
         from sqlalchemy import inspect
         from app.db.database import Base, engine
-        import app.db.models  # carga todos los modelos en Base.metadata
+        import app.db.models  # noqa: F401  (carga todos los modelos en Base.metadata)
 
         # 1) Alembic version = HEAD
         from alembic.runtime.migration import MigrationContext

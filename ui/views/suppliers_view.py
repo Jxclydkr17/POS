@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QAbstractItemView,
     QLineEdit, QFrame, QScrollArea
 )
-from PySide6.QtCore import Qt, QTimer, QThread, Signal, QObject
+from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtGui import QColor
 
 from ui.session_manager import session

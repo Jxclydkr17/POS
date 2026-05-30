@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QMessageBox, QListWidget, QScrollArea, QWidget,
     QTextEdit, QDateEdit, QCheckBox
 )
-from PySide6.QtCore import Qt, QDate, QTimer
+from PySide6.QtCore import QDate, QTimer
 from ui.session_manager import session
 from ui.utils.http_worker import api_call, run_async
 from ui.api import API
@@ -522,7 +522,6 @@ class EditCustomerDialog(QDialog):
 
     def _load_saved_location(self):
         """Cargar la ubicación guardada del cliente usando run_async."""
-        import requests as _requests
         run_async(
             self._fetch_saved_location_data,
             on_success=self._apply_saved_location,

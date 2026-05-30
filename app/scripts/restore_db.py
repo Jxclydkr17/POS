@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from app.services.backup_service import restore_backup, list_backups, create_backup
+from app.services.backup_service import restore_backup, list_backups
 from app.utils.dt import format_cr  # FASE 4 — Fix 4.2: mostrar fecha en hora CR
 
 logger = logging.getLogger(__name__)
@@ -76,10 +76,10 @@ def main():
 
     # Confirmación
     if not args.yes:
-        logger.info(f"\n⚠  Está a punto de RESTAURAR la base de datos desde:")
+        logger.info("\n⚠  Está a punto de RESTAURAR la base de datos desde:")
         logger.info(f"   {target}")
-        logger.info(f"\n   Esto REEMPLAZARÁ todos los datos actuales.")
-        logger.info(f"   Se creará un backup de seguridad antes de proceder.\n")
+        logger.info("\n   Esto REEMPLAZARÁ todos los datos actuales.")
+        logger.info("   Se creará un backup de seguridad antes de proceder.\n")
 
         try:
             confirm = input("¿Desea continuar? (escriba 'si' para confirmar): ").strip().lower()

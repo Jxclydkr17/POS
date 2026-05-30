@@ -14,7 +14,6 @@ from app.db.models.sale_detail import SaleDetail
 from app.db.models.product import Product
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.purchase_detail import PurchaseDetail
-from app.db.models.purchase_payment import PurchasePayment
 from app.db.models.supplier import Supplier
 from app.db.models.category import Category
 from app.db.models.user import User

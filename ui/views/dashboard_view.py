@@ -11,7 +11,7 @@ Ahora: Cada sección (IA, KPIs, gráfica, top lists) corre en un hilo
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QFrame, QHBoxLayout, QScrollArea
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QTimer, Signal
 import logging
 
 from ui.session_manager import session
@@ -25,7 +25,6 @@ from ui.components.top_list_card import TopListCard
 # ── FASE 1: Imports async ──
 from ui.utils.http_worker import run_async
 from ui.services.dashboard_metrics_service import (
-    fetch_ai_insights_today,
     fetch_dashboard_summary,
     fetch_dashboard_7d_performance,
     fetch_dashboard_top_lists,

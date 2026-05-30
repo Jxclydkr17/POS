@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
     QFileDialog, QComboBox, QLineEdit, QDateEdit, QDialog,
-    QTextEdit, QDoubleSpinBox, QSpinBox, QFrame, QGroupBox,
+    QTextEdit, QDoubleSpinBox, QSpinBox, QGroupBox,
     QGridLayout, QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer
@@ -12,7 +12,6 @@ from ui.session_manager import session
 from PySide6 import QtGui
 from PySide6.QtWidgets import QAbstractItemView
 from ui.components.toast_notifier import show_toast
-import logging
 
 from ui.api import BASE_URL
 

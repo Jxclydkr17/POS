@@ -596,17 +596,27 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
     db.flush()
     db.refresh(new_sale)
 
-    # ── FASE 4 — Fix 4.3: PDF/Email en background (no bloquea al cajero) ──
+    # ── FASE 4.2 — Fix: preparar el PDF/email aquí, pero DISPARARLO en el
+    #    router DESPUÉS del commit ──
+    # El PDF/email se generan en un thread aparte para no bloquear al cajero
+    # (Fix 4.3 original). El problema: este servicio solo hace flush; el commit
+    # lo hace el router (Unit of Work, Fix 5.1). Si el background se lanzaba
+    # AQUÍ —antes del commit—:
+    #   • el worker abre su propia sesión (safe_session) y NO veía la venta aún
+    #     sin commit-ear (en SQLite otra conexión no ve cambios no confirmados),
+    #     así que `pdf_generated` nunca se actualizaba;
+    #   • si el commit del router fallaba, ya se habría enviado un email/PDF de
+    #     una venta que en realidad no se guardó.
+    # Solución: armamos el "encargo" (los datos del PDF se construyen ahora,
+    # que es solo lectura) y lo devolvemos; el router lo lanza tras commit().
     customer_db = db.query(Customer).filter(Customer.id == customer_id).first() if customer_id else None
     customer_name = customer_db.name if customer_db else "Cliente General"
 
-    # Preparar datos del PDF sincrónicamente (necesita DB)
+    # Datos del PDF: se construyen sincrónicamente (necesitan la DB) como un
+    # dict plano y desacoplado, seguro de usar después del commit.
     sale_data = _build_sale_pdf_data(db, new_sale, customer_name, payment_method, document_type, total)
     customer_email = customer_db.email if customer_db else None
     business_name = sale_data.get("business", {}).get("name", "")
-
-    # Lanzar PDF + email en thread de background
-    _generate_pdf_and_email_async(sale_data, customer_email, business_name)
 
     # ── FASE 5 — Fix 5.5: Informar al frontend ──
     result = {
@@ -619,6 +629,12 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
         },
         "pdf_path": None,
         "pdf_note": "El PDF se está generando en segundo plano.",
+        # Encargo interno para el router; se elimina antes de responder al cliente.
+        "_pdf_dispatch": {
+            "sale_data": sale_data,
+            "customer_email": customer_email,
+            "business_name": business_name,
+        },
     }
     return result
 
@@ -724,6 +740,22 @@ def _generate_pdf_and_email_async(sale_data: dict, customer_email: str | None, b
         # El executor fue apagado (shutdown de la app)
         logger.warning(f"PDF executor apagado, generando PDF sincrónicamente para venta #{sale_id}")
         _worker()
+
+
+def dispatch_pdf_and_email(dispatch: dict | None) -> None:
+    """
+    FASE 4.2 — Dispara el PDF/email en background a partir del "encargo" que
+    arma create_sale. El router lo llama DESPUÉS de commit() para que el worker
+    (que abre su propia sesión) ya vea la venta persistida, y para no enviar
+    nada si el commit hubiera fallado. Tolera None (no hay encargo → no-op).
+    """
+    if not dispatch:
+        return
+    _generate_pdf_and_email_async(
+        dispatch["sale_data"],
+        dispatch.get("customer_email"),
+        dispatch.get("business_name", ""),
+    )
 
 
 def _update_pdf_status(sale_id: int, success: bool):

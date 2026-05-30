@@ -1,10 +1,9 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QFrame, QTableWidget, QTableWidgetItem, QHeaderView, QDateEdit,
-    QScrollArea, QTabWidget, QFileDialog, QMessageBox, QGraphicsOpacityEffect
+    QScrollArea, QTabWidget, QFileDialog, QMessageBox
 )
-from PySide6.QtCore import Qt, QDate, Signal, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import Qt, QDate, QTimer
 from ui.session_manager import session
 from ui.utils.http_worker import api_call
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
@@ -14,10 +13,9 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
-    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage,
-    KeepTogether, PageBreak
+    SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
 )
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+from reportlab.lib.enums import TA_CENTER
 from datetime import datetime
 from ui.api import BASE_URL
 import os

@@ -3,8 +3,8 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QFrame, QScrollArea,
     QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog,
 )
-from PySide6.QtCore import Qt, QDate, Signal, QTimer
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtCore import Qt, QDate, QTimer
+from PySide6.QtGui import QColor
 import requests
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -743,7 +743,7 @@ class FinancialView(QWidget):
         from reportlab.platypus import (
             SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
         )
-        from reportlab.lib.enums import TA_CENTER, TA_RIGHT
+        from reportlab.lib.enums import TA_CENTER
 
         data = self._data
         start_str = self.dt_from.date().toString("dd/MM/yyyy")

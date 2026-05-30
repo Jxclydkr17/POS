@@ -21,7 +21,7 @@ from app.ai.fuzzy import (
     any_keyword_in_text,
     keyword_in_text,
 )
-from app.ai.date_parser import parse_period, extract_period_or_default
+from app.ai.date_parser import extract_period_or_default
 
 
 # ═════════════════════════════════════════════════════

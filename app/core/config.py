@@ -11,6 +11,7 @@ Si DB_ENGINE no está definido, se auto-detecta:
 """
 
 import os
+import re
 import sys
 import secrets
 import logging
@@ -49,17 +50,38 @@ _INSECURE_DEFAULT_KEYS = {
 
 
 def _ensure_secret_key() -> str:
+    # 1) Prioridad: SECRET_KEY explícita en el entorno (permite override externo).
     current = os.environ.get("SECRET_KEY", "").strip()
     if current.lower() not in _INSECURE_DEFAULT_KEYS:
+        os.environ["SECRET_KEY"] = current
         return current
 
-    new_key = secrets.token_hex(32)
     env_path = APP_DIR / ".env"
+
+    # 2) FASE 4 — Fix del churn de SECRET_KEY: reutilizar la clave YA persistida
+    #    en el .env. Antes esta función solo miraba os.environ, que en un proceso
+    #    nuevo está vacío (el .env NO se carga al entorno del sistema), por lo que
+    #    generaba una clave NUEVA en cada arranque y reescribía el .env. Eso
+    #    invalidaba las sesiones (JWT) y dejaba IRRECUPERABLES las API keys
+    #    cifradas (Fernet deriva su clave del SECRET_KEY). Si el .env ya tiene una
+    #    SECRET_KEY válida, la reutilizamos y NO regeneramos.
+    if env_path.exists():
+        try:
+            existing = env_path.read_text(encoding="utf-8")
+            m = re.search(r"^\s*SECRET_KEY\s*=(.*)$", existing, flags=re.MULTILINE)
+            if m and m.group(1).strip().lower() not in _INSECURE_DEFAULT_KEYS:
+                persisted = m.group(1).strip()
+                os.environ["SECRET_KEY"] = persisted
+                return persisted
+        except OSError:
+            pass  # ilegible → caemos a generar una nueva
+
+    # 3) No hay clave válida en ningún lado → generar y persistir.
+    new_key = secrets.token_hex(32)
     try:
         if env_path.exists():
             content = env_path.read_text(encoding="utf-8")
             if "SECRET_KEY=" in content:
-                import re
                 content = re.sub(
                     r"^SECRET_KEY=.*$",
                     f"SECRET_KEY={new_key}",
@@ -77,7 +99,6 @@ def _ensure_secret_key() -> str:
                 shutil.copy2(env_example, env_path)
                 # Ahora sí, reemplaza el SECRET_KEY dentro del template copiado
                 content = env_path.read_text(encoding="utf-8")
-                import re
                 content = re.sub(
                     r"^SECRET_KEY=.*$",
                     f"SECRET_KEY={new_key}",
@@ -88,7 +109,6 @@ def _ensure_secret_key() -> str:
             else:
                 # Fallback mínimo pero honesto
                 env_path.write_text(f"SECRET_KEY={new_key}\n", encoding="utf-8")
-            logger.warning("SECRET_KEY genérica detectada. Se generó una nueva clave.")
         logger.warning("SECRET_KEY genérica detectada. Se generó una nueva.")
     except OSError as e:
         logger.error(

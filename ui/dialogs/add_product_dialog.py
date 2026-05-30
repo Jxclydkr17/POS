@@ -3,7 +3,6 @@ from PySide6.QtWidgets import (
     QPushButton, QMessageBox, QComboBox
 )
 from PySide6.QtCore import Qt, QEvent, QTimer
-from decimal import Decimal
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.http_worker import api_call

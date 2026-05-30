@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from app.db.models.customer import Customer
 from app.db.models.economic_activity import EconomicActivity
 from app.schemas.customer import CustomerCreate, CustomerUpdate

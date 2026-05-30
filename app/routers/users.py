@@ -9,7 +9,7 @@ from app.core.dependencies import get_current_user, require_role
 # ── FASE 4 — Fix 4.3: Rate limiter para endpoints sin auth ──
 from app.core.rate_limiter import rate_limit
 from fastapi.security import OAuth2PasswordRequestForm
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional
 
 import logging

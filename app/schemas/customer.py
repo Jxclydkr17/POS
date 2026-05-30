@@ -1,6 +1,6 @@
 # app/schemas/customer.py
 
-from pydantic import BaseModel, Field, EmailStr, ConfigDict, field_validator
+from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import Annotated, Optional
 from datetime import datetime, date
 from typing import Annotated, List

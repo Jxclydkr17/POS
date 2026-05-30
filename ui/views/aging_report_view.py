@@ -8,7 +8,7 @@ FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout.
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox,
+    QTableWidget, QTableWidgetItem, QMessageBox,
     QFileDialog, QFrame
 )
 from PySide6.QtCore import Qt

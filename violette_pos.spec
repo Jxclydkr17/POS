@@ -280,7 +280,10 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,               # FASE 3.1: UPX DESACTIVADO. Comprimir el binario
+                             # con UPX dispara falsos positivos de antivirus y
+                             # puede corromper las DLLs de Qt6/PySide6 (cuelgues
+                             # "access violation" al arrancar). Reliability > size.
     console=False,           # Sin ventana de consola
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -296,7 +299,8 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
-    upx_exclude=[],
+    upx=False,               # FASE 3.1: UPX desactivado también en COLLECT
+                             # (mismas razones que en EXE: AV + DLLs de Qt6).
+    upx_exclude=[],          # Irrelevante con upx=False; se deja por claridad.
     name='ViolettePOS',
 )

@@ -34,7 +34,7 @@ from typing import Optional
 
 from lxml import etree
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509 import Certificate
 

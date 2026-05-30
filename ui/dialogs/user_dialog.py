@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QLineEdit, QComboBox, QCheckBox, QMessageBox, QFormLayout,
     QGroupBox, QGridLayout, QScrollArea, QWidget,
 )
-from PySide6.QtCore import Qt
 import logging
 
 logger = logging.getLogger(__name__)

@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.ai import data_queries as dq
 from app.ai.classifier import classify, ClassificationResult
-from app.ai.date_parser import extract_period_or_default
 
 
 # ─────────────────────────────────────────────────────

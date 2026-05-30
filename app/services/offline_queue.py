@@ -25,8 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import requests
 from sqlalchemy import or_, and_

@@ -9,12 +9,11 @@ No requiere caja abierta, método de pago ni tipo de documento.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QSpinBox, QTextEdit,
-    QComboBox, QMessageBox, QCompleter, QFrame, QWidget, QInputDialog,
+    QMessageBox, QCompleter, QFrame, QWidget, QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer, QStringListModel
 from PySide6.QtGui import QDoubleValidator
 import logging
-from decimal import Decimal
 
 from ui.api import BASE_URL
 from ui.session_manager import session

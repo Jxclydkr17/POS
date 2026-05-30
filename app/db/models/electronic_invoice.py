@@ -1,5 +1,4 @@
 # app/db/models/electronic_invoice.py
-from datetime import datetime
 from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
 from sqlalchemy.orm import relationship

@@ -25,7 +25,6 @@ USO PROGRAMADO (desde app/main.py startup):
 from __future__ import annotations
 
 import os
-import glob
 import logging
 import asyncio
 import subprocess

@@ -22,17 +22,16 @@ import io
 import os
 import logging
 from decimal import Decimal
-from pathlib import Path
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
-from reportlab.lib.units import mm, cm
+from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import (
     SimpleDocTemplate, Table, TableStyle, Paragraph,
     Spacer, Image, HRFlowable,
 )
-from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
 from sqlalchemy.orm import Session
 
@@ -80,7 +79,10 @@ def _generate_qr_image(data: str, size: int = 120) -> Image | None:
     """Genera un QR como imagen de ReportLab. Retorna None si qrcode no está instalado."""
     try:
         import qrcode
-        from qrcode.image.pil import PilImage
+        # noqa: F401 abajo — import de DISPONIBILIDAD: si el backend PIL de
+        # qrcode no está instalado, este import falla y el try retorna None
+        # (en vez de reventar luego en make_image). No es código muerto.
+        from qrcode.image.pil import PilImage  # noqa: F401
 
         qr = qrcode.QRCode(
             version=1,

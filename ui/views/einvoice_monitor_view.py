@@ -11,8 +11,7 @@ Vista completa con 3 pestañas:
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QComboBox, QTabWidget,
-    QGroupBox, QFormLayout, QLineEdit, QMessageBox, QHeaderView,
-    QFrame, QSpinBox, QFileDialog, QTextEdit,
+    QGroupBox, QFormLayout, QLineEdit, QMessageBox, QFrame, QFileDialog, QTextEdit,
 )
 from PySide6.QtCore import Qt, QObject, QThread, Signal, QTimer
 from PySide6.QtGui import QColor

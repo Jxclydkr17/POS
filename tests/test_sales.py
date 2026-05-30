@@ -189,6 +189,8 @@ class TestCreateSale:
         assert data["sale"]["id"] > 0
         assert data["sale"]["total"] > 0
         assert data["sale"]["user_id"] is not None   # FASE 3.2: vendedor registrado
+        # FASE 4.2: el "encargo" interno del PDF/email no debe filtrarse al cliente
+        assert "_pdf_dispatch" not in data
 
     def test_create_sale_no_cash_session(self, test_client, auth_headers, seed_product, closed_cash_session):
         """Falla si no hay caja abierta."""

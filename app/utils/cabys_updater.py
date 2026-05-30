@@ -10,7 +10,6 @@ import requests
 import io
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from datetime import datetime
 from app.core.logger import logger
 from app.utils.dt import now_cr
 

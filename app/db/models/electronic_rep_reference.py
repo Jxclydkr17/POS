@@ -1,5 +1,4 @@
 # app/db/models/electronic_rep_reference.py
-from datetime import datetime
 from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, DateTime, ForeignKey, Numeric
 from sqlalchemy.orm import relationship

@@ -1,4 +1,3 @@
-from datetime import datetime
 from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, DateTime, ForeignKey, String, Numeric, Index
 from sqlalchemy.orm import relationship

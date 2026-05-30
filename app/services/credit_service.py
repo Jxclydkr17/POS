@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from decimal import Decimal
 from app.utils.dt import today_cr, TZ_CR, format_cr  # FASE 2.2 — Fix 2.2: display CR
 

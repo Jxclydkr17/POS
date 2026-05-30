@@ -1,10 +1,9 @@
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QSizePolicy,
-    QDialog, QDialogButtonBox
+    QLabel, QLineEdit, QPushButton, QMessageBox, QFrame, QDialog
 )
-from PySide6.QtCore import Qt, QSize, QThread, QTimer, Signal, QObject
-from PySide6.QtGui import QPainter, QLinearGradient, QColor, QFont, QPen, QBrush, QPixmap
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QObject
+from PySide6.QtGui import QPainter, QLinearGradient, QColor, QBrush, QPixmap
 import requests
 import sys
 import logging
@@ -319,7 +318,7 @@ class LoginWindow(QWidget):
         # Texto de pie
         footer = QLabel("Sistema de uso interno — acceso restringido")
         footer.setAlignment(Qt.AlignCenter)
-        footer.setStyleSheet(f"font-size: 11px; color: rgba(139,122,170,0.5);")
+        footer.setStyleSheet("font-size: 11px; color: rgba(139,122,170,0.5);")
         form_layout.addWidget(footer)
 
         root.addWidget(form_panel)

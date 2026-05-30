@@ -7,9 +7,9 @@ Muestra: entradas, salidas, ajustes, última venta y última compra.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QFrame,
-    QAbstractItemView, QComboBox, QWidget, QSizePolicy
+    QAbstractItemView, QSizePolicy
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont
 from ui.session_manager import session
 from ui.utils.http_worker import api_call
@@ -44,13 +44,13 @@ class StatCard(QFrame):
         self.setMinimumHeight(80)
         self.setMinimumWidth(160)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
-        self.setStyleSheet(f"""
-            QFrame {{
+        self.setStyleSheet("""
+            QFrame {
                 background-color: #2C2F33;
                 border: 1px solid #3A3D42;
                 border-radius: 8px;
                 padding: 6px;
-            }}
+            }
         """)
 
         layout = QVBoxLayout(self)

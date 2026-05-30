@@ -3,13 +3,12 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QMessageBox, QAbstractItemView, QHeaderView, QMenu,
     QComboBox, QFrame
 )
-from PySide6.QtCore import Qt, QTimer, QSize
-from PySide6.QtGui import QColor, QPixmap, QIcon, QPainter, QPen, QBrush, QPainterPath
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QColor, QPixmap, QPainter, QPen, QBrush, QPainterPath
 from ui.utils.http_worker import api_call, api_request
 import os
 from ui.session_manager import session
-from decimal import Decimal, ROUND_HALF_UP
-from ui.dialogs.add_product_dialog import IVA_RATES
+from decimal import Decimal
 from ui.dialogs.product_movements_dialog import ProductMovementsDialog
 from PySide6.QtWidgets import QCompleter
 from ui.api import BASE_URL

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta
 from app.db.database import get_db
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail

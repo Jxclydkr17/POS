@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,6 @@ from app.utils.responses import success_response
 
 from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
-from app.db.models.customer import Customer
 from app.db.models.issuer_profile import IssuerProfile
 from app.einvoice.xml_builder import build_xml_for_sale, build_xml_for_nc, build_xml_for_nd
 
@@ -19,7 +18,7 @@ from app.einvoice.sequence import build_consecutivo, build_clave, next_sequence_
 from app.einvoice.xsd_validator import validate_xml, get_validation_status
 # FASE 2
 from app.einvoice.xml_signer import sign_xml, is_signing_available
-from app.core.config import settings, get_logo_path
+from app.core.config import get_logo_path
 # FASE 3
 from app.utils.hacienda_api import send_einvoice_to_hacienda, check_einvoice_status
 from app.constants.status_enums import InvoiceStatus

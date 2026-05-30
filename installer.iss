@@ -62,8 +62,16 @@ Name: "quicklaunchicon"; Description: "Crear acceso directo en la &barra de tare
 ; Todo el contenido de dist/ViolettePOS/
 Source: "dist\ViolettePOS\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
-; .env template (no sobreescribir si ya existe de una instalacion anterior)
-Source: ".env.example"; DestDir: "{app}"; DestName: ".env"; Flags: onlyifdoesntexist
+; FASE 3.3: NO creamos `.env` aquí. Antes esta sección copiaba
+; `.env.example` -> `.env`, dejando `DB_ENGINE=sqlite` pre-sembrado, por lo
+; que el wizard de selección de base de datos (SQLite/MySQL) NUNCA aparecía
+; en el primer arranque. Ahora el `.env` lo crea el wizard según la elección
+; del usuario. La plantilla `.env.example` ya viaja dentro de
+; `dist\ViolettePOS\` (se incluye en el .spec) y llega a {app} por la línea de
+; arriba, así que el wizard puede sembrar el `.env` a partir de ella.
+;
+; Nota: en una reinstalación sobre una instalación previa, el `.env` existente
+; se conserva (no se toca aquí), preservando la elección de base de datos.
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

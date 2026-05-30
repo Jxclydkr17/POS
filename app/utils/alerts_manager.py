@@ -1,7 +1,6 @@
 # app/utils/alerts_manager.py
 
 import requests
-from datetime import datetime, timedelta
 from ui.session_manager import session
 from ui.components.toast_notifier import show_toast
 from app.core.logger import logger

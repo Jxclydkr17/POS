@@ -1,5 +1,4 @@
 import yagmail
-import os
 from app.core.credentials import email_user, email_pass
 from app.core.logger import logger
 

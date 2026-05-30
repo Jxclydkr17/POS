@@ -7,7 +7,6 @@ from fastapi import APIRouter, Depends, UploadFile, File, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import date, datetime, timedelta
 from app.utils.dt import today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 import io, csv
 import requests as http_requests
@@ -19,7 +18,6 @@ from app.db.crud.customer_crud import (
     get_customers,
     get_customer,
     update_customer,
-    delete_customer,
     reactivate_customer,
 )
 from app.core.dependencies import get_current_user
@@ -29,11 +27,9 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from app.db.models.customer import Customer
 from app.db.models.sale import Sale
-from app.db.models.sale_detail import SaleDetail
 from app.db.models.credit import Credit
-from app.db.models.credit_sale import CreditSale
 from app.db.models.economic_activity import EconomicActivity
-from app.utils.responses import success_response, error_response
+from app.utils.responses import success_response
 
 logger = logging.getLogger(__name__)
 

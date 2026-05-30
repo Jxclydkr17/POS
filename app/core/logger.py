@@ -13,7 +13,6 @@ import os
 import sys
 import logging
 from logging.handlers import RotatingFileHandler
-from pathlib import Path
 
 # ── Directorio de logs ──
 # ── FASE 6 — Fix 6.3: Consolidar bajo DATA_DIR/logs/ ──

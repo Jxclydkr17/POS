@@ -1,6 +1,6 @@
 # app/db/models/purchase_credit_note.py
 
-from sqlalchemy import Column, Integer, String, Date, DateTime, DECIMAL, Text, ForeignKey, Boolean, func
+from sqlalchemy import Column, Integer, Date, DateTime, DECIMAL, Text, ForeignKey, Boolean, func
 from sqlalchemy.orm import relationship
 from app.db.database import Base
 

@@ -7,10 +7,8 @@ Cubre: ventas, gastos, caja, inventario, clientes, compras y financiero.
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal
-from typing import Any, Optional
 
-from sqlalchemy import func, case, desc
+from sqlalchemy import func, desc
 from sqlalchemy.orm import Session
 
 from app.db.models.sale import Sale
@@ -22,8 +20,6 @@ from app.db.models.cash_session import CashSession
 from app.db.models.cash_movement import CashMovement
 from app.db.models.purchase import Purchase, PurchaseStatus
 from app.db.models.purchase_detail import PurchaseDetail
-from app.db.models.credit import Credit
-from app.db.models.credit_sale import CreditSale
 from app.db.models.supplier import Supplier
 from app.db.models.supplier_product import SupplierProduct
 
@@ -420,7 +416,7 @@ def query_inventory_summary(db: Session) -> dict:
     ) or 0
 
     lines = [
-        f"📦 **Resumen de inventario:**",
+        "📦 **Resumen de inventario:**",
         f"  • Productos activos: **{total_products}**",
         f"  • Total en stock: **{float(total_stock):,.2f}** (unidades/kg/m mixto)",
         f"  • Valor al costo: {_fmt(inventory_value)}",
@@ -499,7 +495,7 @@ def query_customers_summary(db: Session) -> dict:
     ) or 0
 
     lines = [
-        f"👥 **Resumen de clientes:**",
+        "👥 **Resumen de clientes:**",
         f"  • Total activos: **{total}**",
         f"  • Con saldo pendiente: **{with_debt}**",
         f"  • Deuda total: **{_fmt(total_debt)}**",
@@ -935,7 +931,7 @@ def query_period_overview(db: Session, period: str = "week") -> dict:
 
     lines = [
         f"📋 **Resumen {label}:**",
-        f"",
+        "",
         f"💰 **Ventas:** {_fmt(sales_total)} en **{sales_count}** transacciones",
     ]
 

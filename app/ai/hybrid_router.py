@@ -20,7 +20,6 @@ Criterios para camino rápido:
 from __future__ import annotations
 
 import re
-from typing import Optional
 
 from app.ai.classifier import classify, ClassificationResult
 from app.ai.llm_engine import is_llm_available

@@ -3,9 +3,9 @@ from PySide6.QtWidgets import (
     QLineEdit, QTextEdit, QDateEdit, QComboBox, QMessageBox,
     QFileDialog, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView, QSpinBox, QDoubleSpinBox, QListWidget,
-    QListWidgetItem, QFrame, QSizePolicy,
+    QListWidgetItem, QFrame,
 )
-from PySide6.QtCore import Qt, QDate, QTimer
+from PySide6.QtCore import Qt, QDate
 from ui.session_manager import session
 from ui.utils.http_worker import api_call, run_async
 from ui.api import BASE_URL

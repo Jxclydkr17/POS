@@ -6,7 +6,6 @@ que se muestran automáticamente al abrir el chat.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
 from app.utils.dt import today_cr, cr_day_to_utc_range
 from typing import List, Dict, Any
 

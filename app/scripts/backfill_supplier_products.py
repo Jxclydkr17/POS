@@ -62,8 +62,6 @@ def backfill(db: Session) -> dict:
     # FROM purchase_details pd
     # JOIN purchases p ON pd.purchase_id = p.id
 
-    from sqlalchemy import case, literal_column
-    from sqlalchemy.sql import expression
 
     # Obtenemos todos los pares con la compra más reciente
     # Agrupamos por (supplier_id, product_id) y tomamos el max entry_date

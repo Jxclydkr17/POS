@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, desc
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import HTTPException
 from app.utils.dt import utcnow, format_cr  # FASE 2.2 — Fix 2.2: display CR
 

@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QMessageBox, QComboBox, QListWidget, QScrollArea, QWidget,
     QTextEdit, QDateEdit, QCheckBox
 )
-from PySide6.QtCore import Qt, QDate, QTimer
+from PySide6.QtCore import QDate, QTimer
 from ui.session_manager import session
 from ui.utils.http_worker import api_call
 from ui.api import API

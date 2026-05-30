@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Any, List, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 
 # ─────────────────────────────────────────────────────

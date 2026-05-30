@@ -1,10 +1,10 @@
 from PySide6.QtWidgets import (
     QMainWindow, QLabel, QVBoxLayout, QWidget, QPushButton,
-    QHBoxLayout, QMessageBox, QToolButton, QSizePolicy, QScrollArea,
+    QHBoxLayout, QMessageBox, QToolButton, QScrollArea,
     QFrame, QStackedLayout, QDialog
 )
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QPoint, QObject
+from PySide6.QtCore import Qt, QEvent, QTimer, Signal, QObject
 from ui.session_manager import session
 from ui.widgets.chat_panel import ChatPanel
 from datetime import date

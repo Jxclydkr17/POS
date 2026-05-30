@@ -1,6 +1,4 @@
-from decimal import Decimal
 from sqlalchemy import func, case
-from datetime import datetime
 
 from app.db.models.cash_movement import CashMovement
 from app.utils.dt import utcnow

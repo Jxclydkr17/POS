@@ -21,7 +21,7 @@ system de Violette POS:
 FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout en acciones (intacto).
 """
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QLineEdit,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QComboBox, QTableWidget, QTableWidgetItem, QMessageBox,
     QDateEdit, QDialog, QFormLayout, QDialogButtonBox, QFileDialog,
     QHeaderView, QFrame, QSizePolicy, QAbstractItemView, QGraphicsDropShadowEffect

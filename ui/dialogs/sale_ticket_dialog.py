@@ -253,7 +253,6 @@ class SaleTicketDialog(QDialog):
         PDF via SO como fallback — útil cuando la impresora térmica
         está apagada o desconectada y hay otra impresora disponible.
         """
-        from decimal import Decimal
 
         p_type = (printer_config.get("type") or "").lower()
         info = printer_config.get("info") or {}

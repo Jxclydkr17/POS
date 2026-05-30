@@ -1,5 +1,4 @@
 # app/db/models/issuer_profile.py
-from datetime import datetime
 from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, String, DateTime
 from app.db.database import Base

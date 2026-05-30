@@ -10,9 +10,15 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from datetime import datetime
 import asyncio
-import app.db.models
+# FASE 4.1 — Fix: import con efecto colateral (registra todos los modelos en
+# Base.metadata). Antes era `import app.db.models`, que liga el nombre `app` al
+# PAQUETE app; más abajo `app = FastAPI(...)` lo reasignaba a la instancia. Esa
+# doble definición de `app` (paquete → instancia) era frágil: cualquier código
+# entre medias que usara `app` esperando la instancia, o después esperando el
+# paquete, fallaría en silencio. El alias `_models` registra los modelos igual
+# pero ya NO toca el nombre `app`.
+import app.db.models as _models  # noqa: F401
 
 from app.routers import (
     analytics_router,

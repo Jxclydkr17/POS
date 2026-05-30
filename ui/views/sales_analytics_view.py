@@ -3,11 +3,10 @@ from datetime import date, timedelta
 import requests
 
 from PySide6.QtCore import Qt, QDate, QThread, Signal
-from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QGroupBox, QTableWidget, QTableWidgetItem,
-    QTabWidget, QHeaderView, QAbstractItemView, QMessageBox, QFileDialog
+    QTabWidget, QHeaderView, QAbstractItemView, QMessageBox
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas

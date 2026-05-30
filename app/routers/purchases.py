@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from datetime import date, timedelta
+from datetime import timedelta
 from app.utils.dt import today_cr
 from app.utils.db_compat import sql_datediff
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
-from sqlalchemy import func, case, extract
+from sqlalchemy import func, case
 from sqlalchemy.orm import Session, subqueryload
 
 from app.db.database import get_db

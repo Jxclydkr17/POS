@@ -10,16 +10,13 @@ Consume los 5 endpoints de /analytics/purchases/* que ya existen en el backend:
 """
 
 
-from datetime import date
 import requests
 
 from PySide6.QtCore import Qt, QDate, QThread, Signal
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QDateEdit, QGroupBox, QTableWidget, QTableWidgetItem,
-    QTabWidget, QHeaderView, QAbstractItemView, QComboBox,
-    QMessageBox, QSizePolicy, QFrame
+    QTabWidget, QHeaderView, QAbstractItemView, QMessageBox
 )
 from app.utils.export_utils import export_purchases_analytics_pdf
 import logging

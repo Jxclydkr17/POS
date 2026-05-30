@@ -98,9 +98,7 @@ def download_update():
 def system_diagnostics(db: Session = Depends(get_db)):
     """Diagnóstico completo del sistema."""
     import platform
-    import os
-    from pathlib import Path
-    from app.core.config import settings, is_sqlite, APP_DIR, DATA_DIR
+    from app.core.config import settings, APP_DIR, DATA_DIR
     from app.core.credentials import (
         hacienda_user as _fn_hac_user, hacienda_password as _fn_hac_pass,
         hacienda_env as _fn_hac_env, hacienda_cert_path as _fn_hac_cert,

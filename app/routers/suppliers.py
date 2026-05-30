@@ -7,7 +7,7 @@ Toda la lógica de negocio vive en services/supplier_service.py.
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 
 from app.db.database import get_db
 from app.schemas.supplier import (

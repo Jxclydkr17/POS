@@ -15,7 +15,7 @@ from app.core.dependencies import get_current_user, require_role
 from app.core.logger import logger
 # ── FASE 3 — Fix 3.2: Rate limiting en endpoints sensibles ──
 from app.core.rate_limiter import rate_limit
-from app.utils.dt import today_cr, today_cr_datetime_range, TZ_CR
+from app.utils.dt import today_cr_datetime_range, TZ_CR
 from app.utils.responses import success_response
 
 from app.db.crud import sale_crud
@@ -37,6 +37,11 @@ def create_sale(
         # ── FASE 5 — Fix 5.1: Router es dueño del commit (Unit of Work) ──
         result = sale_crud.create_sale(db, sale_in, current_user)
         db.commit()
+        # ── FASE 4.2 — Fix: lanzar PDF/email en background SOLO tras commit ──
+        # Antes create_sale lo lanzaba antes del commit (carrera + posible
+        # email/PDF de una venta no persistida). Ahora el "encargo" viaja
+        # en el result y se dispara aquí, ya con la venta confirmada.
+        sale_crud.dispatch_pdf_and_email(result.pop("_pdf_dispatch", None))
         return result
     except HTTPException:
         db.rollback()

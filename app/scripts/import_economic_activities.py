@@ -17,7 +17,6 @@ de legacy puede borrarse.
 """
 
 import csv
-import os
 import logging
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal

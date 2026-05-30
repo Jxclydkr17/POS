@@ -2440,7 +2440,7 @@ class SettingsView(QWidget):
     # Tab: Usuarios (Fase 3)
     # ----------------------------------------------------------
     def _build_tab_usuarios(self) -> QWidget:
-        from PySide6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+        from PySide6.QtWidgets import QTableWidget, QHeaderView
 
         tab = QWidget()
         layout = QVBoxLayout(tab)

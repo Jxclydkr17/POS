@@ -6,7 +6,7 @@ import re
 import time
 import uuid
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
-from datetime import date, timedelta
+from datetime import timedelta
 from app.utils.dt import today_cr, format_cr  # FASE 2.2 — Fix 2.2
 
 from fastapi import APIRouter, Depends
@@ -25,25 +25,21 @@ from app.core.dependencies import get_current_user
 from app.ai.data_query_intent import try_data_query
 
 # FASE 2: Clasificador inteligente + fuzzy matching
-from app.ai.classifier import classify, ClassificationResult
 from app.ai.fuzzy import (
-    normalize_text as fuzzy_normalize,
     fix_typos,
     combined_similarity,
-    fuzzy_match_best,
     keyword_in_text,
     any_keyword_in_text,
 )
-from app.ai.date_parser import extract_period_or_default
 
 # FASE 3: Acciones ampliadas
 from app.ai.action_intent import try_action_command
 
 # FASE 5: Contexto y memoria
-from app.ai.ui_context import UIContext, build_context_prompt, generate_contextual_suggestions
+from app.ai.ui_context import UIContext, generate_contextual_suggestions
 
 # FASE 6: LLM real con function calling
-from app.ai.hybrid_router import route as hybrid_route, RouteDecision
+from app.ai.hybrid_router import route as hybrid_route
 from app.ai.llm_engine import call_llm, is_llm_available
 
 # FASE 6b: Capa inteligente de interpretación
@@ -59,7 +55,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 # -------------------------------------------------
 
 if TYPE_CHECKING:
-    from app.db.models.product import Product
+    pass
     
 logger = logging.getLogger(__name__)
 

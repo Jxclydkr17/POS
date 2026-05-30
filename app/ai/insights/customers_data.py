@@ -1,4 +1,3 @@
-from datetime import date
 from app.utils.dt import today_cr
 from sqlalchemy.orm import Session
 from sqlalchemy import func

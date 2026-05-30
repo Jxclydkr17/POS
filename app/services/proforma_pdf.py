@@ -33,7 +33,7 @@ from reportlab.platypus import (
 )
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
-from app.utils.dt import now_cr, to_cr
+from app.utils.dt import to_cr
 from app.utils.unit_helpers import format_quantity
 # ── FASE 4 — Fix 4.11: usar el helper canónico de búsqueda de logo. ──
 # `get_logo_path()` busca en ui/assets/ y retorna ruta absoluta o None.

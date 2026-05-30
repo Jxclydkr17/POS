@@ -3,18 +3,17 @@
 FASE 1 — Fix 1.1 / 1.2: Carga asíncrona + timeout en acciones.
 """
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QMessageBox, QTableWidget, QTableWidgetItem, QInputDialog,
-    QComboBox, QDialog, QFormLayout, QLineEdit, QCheckBox,
-    QProgressBar, QFrame, QDateEdit, QGroupBox, QGridLayout,
-    QFileDialog, QSizePolicy
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QMessageBox, QTableWidget, QTableWidgetItem, QComboBox, QDialog, QFormLayout, QLineEdit, QCheckBox,
+    QProgressBar, QFrame, QDateEdit, QGridLayout,
+    QFileDialog
 )
 from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor
 import subprocess
 import sys
 import os
-from datetime import datetime, date
+from datetime import date
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.http_worker import api_call, run_async

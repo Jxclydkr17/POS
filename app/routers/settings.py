@@ -19,9 +19,7 @@ import json
 import shutil
 import logging
 import platform
-import subprocess
 import tempfile
-from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,7 +27,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 
 from app.db.database import get_db
-from app.db.models.settings import Settings
 from app.db.models.issuer_profile import IssuerProfile
 from app.schemas.settings import SettingsOut, SettingsUpdate
 from app.schemas.api_response import APIResponse

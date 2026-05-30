@@ -44,7 +44,7 @@ def check_status() -> dict:
     status["env_exists"] = (APP_DIR / ".env").exists()
 
     # BD
-    from app.core.config import settings, is_sqlite
+    from app.core.config import settings
     status["db_engine"] = settings.db_engine
 
     try:

@@ -1,4 +1,4 @@
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 import logging
 from app.utils.dt import today_cr, cr_day_to_utc_range
 from sqlalchemy.orm import Session
@@ -18,7 +18,6 @@ from .predictions import predict_sales_next_7_days_avg
 from .schemas import Insight, InsightsResponse
 from .rules import (
     sales_drop_percentage,
-    sales_drop_level,
     stock_level,
     credit_risk_level,
     build_daily_series,

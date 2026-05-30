@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QLineEdit, QAbstractItemView,
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
 
 from ui.dialogs.add_category_dialog import AddCategoryDialog
 from ui.dialogs.edit_category_dialog import EditCategoryDialog

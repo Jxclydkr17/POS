@@ -1,11 +1,10 @@
 # app/db/models/customer.py
 
-from datetime import datetime
 from app.utils.dt import utcnow
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Date, Text, Numeric
 from sqlalchemy.orm import relationship
 from app.db.database import Base
-from app.db.models.economic_activity import customer_economic_activity, EconomicActivity
+from app.db.models.economic_activity import customer_economic_activity
 
 class Customer(Base):
     __tablename__ = "customers"

@@ -141,7 +141,7 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
                 "success": False,
                 "einvoice_id": einv.id,
                 "status": InvoiceStatus.QUEUED,
-                "error": f"Sin conexión. Encolado para reenvío automático.",
+                "error": "Sin conexión. Encolado para reenvío automático.",
                 "offline": True,
                 "tries": (einv.tries or 0) + 1,
             }

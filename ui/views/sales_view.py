@@ -2842,7 +2842,7 @@ class SalesView(QWidget):
         """Callback: construye el diálogo de cierre de caja con los datos del reporte."""
         from PySide6.QtWidgets import (
             QDialog, QVBoxLayout, QLabel, QLineEdit,
-            QPushButton, QMessageBox, QGridLayout
+            QPushButton, QGridLayout
         )
 
         data = json_data["data"]

@@ -11,15 +11,15 @@ from datetime import datetime
 import requests
 from PySide6.QtCore import (
     Qt, QObject, QThread, Signal, QTimer,
-    QVariantAnimation, QEasingCurve, QSize,
+    QVariantAnimation, QEasingCurve,
 )
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSizePolicy,
     QPushButton, QLineEdit, QScrollArea,
     QFrame, QLabel, QGraphicsDropShadowEffect,
-    QSpacerItem, QFileDialog, QApplication,
+    QFileDialog,
 )
-from PySide6.QtGui import QColor, QFont, QPixmap, QPainter
+from PySide6.QtGui import QColor, QPixmap, QPainter
 
 from ui.api import BASE_URL
 

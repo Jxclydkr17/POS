@@ -1,6 +1,6 @@
 # app/schemas/sale.py
 from pydantic import BaseModel, Field, ConfigDict, field_validator, model_validator
-from typing import List, Optional, Generic, TypeVar
+from typing import List, Optional
 from datetime import datetime
 from decimal import Decimal
 

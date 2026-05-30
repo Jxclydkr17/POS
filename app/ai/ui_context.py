@@ -6,7 +6,7 @@ para que el asistente sepa dónde está el usuario y qué tiene activo.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 from pydantic import BaseModel, Field
 
 

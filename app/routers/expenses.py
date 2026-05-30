@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
-from datetime import date
 from app.utils.dt import today_cr
 
 from app.db.database import get_db

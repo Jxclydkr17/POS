@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from app.utils.dt import today_cr
 from typing import List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
-from sqlalchemy.orm import Session, joinedload, subqueryload
+from sqlalchemy.orm import Session, subqueryload
 
 from app.db.models.purchase import Purchase
 from app.db.models.purchase_detail import PurchaseDetail

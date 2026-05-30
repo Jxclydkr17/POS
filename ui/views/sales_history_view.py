@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QComboBox, QTableWidget, QTableWidgetItem, QDateEdit, QMessageBox,
     QFrame, QHeaderView, QAbstractItemView, QSizePolicy, QGridLayout,
 )
-from PySide6.QtCore import Qt, QDate, QSize
+from PySide6.QtCore import Qt, QDate
 from PySide6.QtGui import QColor, QBrush
 import os
 import logging

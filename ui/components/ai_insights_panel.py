@@ -406,7 +406,7 @@ class AIInsightsPanel(QWidget):
             logging.debug("✅ Panel renderizado")
 
         except Exception as e:
-            logging.error(f"❌ ERROR en reload():")
+            logging.error("❌ ERROR en reload():")
             logging.error(f"   Tipo: {type(e).__name__}")
             logging.error(f"   Mensaje: {str(e)}")
             logging.debug("\n📋 Stack trace completo:")

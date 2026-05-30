@@ -9,7 +9,6 @@ from app.services.expense_service import add_expense_service
 
 from app.db.models.sale import Sale
 from app.db.models.customer import Customer
-from app.constants.payment_methods import ALL_PAYMENT_METHODS
 from app.utils.dt import utcnow, today_cr, format_cr  # FASE 2.2 — Fix 2.2: display CR
 from app.services.settings_service import get_business_name
 from app.constants.status_enums import SaleStatus

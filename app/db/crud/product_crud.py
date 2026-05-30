@@ -10,7 +10,7 @@ from app.db.models.sale_detail import SaleDetail
 from app.constants.status_enums import SaleStatus
 from app.schemas.products import ProductCreate, ProductUpdate
 from decimal import Decimal, InvalidOperation
-from datetime import datetime, timedelta
+from datetime import timedelta
 from app.utils.dt import utcnow
 
 

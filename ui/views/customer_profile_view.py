@@ -9,10 +9,9 @@ FASE 1 — Fix 1.1 / 1.2: Carga asíncrona.
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QTableWidget, QTableWidgetItem, QFrame, QGridLayout,
-    QMessageBox, QTextEdit, QHeaderView, QScrollArea, QWidget
+    QMessageBox, QTextEdit, QScrollArea, QWidget
 )
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from ui.session_manager import session
 from ui.api import BASE_URL
 from ui.utils.http_worker import api_call
