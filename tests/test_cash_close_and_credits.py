@@ -23,7 +23,8 @@ from app.db.models.credit import Credit
 from app.db.models.credit_sale import CreditSale
 from app.db.models.customer import Customer
 
-from app.db.crud.cash import open_session, create_movement, _to_dec
+from app.db.crud.cash import open_session
+from app.utils.decimal_utils import to_dec
 from app.services.cash_close_service import close_cash_session
 
 
@@ -208,7 +209,7 @@ class TestCreditPrecision:
             )
         ).filter(Credit.customer_id == customer.id).scalar()
 
-        balance = _to_dec(totals)
+        balance = to_dec(totals)
         assert balance == Decimal("0.00") or balance == Decimal("0")
 
     def test_many_small_credit_sales(self, db, customer):
@@ -222,7 +223,7 @@ class TestCreditPrecision:
             Credit.type == "sale",
         ).scalar()
 
-        assert _to_dec(total) == Decimal("113100.00")
+        assert to_dec(total) == Decimal("113100.00")
 
     def test_payment_larger_than_sale_not_negative(self, db, customer):
         """Un abono mayor que la deuda no debe dar balance negativo."""
@@ -237,5 +238,5 @@ class TestCreditPrecision:
             Credit.customer_id == customer.id, Credit.type == "payment"
         ).scalar() or 0
 
-        balance = _to_dec(total_sales) - _to_dec(total_payments)
+        balance = to_dec(total_sales) - to_dec(total_payments)
         assert balance >= Decimal("0")

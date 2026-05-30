@@ -55,6 +55,7 @@ from app.db.models.payment_method import PaymentMethod
 from app.db.models.settings import Settings
 from app.db.models.issuer_profile import IssuerProfile
 from app.db.models.cabys import Cabys
+from app.db.models.customer import Customer
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +248,33 @@ def seed_cabys(db: Session) -> None:
     logger.info("Catálogo CABYS descargado: %d registros.", total)
 
 
+def seed_general_customer(db: Session) -> None:
+    """Crea (o adopta) el Cliente General — el "mostrador" / público general.
+
+    El backend niega crédito a este cliente mediante la bandera `is_general`
+    (ver app/db/crud/sale_crud.py, FASE 1.5). En instalación nueva se crea
+    como primer cliente (id=1). Es IDEMPOTENTE:
+      - Si ya existe un cliente con is_general=True → no hace nada.
+      - Si existe uno llamado "Cliente General" sin marcar → lo adopta.
+      - Si no existe → lo crea.
+    """
+    flagged = db.query(Customer).filter(Customer.is_general.is_(True)).first()
+    if flagged:
+        logger.info("Cliente General ya existe (is_general=True).")
+        return
+
+    by_name = db.query(Customer).filter(Customer.name == "Cliente General").first()
+    if by_name:
+        by_name.is_general = True
+        db.commit()
+        logger.info('Cliente "Cliente General" existente marcado con is_general=True.')
+        return
+
+    db.add(Customer(name="Cliente General", is_general=True, is_active=True))
+    db.commit()
+    logger.info("Cliente General creado.")
+
+
 def run(force: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None) -> None:
     """
@@ -290,6 +318,9 @@ def run(force: bool = False,
 
         _step("Creando configuración inicial...")
         seed_settings(db)
+
+        _step("Creando Cliente General...")
+        seed_general_customer(db)
 
         _step("Creando perfil emisor...")
         seed_issuer_profile(db)

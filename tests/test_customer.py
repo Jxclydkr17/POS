@@ -6,5 +6,7 @@ def test_create_customer(test_client, auth_headers):
     }
     response = test_client.post("/customers/", json=payload, headers=auth_headers)
     assert response.status_code == 200
-    assert response.json()["name"] == payload["name"]
-    assert "id" in response.json()
+    body = response.json()
+    # La API envuelve el recurso en {message, data} (envelope estandar).
+    assert body["data"]["name"] == payload["name"]
+    assert "id" in body["data"]

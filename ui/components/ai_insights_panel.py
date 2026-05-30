@@ -270,6 +270,23 @@ class AIInsightsPanel(QWidget):
         return "Ver detalle"
 
     # ─────────────────────────────────────────
+    # Utilidad: conversión segura a float
+    # ─────────────────────────────────────────
+    @staticmethod
+    def _to_float(value, default: float = 0.0) -> float:
+        """Convierte a float de forma segura.
+
+        Los valores numéricos que llegan de la API pueden ser strings
+        (e.g. Decimal serializado desde la DB), lo que hace que los
+        format-specs como :,.0f lancen ValueError.  Este helper evita
+        el crash y devuelve `default` ante cualquier valor inválido.
+        """
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    # ─────────────────────────────────────────
     # PASO 3 — Renderer de líneas compactas
     # ─────────────────────────────────────────
     def _build_compact_lines(self, alert: dict) -> list[str]:
@@ -285,15 +302,15 @@ class AIInsightsPanel(QWidget):
                 lines.append(f"Stock actual: {meta['current_stock']}")
 
             if meta.get("lost_revenue") is not None:
-                lines.append(f"Impacto estimado: ₡{meta['lost_revenue']:,.0f}")
+                lines.append(f"Impacto estimado: ₡{self._to_float(meta['lost_revenue']):,.0f}")
 
             if meta.get("suggested_qty") is not None and meta.get("suggested_qty") > 0:
                 lines.append(f"Sugerencia: comprar {meta['suggested_qty']} uds")
 
         elif alert_type == "sales":
             if meta.get("predicted_today") is not None and meta.get("today_sales") is not None:
-                lines.append(f"Esperado hoy: ₡{meta['predicted_today']:,.0f}")
-                lines.append(f"Actual: ₡{meta['today_sales']:,.0f}")
+                lines.append(f"Esperado hoy: ₡{self._to_float(meta['predicted_today']):,.0f}")
+                lines.append(f"Actual: ₡{self._to_float(meta['today_sales']):,.0f}")
 
             if meta.get("drop_pct_vs_pred") is not None:
                 lines.append(f"Desviación: -{meta['drop_pct_vs_pred']}%")
@@ -301,22 +318,22 @@ class AIInsightsPanel(QWidget):
                 lines.append(f"Desviación: -{meta['drop_pct_vs_avg']}%")
 
             if meta.get("forecast_avg") is not None:
-                lines.append(f"Promedio esperado: ₡{meta['forecast_avg']:,.0f}")
+                lines.append(f"Promedio esperado: ₡{self._to_float(meta['forecast_avg']):,.0f}")
 
             if meta.get("trend_pct") is not None:
-                trend = meta["trend_pct"]
+                trend = self._to_float(meta["trend_pct"])
                 sign = "+" if trend > 0 else ""
-                lines.append(f"Tendencia: {sign}{trend}%")
+                lines.append(f"Tendencia: {sign}{trend:.1f}%")
 
         elif alert_type == "credit":
             if meta.get("credit_balance") is not None:
-                lines.append(f"Saldo pendiente: ₡{meta['credit_balance']:,.0f}")
+                lines.append(f"Saldo pendiente: ₡{self._to_float(meta['credit_balance']):,.0f}")
 
             if meta.get("usage_percent") is not None:
-                lines.append(f"Uso del crédito: {meta['usage_percent']:.1f}%")
+                lines.append(f"Uso del crédito: {self._to_float(meta['usage_percent']):.1f}%")
 
             if meta.get("credit_limit") is not None:
-                lines.append(f"Límite: ₡{meta['credit_limit']:,.0f}")
+                lines.append(f"Límite: ₡{self._to_float(meta['credit_limit']):,.0f}")
 
         elif alert_type == "supplier":
             if meta.get("critical_count") is not None:
@@ -330,7 +347,7 @@ class AIInsightsPanel(QWidget):
 
         elif alert_type == "cash":
             if meta.get("balance") is not None:
-                lines.append(f"Diferencia: ₡{abs(meta['balance']):,.0f}")
+                lines.append(f"Diferencia: ₡{abs(self._to_float(meta['balance'])):,.0f}")
 
         limit = 4 if alert.get("level") == "critical" else 3
         return lines[:limit]
@@ -654,7 +671,7 @@ class AIInsightsPanel(QWidget):
                 customer_name.setWordWrap(True)
                 grid.addWidget(customer_name, row, 1)
 
-                usage = item.get("usage_percent", 0)
+                usage = self._to_float(item.get("usage_percent", 0))
                 usage_label = QLabel(f"{usage:.1f}%")
                 if usage >= 90:
                     u_color = "#ef4444"
@@ -665,12 +682,12 @@ class AIInsightsPanel(QWidget):
                 usage_label.setStyleSheet(f"color: {u_color}; font-weight: bold; font-size: 12px;")
                 grid.addWidget(usage_label, row, 2)
 
-                balance = item.get("credit_balance", 0)
+                balance = self._to_float(item.get("credit_balance", 0))
                 balance_label = QLabel(f"₡{balance:,.0f}")
                 balance_label.setStyleSheet("color: #9ca3af; font-size: 11px;")
                 grid.addWidget(balance_label, row, 3)
 
-                limit = item.get("credit_limit", 0)
+                limit = self._to_float(item.get("credit_limit", 0))
                 limit_label = QLabel(f"₡{limit:,.0f}")
                 limit_label.setStyleSheet("color: #9ca3af; font-size: 11px;")
                 grid.addWidget(limit_label, row, 4)

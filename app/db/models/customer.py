@@ -36,6 +36,10 @@ class Customer(Base):
     credit_balance = Column(Numeric(12, 2), default=0)
     credit_limit = Column(Numeric(12, 2), default=0)
     has_credit_limit = Column(Boolean, default=False)
+    # -- Cliente General: marca el cliente "mostrador/publico general".
+    #    El backend niega credito a estos clientes (igual que a una venta
+    #    sin cliente). Reemplaza el viejo hardcode 'customer_id == 1'.
+    is_general = Column(Boolean, default=False, nullable=False)
 
     # Notas internas (uso interno del negocio)
     notes = Column(Text, nullable=True)

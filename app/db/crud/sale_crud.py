@@ -533,11 +533,27 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
 
     # Crédito
     if _is_credit:
-        if not customer_id or customer_id == 1:
-            raise HTTPException(status_code=400, detail="No se puede asignar crédito al Cliente General.")
+        # Una venta sin cliente (mostrador / Cliente General implícito) no
+        # admite crédito: no hay a quién cobrarle el fiado.
+        if not customer_id:
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede asignar crédito a una venta sin cliente.",
+            )
         customer = db.query(Customer).filter(Customer.id == customer_id).first()
         if not customer:
             raise HTTPException(status_code=404, detail="Cliente no encontrado.")
+        # ── FASE 1.5: El Cliente General (mostrador) tampoco admite crédito. ──
+        # Antes esto se bloqueaba con el hardcode `customer_id == 1`, que
+        # impedía vender a crédito al PRIMER cliente real registrado (quien
+        # tomaba id=1, porque nada sembraba un Cliente General) y, además, no
+        # reconocía a un Cliente General con otro id. Ahora se identifica por
+        # la bandera `is_general`, sembrada por seed_db.py.
+        if getattr(customer, "is_general", False):
+            raise HTTPException(
+                status_code=400,
+                detail="No se puede asignar crédito al Cliente General.",
+            )
         add_credit_sale(db, customer_id, new_sale.id)
 
     # ── FASE 1.1 — Fix 1.1: NO asignar consecutivo/clave aquí ──
@@ -790,10 +806,16 @@ def get_sales_by_range(
     en vez de OFFSET que degrada con offsets grandes.
     Si no se pasa, mantiene offset/limit por retrocompatibilidad.
     """
+    # ── FIX: order_by debe aplicarse ANTES de offset/limit ──
+    # SQLAlchemy prohíbe llamar .order_by() sobre una query que ya tiene
+    # LIMIT/OFFSET aplicados (InvalidRequestError). Antes el order_by iba
+    # al final, después del .offset(skip) de la rama `else`, lo que rompía
+    # /sales/today y /sales/date/{fecha} en su carga inicial (last_id=None).
     query = (
         db.query(Sale)
         .options(joinedload(Sale.customer))
         .filter(Sale.created_at >= start, Sale.created_at <= end, Sale.status != SaleStatus.ANULADA)
+        .order_by(Sale.id.desc())
     )
 
     if last_id is not None:
@@ -801,7 +823,7 @@ def get_sales_by_range(
     else:
         query = query.offset(skip)
 
-    sales = query.order_by(Sale.id.desc()).limit(limit).all()
+    sales = query.limit(limit).all()
 
     result = []
     for s in sales:

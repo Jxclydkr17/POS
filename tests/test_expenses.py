@@ -12,8 +12,8 @@ def test_create_expense(test_client, auth_headers):
     assert "message" in body
 
 
-def test_list_expenses(test_client):
-    response = test_client.get("/expenses/")
+def test_list_expenses(test_client, auth_headers):
+    response = test_client.get("/expenses/", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
@@ -23,8 +23,8 @@ def test_list_expenses(test_client):
     assert "total_count" in body["data"]
 
 
-def test_list_expenses_pagination(test_client):
-    response = test_client.get("/expenses/?skip=0&limit=10")
+def test_list_expenses_pagination(test_client, auth_headers):
+    response = test_client.get("/expenses/?skip=0&limit=10", headers=auth_headers)
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True

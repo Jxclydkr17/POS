@@ -155,6 +155,17 @@ class Settings(BaseSettings):
     hacienda_user: str | None = None
     hacienda_password: str | None = None
 
+    @field_validator('db_port', mode='before')
+    @classmethod
+    def _empty_port_to_default(cls, v):
+        # FASE 3.3: el wizard (al elegir SQLite) y los .env manuales pueden
+        # dejar DB_PORT vacío. pydantic intentaría convertir "" a int y
+        # lanzaría ValidationError, abortando el arranque. Tratamos vacío /
+        # solo-espacios / None como "usar el default 3306".
+        if v is None or (isinstance(v, str) and v.strip() == ""):
+            return 3306
+        return v
+
     @field_validator('db_engine')
     @classmethod
     def check_db_engine(cls, v):
@@ -175,23 +186,17 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
-# ── Auto-detectar engine si no está definido explícitamente ──
-def _auto_detect_engine():
-    """Si DB_ENGINE no está en .env, auto-detecta según las credenciales."""
-    explicit = os.environ.get("DB_ENGINE", "").strip().lower()
-    if explicit:
-        return  # El usuario lo definió, respetar
-
-    db_user = os.environ.get("DB_USER", "").strip()
-    db_pass = os.environ.get("DB_PASSWORD", "").strip()
-
-    if db_user and db_pass:
-        os.environ.setdefault("DB_ENGINE", "mysql")
-    else:
-        os.environ.setdefault("DB_ENGINE", "sqlite")
-
-
-_auto_detect_engine()
+# ── Resolución del motor de BD ──
+# FASE 3.3: el motor se toma de DB_ENGINE en el .env (lo lee pydantic-settings),
+# con default "sqlite" si no está definido (ver el campo `db_engine` arriba).
+#
+# Antes existía `_auto_detect_engine()`, que ESCRIBÍA os.environ["DB_ENGINE"]
+# ANTES de que Settings() leyera el .env. Como en pydantic-settings las
+# variables de os.environ tienen PRIORIDAD sobre el archivo .env, ese
+# `setdefault` pisaba el valor del .env: aunque el usuario (o el wizard de
+# primer arranque) escribiera DB_ENGINE=mysql en el .env, la app terminaba
+# usando sqlite. Al eliminarlo, el .env vuelve a ser la única fuente de verdad
+# y la elección del wizard (sqlite o mysql) sí tiene efecto.
 
 settings = Settings()
 
