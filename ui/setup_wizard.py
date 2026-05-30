@@ -570,6 +570,7 @@ class SetupWizard(QDialog):
         self._inp_port = QSpinBox()
         self._inp_port.setRange(1, 65535)
         self._inp_port.setValue(3306)
+        self._inp_port.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._inp_user = QLineEdit("root")
         self._inp_password = QLineEdit()
         self._inp_password.setEchoMode(QLineEdit.Password)
