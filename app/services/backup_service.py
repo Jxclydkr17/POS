@@ -317,6 +317,11 @@ def _create_sqlite_backup(timestamp: str, suffix: str) -> str:
     try:
         # Conexión de solo lectura al origen
         src = sqlite3.connect(str(db_path))
+        # FASE 5.2 — Robustez de concurrencia: si se dispara un backup MANUAL
+        # mientras la tienda está vendiendo, la API de backup podría toparse con
+        # un lock de escritura. Con busy_timeout, src.backup() espera (hasta 5 s)
+        # a que el escritor termine en vez de fallar con "database is locked".
+        src.execute("PRAGMA busy_timeout=5000")
         dst = sqlite3.connect(str(filepath))
         try:
             src.backup(dst)

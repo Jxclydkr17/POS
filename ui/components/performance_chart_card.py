@@ -1,5 +1,6 @@
 from io import BytesIO
-import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel, QSizePolicy
 from PySide6.QtCore import Qt
@@ -61,8 +62,16 @@ class PerformanceChartCard(QFrame):
         gastos = [float(item.get("gastos", 0) or 0) for item in chart_data]
         utilidad = [float(item.get("utilidad", 0) or 0) for item in chart_data]
 
-        fig, ax = plt.subplots(figsize=(9, 3.6))
+        # FASE 5.3 — API orientada a objetos con canvas Agg (sin pyplot).
+        # pyplot mantiene un registro GLOBAL de figuras (estado compartido,
+        # no thread-safe) y, al estar activo el backend QtAgg por las otras
+        # vistas, creaba un figure-manager de Qt solo para guardar a PNG. Con
+        # Figure + FigureCanvasAgg el render es local, sin estado global y
+        # desacoplado del backend GUI.
+        fig = Figure(figsize=(9, 3.6))
+        FigureCanvasAgg(fig)  # canvas Agg off-screen (no GUI)
         fig.patch.set_facecolor("#1f2933")
+        ax = fig.add_subplot(111)
         ax.set_facecolor("#1f2933")
 
         ax.plot(fechas, ventas, marker="o", linewidth=2, label="Ventas")
@@ -78,11 +87,10 @@ class PerformanceChartCard(QFrame):
         for spine in ax.spines.values():
             spine.set_color("#374151")
 
-        plt.tight_layout()
+        fig.tight_layout()
 
         buf = BytesIO()
-        plt.savefig(buf, format="png", transparent=False, facecolor=fig.get_facecolor())
-        plt.close(fig)
+        fig.savefig(buf, format="png", transparent=False, facecolor=fig.get_facecolor())
         buf.seek(0)
 
         self._original_pixmap = QPixmap()
