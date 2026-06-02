@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models.user import User, ALL_PERMISSIONS, DEFAULT_PERMISSIONS
-from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token
+from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token, needs_rehash
 # ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
 # ── FASE 4 — Fix 4.3: Rate limiter para endpoints sin auth ──
@@ -58,8 +58,7 @@ class UserOut(BaseModel):
     permissions: list[str] = []
     created_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @classmethod
     def from_user(cls, user: User) -> "UserOut":
@@ -303,6 +302,22 @@ def login(
 
     # Login exitoso: limpiar intentos de este IP
     _clear_attempts(client_ip)
+
+    # ── FASE 3 — Migración transparente al esquema de hash más fuerte ──
+    # Si el usuario todavía tiene un hash legacy, lo re-hasheamos con el
+    # esquema nuevo (bcrypt-sha256) aprovechando que tenemos la contraseña
+    # en claro tras una verificación exitosa. Defensivo: cualquier fallo
+    # aquí NUNCA debe impedir un login válido.
+    if needs_rehash(user.password):
+        try:
+            user.password = hash_password(form_data.password)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.warning(
+                "No se pudo migrar el hash de '%s' al esquema nuevo.",
+                user.username, exc_info=True,
+            )
 
     token = create_access_token({"sub": user.username, "role": user.role})
     refresh = create_refresh_token({"sub": user.username, "role": user.role})

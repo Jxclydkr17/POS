@@ -1,12 +1,12 @@
 # ui/utils/http_worker.py
 """
-HTTP síncrono en el main thread — SIN threading.
+HTTP con I/O en hilo de fondo PURO + bombeo de eventos en el main thread.
 
 ═══════════════════════════════════════════════════════════════
-HISTORIA Y RAZÓN DEL CAMBIO
+HISTORIA Y RAZÓN DEL DISEÑO
 ═══════════════════════════════════════════════════════════════
 
-Versiones anteriores usaban QThreadPool + QRunnable + WorkerSignals
+Versiones muy anteriores usaban QThreadPool + QRunnable + WorkerSignals
 para ejecutar HTTP requests en background. El patrón es estándar en
 Qt, pero en este entorno específico:
 
@@ -15,20 +15,37 @@ Qt, pero en este entorno específico:
   - Windows
   - requests 2.33.1 / urllib3 2.6.3
 
-produjo crashes binarios ("Windows fatal exception: access violation")
+producía crashes binarios ("Windows fatal exception: access violation")
 intermitentes y difíciles de diagnosticar, originados en distintos
 patrones: race conditions en sockets, signals pendientes a QObjects
 ya destruidos, event filters globales sobrevivientes a sus dueños,
-WorkerSignals GC'd antes de que su emit se procesara, etc. Se
-parchearon varios pero la lista parecía infinita.
+WorkerSignals GC'd antes de que su emit se procesara, etc.
 
-Como el backend corre en localhost (127.0.0.1:8000) y cada request
-tarda ~10-50ms, el costo de hacerlo síncrono en el main thread es
-imperceptible para el usuario y elimina TODA la categoría de bugs
-relacionada con threading.
+La causa raíz era SIEMPRE la misma categoría: OBJETOS Qt cruzando hilos
+(QRunnable/QObject/Signal vivos en el worker y emitidos al main thread).
+
+Como solución intermedia se pasó TODO a síncrono en el main thread, lo
+que eliminó los crashes pero congelaba la ventana en operaciones lentas
+(reportes, analítica, historial grande, exportes, envíos a Hacienda).
 
 ═══════════════════════════════════════════════════════════════
-API PÚBLICA — IDÉNTICA A LA VERSIÓN ASYNC
+DISEÑO ACTUAL (FASE 2) — responsivo y SIN la categoría de crash vieja
+═══════════════════════════════════════════════════════════════
+
+Ahora el trabajo de RED corre en un threading.Thread de Python PURO que
+NUNCA toca Qt (ni widgets, ni signals, ni QObjects). El resultado vuelve
+por valor tras join(), y los callbacks se ejecutan SIEMPRE en el main
+thread, igual que antes. Mientras el hilo trabaja, el main thread bombea
+solo eventos que no son de input (ExcludeUserInputEvents) para que la
+ventana siga viva sin aceptar clicks. Ver _run_blocking_io para el detalle
+y las garantías de seguridad (incluida la guardia de re-entrancia).
+
+Esto evita la categoría de crash vieja (no hay objetos Qt en el worker) y
+a la vez elimina los congelamientos. En localhost casi todo es rápido y ni
+siquiera se llega a bombear (período de gracia).
+
+═══════════════════════════════════════════════════════════════
+API PÚBLICA — IDÉNTICA A LAS VERSIONES ANTERIORES
 ═══════════════════════════════════════════════════════════════
 
 Para que ningún otro archivo del proyecto necesite cambiar, este
@@ -41,10 +58,9 @@ módulo mantiene las mismas funciones con las mismas firmas:
   - api_request(method, url, *, timeout, **kwargs)
   - configure_thread_pool()   ← no-op, queda por compatibilidad
 
-La única diferencia visible es que los callbacks se invocan ANTES
-de que `api_call` retorne, no después. Como casi todo el código
-del proyecto sólo espera resultados vía callbacks, esto es
-transparente.
+Los callbacks se invocan ANTES de que `api_call` retorne (igual que en la
+versión síncrona). Como casi todo el código del proyecto sólo espera
+resultados vía callbacks, esto es transparente.
 
 ═══════════════════════════════════════════════════════════════
 FASE 6 — Fix 6.X: Auto-refresh client-side ante 401
@@ -67,6 +83,7 @@ refresh_token válido.
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, Callable, Optional
 from urllib.parse import urlsplit
 
@@ -82,6 +99,38 @@ logger = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 15
 CONNECT_TIMEOUT = 5
 
+# ── FASE 2 — Timeout para operaciones que el backend resuelve hablando
+# con Hacienda (envío / consulta de comprobantes). El backend espera
+# hasta 30s a Hacienda (hacienda_client._HTTP_TIMEOUT = 30). La UI DEBE
+# esperar MÁS que eso; si la UI cortara antes (en 15s o incluso a los
+# mismos 30s, empatando con el backend), el usuario vería "el servidor
+# tardó demasiado" aunque el envío SÍ hubiera tenido éxito en el backend.
+# 45s da margen para que el backend siempre termine primero y devuelva la
+# respuesta real (aceptado / rechazado / error concreto).
+SLOW_READ_TIMEOUT = 45
+
+# Rutas cuyo backend puede tardar por hablar con Hacienda.
+_SLOW_PATH_HINTS = ("/einvoices",)
+
+
+def _read_timeout_for(url: str, explicit: Optional[int] = None) -> int:
+    """Resuelve el read-timeout apropiado para una URL.
+
+    - Si el caller pasó un timeout explícito, se respeta.
+    - Endpoints de comprobantes electrónicos (/einvoices…) → SLOW_READ_TIMEOUT
+      (mayor que el timeout del backend hacia Hacienda).
+    - El resto → DEFAULT_TIMEOUT.
+    """
+    if explicit is not None:
+        return explicit
+    try:
+        path = urlsplit(url).path
+    except Exception:
+        return DEFAULT_TIMEOUT
+    if any(hint in path for hint in _SLOW_PATH_HINTS):
+        return SLOW_READ_TIMEOUT
+    return DEFAULT_TIMEOUT
+
 # Señal especial que indica que el token expiró (401)
 AUTH_EXPIRED_SENTINEL = "__AUTH_EXPIRED__"
 
@@ -94,13 +143,16 @@ _AUTH_PATHS_NO_RETRY = (
     "/users/setup",
 )
 
-# Una única Session global. Como TODAS las requests corren en el
-# main thread (síncronas), no hay race condition de threads.
-# Mantenemos keep-alive porque seguimos hablando con el mismo host.
+# Una única Session global compartida. Las requests pueden ahora correr
+# en un hilo de fondo (ver _run_blocking_io) además del main thread, pero
+# es seguro: NUNCA mutamos el estado de la Session (headers/auth/cookies se
+# pasan por request, no se guardan en la Session), y el pool de urllib3 es
+# thread-safe. El pool se dimensiona para tolerar una operación lenta en
+# vuelo + alguna request corta concurrente sin quedarse sin conexiones.
 _http_session = requests.Session()
 _adapter = requests.adapters.HTTPAdapter(
-    pool_connections=2,
-    pool_maxsize=2,
+    pool_connections=4,
+    pool_maxsize=4,
     max_retries=0,
 )
 _http_session.mount("http://", _adapter)
@@ -148,6 +200,98 @@ def _set_busy(busy: bool) -> None:
         app.processEvents(QEventLoop.ExcludeUserInputEvents)
     else:
         QApplication.restoreOverrideCursor()
+
+
+# ═══════════════════════════════════════════════════════════════
+# FASE 2 — Fix: UI responsiva durante operaciones lentas
+# ═══════════════════════════════════════════════════════════════
+#
+# Problema: hacer el HTTP síncrono en el main thread congela la ventana
+# durante operaciones lentas (reportes, analítica, historial grande,
+# exportes, envíos a Hacienda). En localhost casi todo es rápido (~10-50ms),
+# pero las pocas operaciones lentas dejaban la app en "No responde".
+#
+# Solución (sin reintroducir los crashes del viejo QThreadPool):
+#   - El trabajo de RED corre en un hilo de fondo de Python puro
+#     (threading.Thread). Ese hilo SOLO hace requests/parseo: NUNCA toca
+#     widgets, signals ni QObjects. Por eso no hay objetos Qt cruzando
+#     hilos — que era el origen de los access violations del diseño viejo
+#     (QRunnable + WorkerSignals emitidos a QObjects ya destruidos, etc.).
+#   - El resultado se devuelve por valor tras join(); los callbacks se
+#     ejecutan DESPUÉS, en el main thread, igual que siempre.
+#   - Mientras el hilo trabaja, el main thread bombea SOLO eventos que no
+#     son de input (paint, timers, señales en cola) con
+#     ExcludeUserInputEvents. Así la ventana sigue pintando y Windows no
+#     marca "No responde", pero NO se aceptan clicks → el usuario no puede
+#     disparar otra operación encima (evita re-entrancia descontrolada).
+#
+# Período de gracia: las llamadas rápidas (≤ _PUMP_GRACE_SECONDS) terminan
+# sin que se procese un solo evento → su comportamiento es idéntico al
+# síncrono de antes. El bombeo solo se activa si la operación se alarga.
+#
+# Re-entrancia: si un QTimer de debounce (búsquedas) dispara otra request
+# durante el bombeo, se detecta con _pump_depth y se ejecuta DIRECTO (sin
+# anidar event loops). Igual fuera del main thread (p. ej. un QThread de
+# otra vista): ejecución directa, sin bombear.
+# ═══════════════════════════════════════════════════════════════
+_PUMP_GRACE_SECONDS = 0.05   # llamadas más rápidas que esto no bombean
+_PUMP_SLICE_MS = 15          # ms máx. por ciclo de processEvents
+_PUMP_POLL_SECONDS = 0.005   # respiro entre ciclos
+_pump_depth = 0              # guardia de re-entrancia (solo main thread)
+
+
+def _on_main_thread() -> bool:
+    """True si corremos en el hilo principal (el dueño del event loop Qt)."""
+    return threading.current_thread() is threading.main_thread()
+
+
+def _run_blocking_io(work: Callable[[], Any]) -> Any:
+    """Ejecuta `work()` —función de RED PURA, que NO toca Qt— sin congelar
+    la UI.
+
+    Devuelve lo que devuelva `work()`, o relanza su excepción en el main
+    thread (para que el manejo de errores de los callers no cambie).
+    """
+    global _pump_depth
+    app = QApplication.instance()
+
+    # Sin QApplication (tests/headless), fuera del main thread (un QThread
+    # de otra vista), o re-entrante (un timer disparó esto durante un
+    # bombeo) → ejecución directa, sin anidar event loops.
+    if app is None or not _on_main_thread() or _pump_depth > 0:
+        return work()
+
+    result: dict[str, Any] = {}
+    done = threading.Event()
+
+    def _runner() -> None:
+        try:
+            result["value"] = work()
+        except BaseException as exc:        # se relanza en el main thread
+            result["error"] = exc
+        finally:
+            done.set()
+
+    worker = threading.Thread(target=_runner, name="vpx-http", daemon=True)
+    worker.start()
+
+    # Llamadas rápidas: salir sin tocar el event loop (comportamiento
+    # idéntico al síncrono previo, sin riesgo de re-entrancia).
+    if not done.wait(_PUMP_GRACE_SECONDS):
+        _pump_depth += 1
+        try:
+            while not done.is_set():
+                app.processEvents(QEventLoop.ExcludeUserInputEvents, _PUMP_SLICE_MS)
+                done.wait(_PUMP_POLL_SECONDS)
+            # Último ciclo para vaciar pintura pendiente antes de retornar.
+            app.processEvents(QEventLoop.ExcludeUserInputEvents)
+        finally:
+            _pump_depth -= 1
+
+    worker.join()
+    if "error" in result:
+        raise result["error"]
+    return result.get("value")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -251,9 +395,9 @@ def _do_request(method: str, url: str, **kwargs):
     se intenta refrescar el access_token y reintentar UNA vez antes de
     devolver AUTH_EXPIRED_SENTINEL.
     """
-    # Timeout obligatorio
+    # Timeout obligatorio (endpoint-aware: /einvoices usa SLOW_READ_TIMEOUT)
     if "timeout" not in kwargs:
-        kwargs["timeout"] = (CONNECT_TIMEOUT, DEFAULT_TIMEOUT)
+        kwargs["timeout"] = (CONNECT_TIMEOUT, _read_timeout_for(url))
 
     try:
         fn = getattr(_http_session, method.lower(), None)
@@ -359,10 +503,12 @@ def api_call(
     _label = f"{method.upper()} {url}"
     logger.debug("api_call ⇒ %s", _label)
 
-    # FASE 2.8 — Fix 2.8: cursor de espera durante la request bloqueante.
+    # FASE 2.8 — cursor de espera; FASE 2 — UI responsiva (event pump).
     _set_busy(True)
     try:
-        success, payload, status, auth_expired = _do_request(method, url, **kwargs)
+        success, payload, status, auth_expired = _run_blocking_io(
+            lambda: _do_request(method, url, **kwargs)
+        )
 
         try:
             if auth_expired:
@@ -397,11 +543,11 @@ def run_async(
     _label = getattr(fn, "__name__", "fn")
     logger.debug("run_async ⇒ %s", _label)
 
-    # FASE 2.8 — Fix 2.8: cursor de espera durante la ejecución bloqueante.
+    # FASE 2.8 — cursor de espera; FASE 2 — UI responsiva (event pump).
     _set_busy(True)
     try:
         try:
-            result = fn(*args, **kwargs)
+            result = _run_blocking_io(lambda: fn(*args, **kwargs))
         except requests.exceptions.ConnectionError:
             _invoke_callback(
                 on_error,
@@ -434,18 +580,21 @@ def api_request(
     method: str,
     url: str,
     *,
-    timeout: int = DEFAULT_TIMEOUT,
+    timeout: Optional[int] = None,
     **kwargs,
 ) -> requests.Response:
     """
-    Wrapper síncrono de requests con timeout garantizado.
+    Wrapper de requests con timeout garantizado.
 
     Devuelve el Response directamente — el caller maneja status_code
-    y excepciones. Mantiene la misma firma que la versión anterior.
+    y excepciones. Misma firma que antes salvo que `timeout` ahora es
+    opcional: si no se pasa, se elige según el endpoint
+    (endpoints /einvoices… usan SLOW_READ_TIMEOUT; el resto DEFAULT_TIMEOUT).
+    Pasar un timeout explícito sigue funcionando igual.
 
-    FASE 2.8 — Fix 2.8: muestra cursor de espera durante la llamada,
-    aunque sea bloqueante, para que el cajero vea que la app está
-    trabajando y no piense que se colgó.
+    FASE 2 — UI responsiva: la request corre en un hilo de fondo y el main
+    thread bombea eventos (sin aceptar input) si la operación se alarga,
+    para que la ventana no quede en "No responde".
 
     FASE 6 — Fix 6.X: Si vuelve 401 en endpoint NO-auth y hay
     refresh_token, intenta /users/refresh y reintenta UNA vez. El
@@ -453,13 +602,11 @@ def api_request(
     request original (probablemente 401) si el refresh falló o no
     se intentó. El caller no necesita cambios.
     """
-    kwargs["timeout"] = (CONNECT_TIMEOUT, timeout)
-    fn = getattr(_http_session, method.lower())
+    kwargs["timeout"] = (CONNECT_TIMEOUT, _read_timeout_for(url, timeout))
 
-    _set_busy(True)
-    try:
+    def _do() -> requests.Response:
+        fn = getattr(_http_session, method.lower())
         resp = fn(url, **kwargs)
-
         # FASE 6 — Fix 6.X: auto-refresh+retry transparente.
         if resp.status_code == 401:
             try:
@@ -469,8 +616,11 @@ def api_request(
             retried = _try_refresh_and_retry(method, url, **kwargs)
             if retried is not None:
                 resp = retried
-
         return resp
+
+    _set_busy(True)
+    try:
+        return _run_blocking_io(_do)
     finally:
         _set_busy(False)
 

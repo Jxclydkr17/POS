@@ -25,16 +25,33 @@ SETUP:
 from __future__ import annotations
 
 import logging
+import sys
 from typing import Optional, Any
 from pathlib import Path
 
+from app.core.config import resolve_resource
+
 logger = logging.getLogger(__name__)
+
+# True si corremos dentro del .exe empaquetado (PyInstaller).
+_FROZEN = bool(getattr(sys, "frozen", False))
 
 # ──────────────────────────────────────────────────────────────
 # FIX: La carpeta real es "V4.4" (mayúscula).  En Linux el
 #      filesystem es case-sensitive y "v4.4" no la encontraba.
+#
+# FASE 3 — Resolución consciente del empaquetado: en el .exe los XSD
+# viven en _internal/app/einvoice/schemas/V4.4 (RESOURCE_DIR), no junto
+# al ejecutable. resolve_resource() los busca ahí primero y, como red de
+# seguridad, también junto al .exe (por si el usuario deja XSD nuevos de
+# Hacienda sin recompilar). En desarrollo resuelve a la raíz del proyecto.
+# El fallback a la ruta relativa al módulo cubre el caso degenerado en que
+# resolve_resource no encuentre nada (entonces _get_xsd_path avisará).
 # ──────────────────────────────────────────────────────────────
-XSD_BASE_DIR = Path(__file__).parent / "schemas" / "V4.4"
+XSD_BASE_DIR = (
+    resolve_resource("app/einvoice/schemas/V4.4")
+    or (Path(__file__).parent / "schemas" / "V4.4")
+)
 
 # Mapeo doc_type → nombre del archivo XSD
 XSD_FILES = {
@@ -50,16 +67,39 @@ XSD_FILES = {
 # Cache de schemas compilados
 _schema_cache: dict[str, Any] = {}
 
+# ── FASE 3 — Aviso ruidoso (no silencioso) cuando la validación se
+# desactiva por falta de lxml o de los XSD. En un .exe empaquetado eso es
+# un problema de despliegue real (se estaría firmando/enviando a Hacienda
+# SIN validar localmente), así que se registra como ERROR; en desarrollo,
+# como WARNING. Se avisa UNA sola vez por motivo para no inundar el log.
+_unavailable_warned: set[str] = set()
+
+
+def _warn_unavailable(reason_key: str, message: str) -> None:
+    """Registra, UNA vez por motivo, que la validación XSD no está activa."""
+    if reason_key in _unavailable_warned:
+        return
+    _unavailable_warned.add(reason_key)
+    if _FROZEN:
+        logger.error("VALIDACIÓN XSD DESACTIVADA — %s", message)
+    else:
+        logger.warning("Validación XSD desactivada — %s", message)
+
+
 # Flag para saber si lxml está disponible
 _LXML_AVAILABLE = False
 try:
     from lxml import etree as lxml_etree
     _LXML_AVAILABLE = True
 except ImportError:
-    logger.warning(
-        "lxml no está instalado. Validación XSD deshabilitada. "
-        "Instalá con: pip install lxml"
-    )
+    # Aviso inmediato y ruidoso (en frozen, ERROR) — sin lxml no hay
+    # validación posible y los documentos saldrían sin verificar.
+    _msg = ("lxml no está instalado: los comprobantes se firmarían/enviarían "
+            "SIN validación XSD local. Instalá lxml (pip install lxml).")
+    if bool(getattr(sys, "frozen", False)):
+        logger.error("VALIDACIÓN XSD DESACTIVADA — %s", _msg)
+    else:
+        logger.warning("Validación XSD desactivada — %s", _msg)
 
 
 def _get_xsd_path(doc_type: str) -> Optional[Path]:
@@ -108,15 +148,19 @@ def validate_xml(xml_string: str, doc_type: str) -> list[str]:
         (validación deshabilitada, no bloquea el flujo).
     """
     if not _LXML_AVAILABLE:
-        logger.debug("Validación XSD omitida: lxml no disponible")
+        _warn_unavailable(
+            "lxml",
+            "lxml no disponible; el XML se acepta SIN validar contra el XSD.",
+        )
         return []
 
     schema = _load_schema(doc_type)
     if schema is None:
-        logger.debug(
-            f"Validación XSD omitida para {doc_type}: "
-            f"XSD no encontrado en {XSD_BASE_DIR}. "
-            f"Descargalo de cdn.comprobanteselectronicos.go.cr"
+        _warn_unavailable(
+            f"schema:{doc_type}",
+            f"no se encontró/compiló el XSD de '{doc_type}' en {XSD_BASE_DIR}; "
+            f"ese tipo de documento se acepta SIN validar. "
+            f"Descargalo de cdn.comprobanteselectronicos.go.cr.",
         )
         return []
 
@@ -156,15 +200,24 @@ def get_validation_status() -> dict:
     """Retorna el estado de disponibilidad de validación para cada tipo de documento."""
     status = {
         "lxml_installed": _LXML_AVAILABLE,
+        "frozen": _FROZEN,
         "xsd_directory": str(XSD_BASE_DIR),
-        "xsd_directory_exists": XSD_BASE_DIR.exists(),
+        "xsd_directory_exists": Path(XSD_BASE_DIR).exists(),
         "schemas": {},
     }
+    all_present = True
     for doc_type, filename in XSD_FILES.items():
         path = XSD_BASE_DIR / filename
+        exists = path.exists()
+        all_present = all_present and exists
         status["schemas"][doc_type] = {
             "filename": filename,
-            "exists": path.exists(),
+            "exists": exists,
             "path": str(path),
         }
+    # Resumen de alto nivel: la validación está realmente ACTIVA solo si
+    # lxml está instalado Y existen todos los XSD. Útil para que la pestaña
+    # de diagnóstico muestre un estado claro en vez de inferirlo.
+    status["all_schemas_present"] = all_present
+    status["validation_active"] = bool(_LXML_AVAILABLE and all_present)
     return status

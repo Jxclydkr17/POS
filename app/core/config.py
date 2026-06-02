@@ -18,7 +18,7 @@ import logging
 from pathlib import Path
 from urllib.parse import quote_plus
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,77 @@ def get_app_dir() -> Path:
         return Path(__file__).resolve().parents[2]
 
 APP_DIR = get_app_dir()
+
+
+# ──────────────────────────────────────────────────────────────
+# Directorio de RECURSOS de solo lectura empaquetados (read-only)
+# ──────────────────────────────────────────────────────────────
+# IMPORTANTE — distinción frente a APP_DIR:
+#
+#   - APP_DIR       → datos ESCRIBIBLES y persistentes del usuario
+#                     (.env, violette_pos.db, data/logs, data/backups,
+#                      data/pdfs, certs). En el .exe es la carpeta del
+#                      ejecutable ({app}\), que sobrevive a las
+#                      actualizaciones.
+#
+#   - RESOURCE_DIR  → recursos de SOLO LECTURA que viajan dentro del
+#                     paquete (migraciones alembic, esquemas XSD, el
+#                     catálogo economic_activities.csv, VERSION, los
+#                     assets de ui/assets, la plantilla .env.example).
+#
+# Por qué son distintos en el .exe:
+#   PyInstaller 6.x (onedir) coloca TODOS los archivos empaquetados en
+#   una subcarpeta `_internal\` y deja solo el .exe en la raíz. Por eso
+#   `sys._MEIPASS` (= la carpeta `_internal`) es la raíz de los recursos,
+#   mientras que `Path(sys.executable).parent` (= {app}\) es la carpeta
+#   de datos escribibles. Resolver los recursos contra APP_DIR fallaba
+#   porque buscaba en {app}\ archivos que en realidad están en
+#   {app}\_internal\ (alembic.ini, el CSV, VERSION, el logo de los PDF…).
+#
+# En modo desarrollo ambas rutas coinciden con la raíz del proyecto, así
+# que el comportamiento es idéntico al de siempre.
+def get_resource_dir() -> Path:
+    """Retorna la raíz de los recursos de solo lectura empaquetados."""
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            return Path(meipass)
+        # Fallback defensivo: si por alguna razón no hay _MEIPASS
+        # (build con layout plano antiguo), los recursos están junto
+        # al ejecutable.
+        return Path(sys.executable).parent
+    # Desarrollo: raíz del proyecto (igual que APP_DIR).
+    return Path(__file__).resolve().parents[2]
+
+
+RESOURCE_DIR = get_resource_dir()
+
+
+def resolve_resource(relative_path: str) -> Path | None:
+    """Resuelve un recurso empaquetado de solo lectura.
+
+    Busca primero en RESOURCE_DIR (la ubicación correcta en el .exe) y,
+    como red de seguridad, también en APP_DIR (cubre builds con layout
+    plano o copias manuales del instalador). En desarrollo ambas rutas
+    son la misma, así que se comporta como antes.
+
+    Args:
+        relative_path: ruta relativa al recurso, p. ej. "VERSION" o
+                       "ui/assets/logo.png".
+
+    Returns:
+        Path absoluto si el recurso existe en alguna de las ubicaciones,
+        None si no se encuentra.
+    """
+    seen: set[Path] = set()
+    for base in (RESOURCE_DIR, APP_DIR):
+        if base in seen:
+            continue
+        seen.add(base)
+        candidate = base / relative_path
+        if candidate.exists():
+            return candidate
+    return None
 
 
 # ──────────────────────────────────────────────────────────────
@@ -93,8 +164,12 @@ def _ensure_secret_key() -> str:
             env_path.write_text(content, encoding="utf-8")
         # DESPUÉS — Si no hay .env, copia desde .env.example o crea uno completo
         else:
-            env_example = APP_DIR / ".env.example"
-            if env_example.exists():
+            # La plantilla .env.example es un recurso de SOLO LECTURA que
+            # viaja dentro del paquete (en el .exe vive en _internal\), así
+            # que se resuelve con resolve_resource (RESOURCE_DIR + fallback
+            # a APP_DIR). El .env destino sí se crea en APP_DIR (escribible).
+            env_example = resolve_resource(".env.example")
+            if env_example is not None:
                 import shutil
                 shutil.copy2(env_example, env_path)
                 # Ahora sí, reemplaza el SECRET_KEY dentro del template copiado
@@ -201,9 +276,10 @@ class Settings(BaseSettings):
             raise ValueError("HACIENDA_ENV debe ser 'sandbox' o 'production'")
         return v or "sandbox"
 
-    class Config:
-        env_file = os.environ.get("VIOLETTE_ENV_FILE", str(APP_DIR / ".env"))
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=os.environ.get("VIOLETTE_ENV_FILE", str(APP_DIR / ".env")),
+        env_file_encoding="utf-8",
+    )
 
 
 # ── Resolución del motor de BD ──
@@ -245,13 +321,17 @@ def is_sqlite() -> bool:
 # ── FASE 5 — Fix 5.4 + Fix 3.2: Versión centralizada ──────
 # Fuente única de verdad: archivo VERSION en la raíz del proyecto.
 # config.py, installer.iss y build.bat leen de este mismo archivo.
+# El VERSION es un recurso de solo lectura empaquetado → resolve_resource
+# (en el .exe vive en _internal\, no junto al ejecutable).
 def _read_version() -> str:
-    version_file = APP_DIR / "VERSION"
-    try:
-        return version_file.read_text(encoding="utf-8").strip()
-    except (FileNotFoundError, OSError):
-        logger.warning("Archivo VERSION no encontrado, usando fallback '1.0.0'")
-        return "1.0.0"
+    version_file = resolve_resource("VERSION")
+    if version_file is not None:
+        try:
+            return version_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    logger.warning("Archivo VERSION no encontrado, usando fallback '1.0.0'")
+    return "1.0.0"
 
 APP_VERSION = _read_version()
 
@@ -272,23 +352,23 @@ def get_pdf_dir() -> Path:
 # ── FASE 7 — Fix 7.1: Resolución portable de assets ─────────
 # Las rutas relativas como "ui/assets/logo.png" no funcionan
 # cuando la app corre como .exe empaquetado con PyInstaller,
-# porque el CWD puede ser distinto a APP_DIR.
-# Estas funciones resuelven assets relativas a APP_DIR, que ya
-# maneja correctamente tanto el modo dev como el modo .exe
-# (ver get_app_dir() arriba).
+# porque el CWD puede ser distinto y, en PyInstaller 6.x, los assets
+# viajan en la subcarpeta _internal\ (no junto al ejecutable).
+# get_asset_path resuelve los assets como recursos de solo lectura
+# (RESOURCE_DIR primero, con fallback a APP_DIR), de modo que el logo
+# de las facturas/PDF aparece tanto en modo dev como en el .exe.
 
 def get_asset_path(relative_path: str) -> Path | None:
-    """Resuelve un asset relativo a APP_DIR.
+    """Resuelve un asset empaquetado de solo lectura (ej: el logo).
 
     Args:
-        relative_path: Ruta relativa al directorio de la app
+        relative_path: Ruta relativa al recurso
                        (ej: "ui/assets/logo.png").
 
     Returns:
         Path absoluto si el archivo existe, None si no.
     """
-    full = APP_DIR / relative_path
-    return full if full.exists() else None
+    return resolve_resource(relative_path)
 
 
 def get_logo_path() -> str | None:

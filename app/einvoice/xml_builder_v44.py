@@ -469,10 +469,35 @@ def _process_detail_line(
         if not product:
             raise ValueError(f"Producto no encontrado ID {d.product_id}")
 
+    # ── FASE 1 — CABYS: preferir el SNAPSHOT de la línea ──
+    # Para productos del inventario, SaleDetail.cabys_code guarda el CABYS
+    # vigente al momento de la venta. Si después se corrige/edita el CABYS
+    # del producto, la factura debe reflejar lo que se vendió. Si la línea
+    # no tiene snapshot (ventas antiguas con valor NULL), se cae al CABYS
+    # actual del producto.
+    #
+    # Para productos comunes, `product` es un _VirtualCommonProduct cuyo
+    # cabys_code ya proviene de SaleDetail.common_cabys_code, así que el
+    # snapshot de la línea (d.cabys_code) es None y se usa ese valor.
+    cabys_code = _getv(d, "cabys_code") or getattr(product, "cabys_code", None)
+
     qty = Decimal(str(d.quantity))
     unit_gross = Decimal(str(d.unit_price))
 
-    tax_rate_raw = Decimal(str(product.tax_rate or 0))
+    # ── FASE 1 — Tarifa de IVA: usar el SNAPSHOT de la línea ──
+    # SaleDetail.tax_rate guarda la tarifa REALMENTE aplicada al cliente
+    # al momento de la venta. Si después se edita la tarifa del producto,
+    # la factura debe reflejar lo que se cobró, no la tarifa nueva. Solo
+    # si la línea no tiene snapshot (ventas antiguas con valor NULL) se
+    # cae a la tarifa actual del producto.
+    #
+    # IMPORTANTE: distinguimos None (sin snapshot → fallback) de 0
+    # (exento 0% → se respeta). Por eso comparamos contra None y NO
+    # usamos `or`, que trataría Decimal("0") como ausencia de valor.
+    line_rate = _getv(d, "tax_rate")
+    if line_rate is None:
+        line_rate = getattr(product, "tax_rate", 0) or 0
+    tax_rate_raw = Decimal(str(line_rate))
     if tax_rate_raw > 0 and tax_rate_raw < 1:
         rate_pct = tax_rate_raw * Decimal("100")
     else:
@@ -586,7 +611,7 @@ def _process_detail_line(
         impuesto_neto = Decimal("0")
     monto_total_linea = _q5(subtotal + impuesto_neto)
 
-    is_svc = _is_service(product.cabys_code)
+    is_svc = _is_service(cabys_code)
 
     acc.add_line(
         is_svc=is_svc, monto_total=monto_total, descuento=descuento,
@@ -602,7 +627,7 @@ def _process_detail_line(
     _add(linea, "NumeroLinea", str(line_num))
 
     # PartidaArancelaria (FEE mercancías)
-    if doc_type == "FEE" and _is_merchandise(product.cabys_code):
+    if doc_type == "FEE" and _is_merchandise(cabys_code):
         pa = _getv(product, "partida_arancelaria")
         if pa:
             _add(linea, "PartidaArancelaria", _safe(pa, 12))
@@ -610,8 +635,8 @@ def _process_detail_line(
             raise ValueError(f"Producto '{product.name}' (ID {product.id}) requiere PartidaArancelaria para FEE.")
 
     # CodigoCABYS
-    if product.cabys_code:
-        _add(linea, "CodigoCABYS", _safe(product.cabys_code, 13))
+    if cabys_code:
+        _add(linea, "CodigoCABYS", _safe(cabys_code, 13))
 
     # FASE 1.1: RegistroFiscal8707
     reg_fiscal = _getv(product, "registro_fiscal_8707")
@@ -716,7 +741,7 @@ def _process_detail_line(
     _add(imp_node, "Monto", str(impuesto))
 
     # MontoExportacion (FEE mercancías)
-    if doc_type == "FEE" and _is_merchandise(product.cabys_code):
+    if doc_type == "FEE" and _is_merchandise(cabys_code):
         monto_exp = _getv(d, "monto_exportacion")
         if monto_exp and Decimal(str(monto_exp)) > 0:
             _add(imp_node, "MontoExportacion", str(_q5(Decimal(str(monto_exp)))))

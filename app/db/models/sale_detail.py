@@ -22,6 +22,15 @@ class SaleDetail(Base):
     tax_rate = Column(Numeric(5, 2), nullable=True, default=0)
     tax_amount = Column(Numeric(18, 5), nullable=True, default=0)
 
+    # ── FASE 1 — Snapshot del CABYS del producto al momento de la venta ──
+    # Para productos del inventario, guardamos aquí el CABYS vigente cuando
+    # se hizo la venta. Así, si luego se corrige/edita el CABYS del producto,
+    # la factura electrónica (xml_builder_v44) sigue reflejando lo que se
+    # vendió. NULL → ventas antiguas previas al snapshot: el builder cae al
+    # CABYS actual del producto (retrocompatibilidad).
+    # (Los productos comunes usan `common_cabys_code`, más abajo.)
+    cabys_code = Column(String(20), nullable=True)
+
     # PRODUCTO COMÚN: línea sin inventario
     is_common = Column(Boolean, default=False, nullable=False)
     common_description = Column(String(200), nullable=True)

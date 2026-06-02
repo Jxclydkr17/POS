@@ -15,10 +15,21 @@ from __future__ import annotations
 
 from datetime import datetime
 import random
+import threading
 from sqlalchemy.orm import Session
 from app.db.models.document_sequence import DocumentSequence
+from app.db.database import SessionLocal
 from app.utils.dt import now_cr, utcnow
 from app.utils.db_compat import lock_for_update
+
+
+# ── FASE 3 — Lock de proceso para la reserva de consecutivos ──
+# Serializa la asignación de consecutivos entre los hilos del worker. En el
+# .exe (SQLite, un solo proceso) esto es lo que de verdad evita duplicados,
+# porque en SQLite el FOR UPDATE es no-op y un flush SIN commit no es visible
+# desde otra conexión. En MySQL multi-proceso, además, el FOR UPDATE de la
+# transacción aislada (abajo) serializa entre procesos distintos.
+_seq_lock = threading.Lock()
 
 
 def _digits_only(s: str) -> str:
@@ -71,44 +82,65 @@ def build_clave(issuer_id_number: str, consecutivo: str, dt: datetime | None = N
 
 def next_sequence_number(db: Session, branch_code: str, terminal_code: str, document_type: str) -> int:
     """
-    Incremento seguro usando SQLAlchemy ORM + bloqueo pesimista.
-    Compatible con SQLite y MySQL.
+    Reserva atómica del siguiente consecutivo, segura ante concurrencia.
 
-    En MySQL: aplica SELECT ... FOR UPDATE para evitar que dos cajeros
-    lean el mismo consecutivo simultáneamente.
-    En SQLite: el bloqueo es no-op (SQLite serializa escrituras a nivel
-    de archivo, así que no hay race condition real).
+    Estrategia (cubre SQLite del .exe y MySQL multi-terminal):
+      - Lock de proceso (_seq_lock) → serializa la reserva entre los hilos
+        del worker.
+      - Transacción AISLADA de commit inmediato (sesión propia) → el número
+        queda "consumido" y visible a las demás conexiones al instante. Esto
+        es lo que cierra el race en SQLite, donde el FOR UPDATE es no-op y un
+        flush sin commit no se ve desde otra conexión.
+      - FOR UPDATE (lock_for_update) dentro de esa transacción → serializa
+        también entre procesos en MySQL.
 
-    Guarda secuencia por (branch_code, terminal_code, document_type).
+    Importante:
+      - El número se consume de forma DURABLE aquí mismo. Si el documento que
+        lo usa falla después, queda un HUECO en la numeración, algo que
+        Hacienda permite. Lo que NO se permite —y esto lo evita— es DUPLICAR
+        un consecutivo.
+      - Se usa una sesión propia (no `db`) para no arrastrar ni comitear los
+        cambios pendientes del caller. `db` se conserva en la firma por
+        compatibilidad con los llamadores existentes.
+      - Con autoflush=False, ningún caller tiene el write-lock de SQLite
+        tomado en este punto (solo han "staged" objetos), por lo que la
+        sesión aislada puede tomar el lock de escritura sin conflicto.
     """
     doc = normalize_document_type(document_type)
 
-    # Buscar fila existente CON bloqueo pesimista
-    # lock_for_update() aplica WITH FOR UPDATE en MySQL, no-op en SQLite
-    seq = lock_for_update(
-        db.query(DocumentSequence)
-        .filter(
-            DocumentSequence.branch_code == branch_code,
-            DocumentSequence.terminal_code == terminal_code,
-            DocumentSequence.document_type == doc,
-        )
-    ).first()
+    with _seq_lock:
+        alloc = SessionLocal()
+        try:
+            # Buscar fila existente CON bloqueo pesimista.
+            # lock_for_update() aplica WITH FOR UPDATE en MySQL, no-op en SQLite.
+            seq = lock_for_update(
+                alloc.query(DocumentSequence)
+                .filter(
+                    DocumentSequence.branch_code == branch_code,
+                    DocumentSequence.terminal_code == terminal_code,
+                    DocumentSequence.document_type == doc,
+                )
+            ).first()
 
-    if seq is None:
-        # Crear nueva secuencia
-        seq = DocumentSequence(
-            branch_code=branch_code,
-            terminal_code=terminal_code,
-            document_type=doc,
-            next_number=1,
-            updated_at=utcnow(),
-        )
-        db.add(seq)
-        db.flush()
+            if seq is None:
+                # Crear nueva secuencia
+                seq = DocumentSequence(
+                    branch_code=branch_code,
+                    terminal_code=terminal_code,
+                    document_type=doc,
+                    next_number=1,
+                    updated_at=utcnow(),
+                )
+                alloc.add(seq)
+                alloc.flush()
 
-    current = seq.next_number
-    seq.next_number = current + 1
-    seq.updated_at = utcnow()
-    db.flush()
-
-    return current
+            current = seq.next_number
+            seq.next_number = current + 1
+            seq.updated_at = utcnow()
+            alloc.commit()
+            return current
+        except Exception:
+            alloc.rollback()
+            raise
+        finally:
+            alloc.close()

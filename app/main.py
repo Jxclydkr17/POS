@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import asyncio
+import os
 # FASE 4.1 — Fix: import con efecto colateral (registra todos los modelos en
 # Base.metadata). Antes era `import app.db.models`, que liga el nombre `app` al
 # PAQUETE app; más abajo `app = FastAPI(...)` lo reasignaba a la instancia. Esa
@@ -226,9 +227,40 @@ app = FastAPI(
 # ══════════════════════════════════════════════════════════════
 # FASE 5.1: CORS restringido
 # ══════════════════════════════════════════════════════════════
-_CORS_ORIGINS = [
-    "http://127.0.0.1:8000",
-    "http://localhost:8000",
+# El launcher puede caer a un puerto alterno si el 8000 está ocupado por
+# un programa ajeno (launcher.py: VIOLETTE_PORT_RANGE_START/END, default
+# 8000..8009). Por eso CORS debe permitir TODOS los puertos de ese rango
+# en localhost/127.0.0.1; si solo permitiéramos el 8000, un cliente que
+# apunte al puerto efectivo (p. ej. 8001) sería bloqueado en producción.
+# Se leen las MISMAS variables de entorno que el launcher para no quedar
+# desincronizados, con idéntica validación defensiva.
+def _cors_port_range() -> range:
+    def _read_int(name: str, default: int) -> int:
+        raw = os.getenv(name)
+        if not raw:
+            return default
+        try:
+            v = int(raw)
+        except ValueError:
+            return default
+        return v if 1024 <= v <= 65535 else default
+
+    start = _read_int("VIOLETTE_PORT_RANGE_START", 8000)
+    end = _read_int("VIOLETTE_PORT_RANGE_END", 8009)
+    if end < start:
+        end = start
+    # Cota defensiva: evita generar una lista enorme si el rango es absurdo.
+    if end - start > 100:
+        end = start + 100
+    return range(start, end + 1)
+
+
+_CORS_ORIGINS: list[str] = []
+for _port in _cors_port_range():
+    _CORS_ORIGINS.append(f"http://127.0.0.1:{_port}")
+    _CORS_ORIGINS.append(f"http://localhost:{_port}")
+# Frontend web de desarrollo (Vite/React) en el 3000, si se usa.
+_CORS_ORIGINS += [
     "http://127.0.0.1:3000",
     "http://localhost:3000",
 ]

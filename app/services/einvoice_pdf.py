@@ -275,21 +275,35 @@ def generate_einvoice_pdf(
         unit_price = float(det.unit_price or 0)
         disc_pct = float(det.discount_percent or 0)
         tax_rate = float(det.tax_rate or 0)
-        subtotal = float(det.subtotal or 0)
+        subtotal = float(det.subtotal or 0)        # total de línea CON IVA (MontoTotalLinea)
         tax_amount = float(det.tax_amount or 0)
 
-        line_bruto = qty * unit_price
-        line_desc = line_bruto * disc_pct / 100
-        line_neto = line_bruto - line_desc
+        # ── FASE 1 — Fix: evitar doble conteo de IVA en el resumen ──
+        # SaleDetail.subtotal es el total de línea CON IVA (bruto), porque
+        # unit_price ya incluye el impuesto (convención CR). Antes este PDF
+        # tomaba qty*unit_price como si fuera base NETA y luego sumaba el IVA
+        # otra vez, inflando el TOTAL COMPROBANTE en un IVA completo.
+        #
+        # Las bases del resumen deben ser NETAS (sin IVA), igual que el XML:
+        #   base neta DESPUÉS de descuento = subtotal − tax_amount  (= SubTotal del XML)
+        # De ahí reconstruimos la base ANTES de descuento y el descuento, en
+        # términos netos, para mostrar el desglose correcto.
+        line_neto = subtotal - tax_amount
+        if 0 < disc_pct < 100:
+            base_pre_desc = line_neto / (1 - disc_pct / 100)
+            line_desc = base_pre_desc - line_neto
+        else:
+            base_pre_desc = line_neto
+            line_desc = 0.0
 
         total_descuento += Decimal(str(line_desc))
         total_impuesto += Decimal(str(tax_amount))
-        total_venta += Decimal(str(line_neto))
+        total_venta += Decimal(str(base_pre_desc))
 
         if tax_rate > 0:
-            total_gravado += Decimal(str(line_neto))
+            total_gravado += Decimal(str(base_pre_desc))
         else:
-            total_exento += Decimal(str(line_neto))
+            total_exento += Decimal(str(base_pre_desc))
 
         table_data.append([
             str(idx),
@@ -320,7 +334,11 @@ def generate_einvoice_pdf(
     story.append(Spacer(1, 4 * mm))
 
     # --- Resumen de totales ---
-    total_comprobante = total_venta + total_impuesto
+    # TOTAL COMPROBANTE = (venta neta antes de desc) − descuentos + impuesto
+    #                   = base neta después de desc + IVA = total CON IVA.
+    # Equivale a Σ SaleDetail.subtotal = Sale.total (lo que paga el cliente)
+    # y coincide con el TotalComprobante del XML.
+    total_comprobante = total_venta - total_descuento + total_impuesto
 
     resumen_data = [
         ["Total Venta Gravada:", f"₡ {_fmt(total_gravado)}"],

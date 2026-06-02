@@ -38,8 +38,8 @@ class ProductBase(BaseModel):
     cost: Annotated[Optional[Decimal], Field(ge=0)] = None
 
     # 📦 Stock — ahora Decimal para soportar fracciones (kg, metros, litros)
-    stock: Decimal = Field(default=0, ge=0)
-    min_stock: Decimal = Field(default=3, ge=0)
+    stock: Decimal = Field(default=Decimal("0"), ge=0)
+    min_stock: Decimal = Field(default=Decimal("3"), ge=0)
 
     # 📏 Unidad de medida — define cómo se vende el producto
     # "Unid" = unidades enteras (comportamiento actual)

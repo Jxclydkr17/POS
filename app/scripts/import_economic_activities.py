@@ -21,12 +21,18 @@ import logging
 from sqlalchemy.orm import Session
 from app.db.database import SessionLocal
 from app.db.models.economic_activity import EconomicActivity
-from app.core.config import APP_DIR
+from app.core.config import APP_DIR, RESOURCE_DIR, resolve_resource
 
 logger = logging.getLogger(__name__)
 
 # ── FASE 4 — Fix 4.8: ubicación canónica y fallback legacy ──
-CSV_PATH = APP_DIR / "app" / "data" / "economic_activities.csv"
+# El CSV es un recurso de SOLO LECTURA empaquetado. En el .exe vive en
+# _internal\app\data\ (RESOURCE_DIR), no junto al ejecutable, así que se
+# resuelve con resolve_resource (RESOURCE_DIR + fallback a APP_DIR).
+# Las constantes se mantienen solo para los mensajes de diagnóstico.
+_CSV_RELATIVE = "app/data/economic_activities.csv"
+_LEGACY_CSV_RELATIVE = "economic_activities.csv"
+CSV_PATH = RESOURCE_DIR / "app" / "data" / "economic_activities.csv"
 _LEGACY_CSV_PATH = APP_DIR / "economic_activities.csv"
 
 
@@ -40,16 +46,20 @@ def _resolve_csv_path() -> str | None:
     así que el fallback solo aplica a installs en dev/source que aún no
     movieron el archivo.
     """
-    if CSV_PATH.exists():
-        return str(CSV_PATH)
-    if _LEGACY_CSV_PATH.exists():
+    # Ruta canónica: app/data/economic_activities.csv (recurso empaquetado).
+    canonical = resolve_resource(_CSV_RELATIVE)
+    if canonical is not None:
+        return str(canonical)
+    # Fallback legacy: raíz del proyecto/instalación.
+    legacy = resolve_resource(_LEGACY_CSV_RELATIVE)
+    if legacy is not None:
         logger.warning(
             "economic_activities.csv encontrado en la raíz del proyecto "
             "(ubicación legacy). Por favor muévalo a 'app/data/' — el .spec "
             "del .exe ya espera la nueva ruta y el fallback se removerá en "
             "una versión futura."
         )
-        return str(_LEGACY_CSV_PATH)
+        return str(legacy)
     return None
 
 

@@ -106,7 +106,64 @@ DEFAULT_PORT_RANGE_END = 8009
 # QApplication singleton es reutilizado luego por _start_ui() (la
 # llamada a QApplication.instance() devuelve la existente).
 # ──────────────────────────────────────────────────────────────
-_ASSETS_DIR = Path(__file__).resolve().parent / "ui" / "assets"
+
+
+# ──────────────────────────────────────────────────────────────
+# FASE 0 — Resolución de recursos empaquetados (read-only)
+# ──────────────────────────────────────────────────────────────
+# PyInstaller 6.x (onedir) coloca TODOS los archivos empaquetados en
+# una subcarpeta `_internal\` y deja solo el .exe en la raíz. Por eso
+# los recursos de solo lectura (alembic.ini, la carpeta alembic/, los
+# assets de la UI) NO están junto al ejecutable sino en `sys._MEIPASS`
+# (= la carpeta `_internal`). Resolverlos con `Path(sys.executable).parent`
+# fallaba en el .exe: las migraciones no se aplicaban y el splash no
+# encontraba el logo.
+#
+# NOTA: este helper es una réplica autónoma de
+# app.core.config.get_resource_dir(). No se puede importar app.core.*
+# tan temprano porque dispararía la carga de config (y la creación del
+# .env por defecto) ANTES del wizard de selección de base de datos.
+def _resource_dir() -> Path:
+    """Raíz de los recursos de solo lectura empaquetados.
+
+    - .exe (PyInstaller onedir): sys._MEIPASS (carpeta _internal).
+      Fallback defensivo: carpeta del ejecutable.
+    - desarrollo: carpeta de este archivo (raíz del proyecto).
+    """
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            return Path(meipass)
+        return Path(sys.executable).parent
+    return Path(__file__).resolve().parent
+
+
+def _alembic_paths() -> tuple[Path | None, Path | None]:
+    """Localiza (alembic.ini, carpeta alembic/) en el bundle.
+
+    Devuelve (ini_path, script_location) con la primera ubicación que
+    contenga alembic.ini, o (None, None) si no se encuentra.
+
+    Orden de búsqueda:
+      1. RESOURCE_DIR (sys._MEIPASS en el .exe = _internal\\).
+      2. Carpeta del ejecutable (fallback defensivo para builds con
+         layout plano o copias manuales del instalador).
+    """
+    candidates: list[Path] = []
+    rd = _resource_dir()
+    candidates.append(rd)
+    if getattr(sys, 'frozen', False):
+        exe_parent = Path(sys.executable).parent
+        if exe_parent != rd:
+            candidates.append(exe_parent)
+    for base in candidates:
+        ini = base / "alembic.ini"
+        if ini.exists():
+            return ini, base / "alembic"
+    return None, None
+
+
+_ASSETS_DIR = _resource_dir() / "ui" / "assets"
 
 
 def _make_first_run_splash():
@@ -450,14 +507,10 @@ def _verify_schema_consistency(expected_head: str | None = None) -> tuple[bool, 
         if expected_head is None:
             from alembic.config import Config
             from alembic.script import ScriptDirectory
-            if getattr(sys, "frozen", False):
-                base = Path(sys.executable).parent
-            else:
-                base = Path(__file__).parent
-            ini_path = base / "alembic.ini"
-            if ini_path.exists():
+            ini_path, _script_loc = _alembic_paths()
+            if ini_path is not None:
                 cfg = Config(str(ini_path))
-                cfg.set_main_option("script_location", str(base / "alembic"))
+                cfg.set_main_option("script_location", str(_script_loc))
                 expected_head = ScriptDirectory.from_config(cfg).get_current_head()
 
         if expected_head and current_rev != expected_head:
@@ -658,18 +711,13 @@ def _initialize_via_alembic() -> bool:
     except ImportError:
         return False
 
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent
-
-    ini_path = base / "alembic.ini"
-    if not ini_path.exists():
+    ini_path, _script_loc = _alembic_paths()
+    if ini_path is None:
         logger.debug("alembic.ini no encontrado en first-run; usando fallback.")
         return False
 
     alembic_cfg = Config(str(ini_path))
-    alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+    alembic_cfg.set_main_option("script_location", str(_script_loc))
 
     logger.info("Aplicando cadena de migraciones desde cero (upgrade head)...")
     try:
@@ -725,18 +773,13 @@ def _auto_migrate():
         return
 
     # Buscar alembic.ini
-    if getattr(sys, 'frozen', False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent
-
-    ini_path = base / "alembic.ini"
-    if not ini_path.exists():
+    ini_path, _script_loc = _alembic_paths()
+    if ini_path is None:
         logger.debug("alembic.ini no encontrado, omitiendo auto-migración.")
         return
 
     alembic_cfg = Config(str(ini_path))
-    alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+    alembic_cfg.set_main_option("script_location", str(_script_loc))
 
     try:
         script = ScriptDirectory.from_config(alembic_cfg)
@@ -824,17 +867,12 @@ def _stamp_alembic_head():
         from alembic.config import Config
         from alembic import command
 
-        if getattr(sys, 'frozen', False):
-            base = Path(sys.executable).parent
-        else:
-            base = Path(__file__).parent
-
-        ini_path = base / "alembic.ini"
-        if not ini_path.exists():
+        ini_path, _script_loc = _alembic_paths()
+        if ini_path is None:
             return
 
         alembic_cfg = Config(str(ini_path))
-        alembic_cfg.set_main_option("script_location", str(base / "alembic"))
+        alembic_cfg.set_main_option("script_location", str(_script_loc))
         command.stamp(alembic_cfg, "head")
         logger.info("Alembic marcado en HEAD (uso manual).")
     except Exception as e:

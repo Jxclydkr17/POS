@@ -21,7 +21,7 @@ import logging
 from ui.api import BASE_URL
 from ui.session_manager import session
 from ui.components.toast_notifier import show_toast
-from ui.utils.http_worker import api_call, run_async
+from ui.utils.http_worker import api_call, run_async, SLOW_READ_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,13 @@ class _ActionWorker(QObject):
     def run(self):
         try:
             fn = requests.post if self._method == "post" else requests.get
-            r = fn(self._url, headers=_headers(), timeout=30)
+            # FASE 2 — Fix timeout: el envío/consulta a Hacienda hace que el
+            # backend espere hasta 30s. La UI debe esperar MÁS (SLOW_READ_TIMEOUT
+            # = 45s) para recibir la respuesta real en vez de cortar a los 30s
+            # —empatando con el backend— y dejar al usuario sin saber si el
+            # comprobante se envió. (build-xml/re-sign son locales y rápidos;
+            # el margen extra no les afecta.)
+            r = fn(self._url, headers=_headers(), timeout=SLOW_READ_TIMEOUT)
             data = r.json() if r.status_code in (200, 202, 422) else {"error": r.text[:300]}
             data["_http_status"] = r.status_code
             self.finished.emit(data)

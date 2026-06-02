@@ -103,6 +103,12 @@ hidden_imports = [
 hidden_imports += collect_submodules('app')
 hidden_imports += collect_submodules('ui')
 
+# ── FASE 0 — python-escpos: backport importlib_resources ──
+# escpos/capabilities.py hace `import importlib_resources` para localizar
+# capabilities.json. Lo agregamos explícitamente como seguro adicional
+# (PyInstaller normalmente lo detecta, pero así no dependemos de eso).
+hidden_imports += ['importlib_resources']
+
 # ── Archivos de datos a incluir ──
 # (source, dest_folder_in_bundle)
 datas = [
@@ -126,6 +132,21 @@ datas = [
     # Fix 3.2: Archivo de versión (fuente única de verdad)
     ('VERSION', '.'),
 ]
+
+# ── FASE 0 — python-escpos: empaquetar capabilities.json ──
+# python-escpos carga su base de datos de perfiles de impresora desde
+# `escpos/capabilities.json` (vía importlib_resources). PyInstaller NO
+# copia ese archivo de datos automáticamente, así que la generación de
+# tickets térmicos —Dummy(profile=...) y Dummy() por defecto— fallaría
+# en el .exe con un error de archivo de capacidades no encontrado.
+# collect_data_files('escpos') recoge ese JSON (y cualquier otro dato
+# del paquete) y lo coloca en la ruta correcta dentro del bundle.
+try:
+    datas += collect_data_files('escpos')
+except Exception:
+    # Si python-escpos no estuviera instalado al construir, no abortamos
+    # el build por esto; la impresión térmica simplemente no funcionaría.
+    pass
 
 # ── FASE 7 — Fix 7.3: NUNCA empaquetar .env en el .exe ──
 # Si se construye el .exe en una máquina con .env real,

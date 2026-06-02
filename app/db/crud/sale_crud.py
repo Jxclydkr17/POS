@@ -375,6 +375,10 @@ def _process_sale_lines(
             quantity=qty_dec, unit_price=unit_price_dec,
             discount_percent=discount_pct, subtotal=total_linea,
             tax_rate=tax_rate_pct, tax_amount=tax_amount,
+            # ── FASE 1 — Snapshot del CABYS al momento de la venta ──
+            # Congela el CABYS vigente para que la factura no cambie si
+            # luego se edita el CABYS del producto.
+            cabys_code=(product.cabys_code or None),
         ))
 
     return total
@@ -576,11 +580,12 @@ def create_sale(db: Session, sale_in: SaleCreate, current_user: User) -> dict:
     db.add(einv)
     db.flush()
 
-    # Verificar / preparar emisor (preserva la validación de configuración:
-    # en producción, si no hay emisor configurado, esta función lanza HTTP
-    # 400; en sandbox crea un dummy para no bloquear pruebas). La validación
-    # se mantiene aquí para que el cajero vea el error al crear la venta
-    # en vez de descubrirlo después en build-xml.
+    # Verificar emisor antes de continuar. _get_or_create_issuer valida la
+    # configuración y, en CUALQUIER ambiente (sandbox o producción), lanza
+    # HTTP 400 si no hay emisor o tiene datos placeholder ("000000000" /
+    # "por configurar"). Ya NO se crea ningún emisor dummy. La validación se
+    # hace aquí para que el cajero vea el error al crear la venta, en vez de
+    # descubrirlo después en build-xml.
     _get_or_create_issuer(db)
 
     # Caja
