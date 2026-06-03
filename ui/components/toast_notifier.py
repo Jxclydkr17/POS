@@ -2,6 +2,16 @@ from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QGraphicsOpacityEffe
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve
 
 
+# ── FASE 3 — endurecimiento anti-GC ──
+# Cuando show_toast se llama con parent=None, el único objeto Python que
+# referencia al Toast es la variable local de show_toast, que desaparece al
+# retornar. En la práctica el QTimer.singleShot mantiene vivo el widget vía la
+# referencia a self.fade_out, pero eso es frágil. Para garantizar que el toast
+# no sea recolectado por el GC antes de desvanecerse, lo registramos aquí y lo
+# quitamos cuando se cierra. (Con parent, el padre Qt ya lo mantiene vivo.)
+_active_parentless_toasts = set()
+
+
 class Toast(QWidget):
     def __init__(self, message, success=True, duration=3000, parent=None):
         super().__init__(parent)
@@ -74,6 +84,9 @@ class Toast(QWidget):
             self.close()
         except RuntimeError:
             pass
+        finally:
+            # FASE 3: liberar del registro anti-GC (si estaba registrado).
+            _active_parentless_toasts.discard(self)
 
     def paintEvent(self, event):
         """Evita repintado si ya se está cerrando."""
@@ -85,6 +98,11 @@ class Toast(QWidget):
 def show_toast(message, success=True, parent=None, duration=3000):
     """Muestra el toast centrado horizontalmente en la ventana padre."""
     toast = Toast(message, success=success, duration=duration, parent=parent)
+
+    # FASE 3: sin parent, mantener una referencia viva hasta que se cierre,
+    # para que el GC no lo recolecte antes de desvanecerse.
+    if parent is None:
+        _active_parentless_toasts.add(toast)
 
     # Posición centrada respecto a la ventana principal
     if parent:

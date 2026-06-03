@@ -254,6 +254,24 @@ def _process_queue_cycle() -> int:
                             f"error={result.get('error', '?')}"
                         )
 
+                    # ── FASE 3 — endurecimiento defensivo ──
+                    # send_einvoice_to_hacienda ya hace su propio db.commit()
+                    # con el estado final (SENT/SEND_ERROR/QUEUED). Pero
+                    # safe_session NO auto-commitea al salir: si por cualquier
+                    # razón quedara un cambio en memoria flushed-pero-no-commited
+                    # (p. ej. el `einv.status = "XML_READY"` de arriba, o un
+                    # flush interno sin commit), al cerrar la sesión se perdería.
+                    # Este commit garantiza que el estado quede persistido sin
+                    # depender de invariantes internas de otra función.
+                    try:
+                        db.commit()
+                    except Exception as commit_err:
+                        db.rollback()
+                        logger.error(
+                            f"Cola offline: no se pudo commitear estado de "
+                            f"einvoice {einv.id}: {commit_err}"
+                        )
+
                 except (requests.ConnectionError, requests.Timeout) as e:
                     # Sigue sin internet, re-encolar
                     einv.status = "QUEUED"

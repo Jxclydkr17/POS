@@ -351,6 +351,10 @@ class SettingsView(QWidget):
         # Referencias a hilos activos
         self._thread = None
         self._worker = None
+        # Pares (thread, worker) cuyo run() seguía bloqueado al reemplazarlos
+        # o cerrar la vista; se destruyen vía deleteLater cuando finalizan.
+        # Ver _cleanup_thread (caso 3b).
+        self._pending_disposal = []
 
         self._init_ui()
         self._start_load()
@@ -2879,9 +2883,141 @@ class SettingsView(QWidget):
         except Exception:
             return str(exc)
 
-    def _cleanup_thread(self):
-        if self._thread and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(1000)
+    def _cleanup_thread(self, wait_ms: int = 1500):
+        """Detiene y libera el worker/thread activo de forma segura.
+
+        Esta vista ejecuta un solo trabajo en segundo plano a la vez: cada
+        `_start_*` llama a `_cleanup_thread()` antes de crear el par
+        (worker, thread) nuevo, y `closeEvent` lo llama al destruirse la vista.
+
+        Garantías:
+          1. Desconecta las señales del worker ANTES de parar el hilo. Así, si
+             un `finished`/`failed` llega tarde (justo cuando estamos cerrando o
+             reemplazando el trabajo), ya no dispara los slots `_on_*`, que tocan
+             widgets que pueden estar a medio destruir → evita "access violation".
+          2. `quit()` + `wait()` con timeout. `quit()` solo detiene el event loop
+             del hilo; si el worker está dentro de una llamada HTTP/IO bloqueante
+             (ej. update_cabys, backup, restore, validar .p12), `run()` no se
+             interrumpe y `wait()` puede agotar el timeout con el hilo aún vivo.
+          3. Si el hilo terminó dentro del timeout → se libera de inmediato con
+             `deleteLater()`. Si NO terminó (sigue bloqueado en IO), NO soltamos
+             la referencia a pelo —eso provoca "QThread: Destroyed while thread
+             is still running"—: lo movemos a una lista de "disposición diferida"
+             y conectamos `thread.finished → deleteLater`, de modo que Qt destruya
+             el QThread y su worker de forma segura recién cuando `run()` retorne.
+             La lista mantiene viva la referencia mientras tanto.
+
+        Es defensivo de punta a punta: durante un flujo de cierre no debe
+        propagar excepciones que aborten el resto del cleanup.
+        """
+        thread = self._thread
+        worker = self._worker
+
+        # Soltar las referencias del slot ANTES de tocar nada, para que un
+        # nuevo `_start_*` (o una segunda llamada a este método) no opere
+        # sobre los objetos que estamos desmontando.
         self._thread = None
         self._worker = None
+
+        if thread is None:
+            return
+
+        # 1. Desconectar las señales del worker (no más slots `_on_*` tardíos).
+        #    OJO PySide6: `worker.disconnect()` SIN argumentos lanza TypeError
+        #    (a diferencia de PyQt). La forma correcta de desconectar todo es
+        #    por señal: `worker.finished.disconnect()` / `worker.failed.disconnect()`.
+        #    Todos los workers de esta vista exponen exactamente esas dos señales.
+        #    Si una señal no tenía conexiones, PySide6 emite un RuntimeWarning
+        #    inofensivo ("Failed to disconnect (None) ...") — lo silenciamos para
+        #    no ensuciar los logs.
+        if worker is not None:
+            import warnings
+            for _signal_name in ("finished", "failed"):
+                _sig = getattr(worker, _signal_name, None)
+                if _sig is None:
+                    continue
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        _sig.disconnect()
+                except (RuntimeError, TypeError):
+                    # RuntimeError: objeto C++ ya destruido.
+                    # TypeError: firma inesperada.
+                    pass
+
+        # 2. Pedir al hilo que pare y esperar (limitado) a que termine.
+        try:
+            running = thread.isRunning()
+        except RuntimeError:
+            # El QThread ya fue destruido por Qt — nada más que hacer.
+            return
+
+        if running:
+            try:
+                thread.quit()
+                thread.wait(wait_ms)
+            except RuntimeError:
+                return
+
+        # 3a. Caso normal: el hilo ya terminó → liberar de inmediato.
+        try:
+            still_running = thread.isRunning()
+        except RuntimeError:
+            return
+
+        if not still_running:
+            if worker is not None:
+                try:
+                    worker.deleteLater()
+                except RuntimeError:
+                    pass
+            try:
+                thread.deleteLater()
+            except RuntimeError:
+                pass
+            return
+
+        # 3b. Caso borde: `run()` sigue bloqueado en IO tras el timeout.
+        #     Mantener vivas las referencias y destruir SOLO cuando el hilo
+        #     finalice de verdad (evita el crash de destrucción prematura).
+        if not hasattr(self, "_pending_disposal"):
+            self._pending_disposal = []
+        self._pending_disposal.append((thread, worker))
+
+        def _dispose(_thread=thread, _worker=worker):
+            try:
+                if _worker is not None:
+                    _worker.deleteLater()
+            except RuntimeError:
+                pass
+            try:
+                _thread.deleteLater()
+            except RuntimeError:
+                pass
+            try:
+                self._pending_disposal.remove((_thread, _worker))
+            except (ValueError, AttributeError):
+                pass
+
+        try:
+            thread.finished.connect(_dispose)
+        except RuntimeError:
+            # Si no se pudo conectar (objeto ya muerto), liberar best-effort.
+            _dispose()
+
+    def closeEvent(self, event):
+        """Detiene el trabajo en segundo plano antes de que la vista se destruya.
+
+        Sin esto, si el usuario cierra la app (o navega fuera de Configuración)
+        mientras un worker sigue corriendo —p. ej. validando el certificado
+        .p12, actualizando CABYS, o restaurando un backup— el QThread se
+        destruiría con la vista estando aún activo, produciendo el crash
+        intermitente "QThread: Destroyed while thread is still running".
+
+        Es defensivo: nunca propaga excepciones durante el cierre.
+        """
+        try:
+            self._cleanup_thread()
+        except Exception:
+            pass
+        super().closeEvent(event)

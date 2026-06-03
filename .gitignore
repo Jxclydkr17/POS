@@ -77,3 +77,10 @@ app/uploads/logos/*
 !data/pdfs/.gitkeep
 !data/backups/.gitkeep
 !data/logs/.gitkeep
+
+# Artefactos legacy en la raíz (no usar, el código escribe en data/)
+/logs/
+/generated_pdfs/
+/exports/
+/chart_bar.png
+/chart_pie.png

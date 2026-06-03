@@ -106,6 +106,10 @@ class MainWindow(QMainWindow):
         self.role = session.role
         self.permissions = []  # Permisos granulares del usuario
 
+        # Guard para que el cleanup de cierre se ejecute una sola vez,
+        # aunque entren por logout() y por closeEvent (X de la ventana).
+        self._cleanup_done = False
+
         # Estado del sidebar
         self.sidebar_pinned = True  # True = expandido y fijo, False = colapsado
         
@@ -1910,7 +1914,14 @@ class MainWindow(QMainWindow):
         Es defensivo: cada paso se envuelve en try/except porque se
         ejecuta durante un flow de destrucción y no debe propagar
         excepciones que podrían cancelar el cleanup.
+
+        Idempotente: se puede entrar por logout() y/o por closeEvent (X de
+        la ventana). El guard `_cleanup_done` evita ejecutarlo dos veces.
         """
+        if getattr(self, "_cleanup_done", False):
+            return
+        self._cleanup_done = True
+
         from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
         if app is None:
@@ -1947,7 +1958,60 @@ class MainWindow(QMainWindow):
                             pass
         except Exception:
             pass
-            
+
+        # 3. Cerrar las vistas CACHEADAS que viven en view_layout (no en
+        #    `stacked`).
+        #
+        #    Vistas como SettingsView, SuppliersView o EinvoiceMonitorView se
+        #    guardan en atributos `self._<algo>_view` y se muestran dentro de
+        #    `view_layout`, NO dentro de `self.stacked`. El paso 2 solo recorre
+        #    `stacked` (que contiene base_widget y overlay_container), así que el
+        #    closeEvent de estas vistas no se dispararía en el cierre.
+        #
+        #    Esas vistas lanzan trabajo en segundo plano con QThread. Si la app
+        #    se cierra mientras un worker sigue corriendo (validar certificado
+        #    .p12, actualizar CABYS, backup/restore), el QThread se destruiría
+        #    estando activo → "QThread: Destroyed while thread is still running".
+        #
+        #    Llamar `.close()` aquí gatilla el closeEvent de cada vista, que a su
+        #    vez detiene y libera sus hilos de forma segura. La lista es
+        #    explícita (no dir(self)) para no recorrer atributos internos de Qt.
+        _cached_views = (
+            "_products_view", "_customers_view", "_expenses_view",
+            "_financial_view", "_daily_report_view", "_suppliers_view",
+            "_categories_view", "_purchases_view", "_settings_view",
+            "_analytics_view", "_purchases_analytics_view", "_proformas_view",
+            "_no_rotation_view", "_einvoice_view",
+        )
+        for attr in _cached_views:
+            view = getattr(self, attr, None)
+            if view is None:
+                continue
+            try:
+                view.close()
+            except Exception:
+                pass
+
+    def closeEvent(self, event):
+        """Cleanup al cerrar la ventana con la X (no solo por logout()).
+
+        El path de logout() ya llama a `_cleanup_before_destruction()` de forma
+        explícita, pero cerrar la app con el botón X de la ventana NO pasa por
+        logout(): Qt invoca este closeEvent directamente. Sin este método, los
+        event filters globales y —sobre todo— los QThread de las vistas
+        cacheadas (SettingsView, etc.) no se detendrían, produciendo el crash
+        "QThread: Destroyed while thread is still running" o un access violation
+        al salir.
+
+        `_cleanup_before_destruction()` es idempotente (guard `_cleanup_done`),
+        así que es seguro aunque ya se haya llamado desde logout().
+        """
+        try:
+            self._cleanup_before_destruction()
+        except Exception:
+            pass
+        super().closeEvent(event)
+
     def _ensure_placeholder(self):
         if self.sidebar_placeholder is None:
             self.sidebar_placeholder = QWidget()

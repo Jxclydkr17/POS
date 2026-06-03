@@ -152,7 +152,7 @@ class TestCashCloseDB:
 
         close_cash_session(db, open_cash, closing_amount=55000)
 
-        refreshed = db.query(CashSession).get(open_cash.id)
+        refreshed = db.get(CashSession, open_cash.id)
         assert refreshed.status == "closed"
         assert refreshed.closing_amount == Decimal("55000")
         assert refreshed.expected_closing == Decimal("55000")
