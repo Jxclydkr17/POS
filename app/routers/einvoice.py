@@ -663,6 +663,8 @@ def print_einvoice_ticket_endpoint(einvoice_id: int, db: Session = Depends(get_d
     impresora del usuario (Settings → Impresora).
 
     Modos según `printer_type`:
+      - "system":  ESC/POS RAW por el spooler del SO (Windows). Usa
+                   printer_system_name. Recomendado: sin VID/PID ni libusb.
       - "network": ESC/POS por TCP a printer_ip:printer_port.
       - "usb":     ESC/POS por USB a printer_usb_vendor_id/_product_id.
       - "none":    no imprime, solo retorna el path del PDF para que
@@ -699,7 +701,7 @@ def print_einvoice_ticket_endpoint(einvoice_id: int, db: Session = Depends(get_d
             )
 
         # Térmica directa (ESC/POS) vs PDF via SO
-        use_thermal = printer_type in ("network", "usb")
+        use_thermal = printer_type in ("system", "network", "usb")
 
         # Parser de USB IDs: vienen como hex string "0x04b8" → int.
         def _parse_usb_id(v):
@@ -717,7 +719,9 @@ def print_einvoice_ticket_endpoint(einvoice_id: int, db: Session = Depends(get_d
             use_thermal=use_thermal,
             thermal_kind=printer_type if use_thermal else "network",
         )
-        if use_thermal and printer_type == "network":
+        if use_thermal and printer_type == "system":
+            kwargs["thermal_system_name"] = getattr(settings, "printer_system_name", None)
+        elif use_thermal and printer_type == "network":
             kwargs["thermal_ip"] = settings.printer_ip if settings else None
             kwargs["thermal_port"] = settings.printer_port if settings else None
         elif use_thermal and printer_type == "usb":

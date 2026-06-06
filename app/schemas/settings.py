@@ -27,13 +27,15 @@ ID_NUMBER_RULES = {
     "DIMEX":   (11, 12,  "DIMEX debe tener entre 11 y 12 dígitos"),
 }
 
-# Fix 2.5 (cerrado): el enum sigue como estaba a propósito.
-# Antes "network"/"usb" eran placeholders sin implementación; ahora
-# están implementados. NO removemos valores para no romper configs
-# existentes en producción (cualquier user con printer_type='network'
-# guardado seguiría siendo válido). Si en un futuro se decide retirar
-# alguno, hay que hacer migración Alembic con default seguro.
-PRINTER_TYPES_VALID = {"network", "usb", "none"}
+# Autodetección: se agrega "system" (impresión RAW por el spooler del
+# SO, eligiendo la impresora por nombre). NO removemos valores previos
+# para no romper configs existentes en producción (cualquier user con
+# printer_type='network'/'usb' guardado sigue siendo válido).
+#   - "system":  RAW vía spooler (Windows: Win32Raw) — recomendado.
+#   - "network": ESC/POS por TCP/IP.
+#   - "usb":     ESC/POS por USB directo (pyusb).
+#   - "none":    desactivado.
+PRINTER_TYPES_VALID = {"system", "network", "usb", "none"}
 
 # Anchos de papel típicos. 58 → POS pequeño, 80 → más común.
 PRINTER_PAPER_WIDTHS = {58, 80}
@@ -133,7 +135,9 @@ class SettingsBase(BaseModel):
     printer_type: Optional[str] = None
     printer_ip: Optional[str] = None
     printer_port: Optional[int] = None
-    # Fix 2.5 (cerrado): nuevos campos para ESC/POS USB
+    # Autodetección: nombre de la impresora del sistema (modo "system").
+    printer_system_name: Optional[str] = None
+    # Fix 2.5 (cerrado): campos para ESC/POS USB directo
     printer_usb_vendor_id: Optional[str] = None
     printer_usb_product_id: Optional[str] = None
     printer_profile: Annotated[Optional[str], Field(max_length=40)] = None
@@ -210,7 +214,9 @@ class SettingsUpdate(BaseModel):
     printer_type: Optional[str] = None
     printer_ip: Annotated[Optional[str], Field(max_length=45)] = None
     printer_port: Optional[int] = Field(default=None, ge=1, le=65535)
-    # Fix 2.5 (cerrado): nuevos campos USB + perfil + ancho papel
+    # Autodetección: nombre de la impresora del sistema (modo "system").
+    printer_system_name: Annotated[Optional[str], Field(max_length=200)] = None
+    # Fix 2.5 (cerrado): campos USB + perfil + ancho papel
     printer_usb_vendor_id: Annotated[Optional[str], Field(max_length=10)] = None
     printer_usb_product_id: Annotated[Optional[str], Field(max_length=10)] = None
     printer_profile: Annotated[Optional[str], Field(max_length=40)] = None

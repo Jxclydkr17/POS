@@ -222,8 +222,8 @@ class SaleTicketDialog(QDialog):
                 )
                 return
 
-            # Camino térmico directo (ESC/POS)
-            if p_type in ("network", "usb"):
+            # Camino térmico directo (ESC/POS): system / network / usb
+            if p_type in ("system", "network", "usb"):
                 if self._try_print_thermal(printer_config):
                     return  # éxito — terminamos
                 # _try_print_thermal devolvió False → ya mostró el error
@@ -261,7 +261,9 @@ class SaleTicketDialog(QDialog):
 
         try:
             from app.utils.escpos_ticket import build_sale_ticket_bytes
-            from app.utils.print_ticket import print_to_thermal, print_to_thermal_usb
+            from app.utils.print_ticket import (
+                print_to_thermal, print_to_thermal_usb, print_to_system_printer,
+            )
 
             # Normalizar Decimal en items (vienen del backend) para
             # build_sale_ticket_bytes — la función ya tolera Decimal/float/str.
@@ -275,7 +277,15 @@ class SaleTicketDialog(QDialog):
                 profile=profile,
             )
 
-            if p_type == "network":
+            if p_type == "system":
+                # RAW por el spooler del SO eligiendo por nombre. Si el
+                # nombre está vacío, usa la impresora predeterminada.
+                print_to_system_printer(
+                    data,
+                    printer_name=info.get("system_name") or None,
+                    profile=profile,
+                )
+            elif p_type == "network":
                 ip = info.get("ip")
                 port = int(info.get("port") or 9100)
                 if not ip:
@@ -395,6 +405,7 @@ class SaleTicketDialog(QDialog):
                 "info": {
                     "ip": data.get("printer_ip", "192.168.0.120") or "192.168.0.120",
                     "port": int(data.get("printer_port") or 9100),
+                    "system_name": data.get("printer_system_name") or None,
                     "usb_vendor_id": _parse_usb_id(data.get("printer_usb_vendor_id")),
                     "usb_product_id": _parse_usb_id(data.get("printer_usb_product_id")),
                     "profile": data.get("printer_profile") or None,
@@ -413,6 +424,7 @@ class SaleTicketDialog(QDialog):
                 "info": {
                     "ip": "192.168.0.120",
                     "port": 9100,
+                    "system_name": None,
                     "usb_vendor_id": None,
                     "usb_product_id": None,
                     "profile": None,

@@ -41,6 +41,8 @@ API_URL_IMPORT_CONFIG = f"{BASE_URL}/settings/import-config"
 API_URL_AUDIT_LOG = f"{BASE_URL}/settings/audit-log"
 # Fix 2.5 (cerrado): prueba de impresión ESC/POS desde la UI.
 API_URL_PRINTER_TEST = f"{BASE_URL}/settings/printer-test"
+# Autodetección: lista impresoras del sistema + dispositivos USB.
+API_URL_PRINTER_DISCOVERY = f"{BASE_URL}/settings/printer-discovery"
 
 
 def _headers():
@@ -208,6 +210,28 @@ def test_printer() -> dict:
     r = requests.post(API_URL_PRINTER_TEST, headers=_headers(), timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+def discover_printers() -> dict:
+    """
+    Pide al backend la detección de impresoras (modo "system" + USB).
+
+    Retorna el dict `data` con:
+        {
+          "platform": str | None,
+          "backends": {"win32print": bool, "pyusb": bool},
+          "system": [ {name, port, driver, is_default}, ... ],
+          "usb":    [ {vendor_id, product_id, description, ...}, ... ],
+          "notes":  [ str, ... ],
+        }
+
+    La detección corre en la máquina donde está el backend (la misma del
+    usuario en este POS de escritorio). Timeout moderado: enumerar el
+    spooler y escanear USB es rápido, pero damos margen.
+    """
+    r = requests.get(API_URL_PRINTER_DISCOVERY, headers=_headers(), timeout=20)
+    r.raise_for_status()
+    return r.json().get("data", {}) or {}
 
 
 # ─────────────────────────────────────────────────────────

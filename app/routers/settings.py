@@ -694,7 +694,9 @@ def printer_test_endpoint(db: Session = Depends(get_db),
             paper_width_mm=getattr(settings, "printer_paper_width_mm", None) or 80,
             profile=getattr(settings, "printer_profile", None),
         )
-        if printer_type == "network":
+        if printer_type == "system":
+            kwargs["thermal_system_name"] = getattr(settings, "printer_system_name", None)
+        elif printer_type == "network":
             kwargs["thermal_ip"] = settings.printer_ip
             kwargs["thermal_port"] = settings.printer_port
         elif printer_type == "usb":
@@ -724,6 +726,49 @@ def printer_test_endpoint(db: Session = Depends(get_db),
     except Exception as e:
         logger.exception("Error inesperado en printer-test")
         raise HTTPException(status_code=500, detail=f"Error interno: {e}")
+
+
+# ============================================================
+# Autodetección de impresoras (modo "system" + USB).
+# Pobla el desplegable de Settings → Impresora para que el usuario
+# elija su impresora sin escribir Vendor/Product ID a mano.
+# ============================================================
+@router.get("/printer-discovery", dependencies=[Depends(require_role("admin"))])
+def printer_discovery_endpoint():
+    """
+    Detecta impresoras disponibles en la máquina donde corre la app.
+
+    Devuelve dos listas:
+      - "system": impresoras instaladas en el SO (Windows: win32print),
+        por NOMBRE. Se imprimen en RAW por el spooler (modo "system").
+      - "usb":    dispositivos USB crudos (pyusb) con vendor/product ID
+        ya formateados, para el modo "usb" directo.
+
+    Además informa qué backends están disponibles y notas guía. La
+    detección nunca levanta: si algo falla, devuelve listas vacías y
+    una nota legible (la UI las muestra al usuario).
+    """
+    try:
+        from app.utils.printer_discovery import discover_printers
+        result = discover_printers()
+        return success_response(
+            message="Impresoras detectadas",
+            data=result,
+        )
+    except Exception as e:
+        # discover_printers ya es defensivo, pero por si la importación
+        # u otra cosa rompe, no tumbamos el endpoint.
+        logger.exception("Error inesperado en printer-discovery")
+        return success_response(
+            message="No se pudo completar la detección de impresoras",
+            data={
+                "platform": None,
+                "backends": {"win32print": False, "pyusb": False},
+                "system": [],
+                "usb": [],
+                "notes": [f"Error de detección: {e}"],
+            },
+        )
 
 
 # ============================================================

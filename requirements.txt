@@ -100,6 +100,13 @@ pyparsing==3.3.2
 python-escpos==3.1
 pyusb==1.2.1
 
+# pywin32 habilita el modo "system": impresión ESC/POS RAW por el spooler
+# de Windows (escpos.printer.Win32Raw → win32print) y la detección de
+# impresoras instaladas (EnumPrinters). Es el camino recomendado en
+# Windows porque NO requiere libusb/Zadig ni Vendor/Product IDs. Solo
+# se instala en Windows (en Linux/macOS el modo "system" no aplica).
+pywin32==308; sys_platform == "win32"
+
 # ── Utilidades ──
 python-dotenv==1.0.1
 python-dateutil==2.9.0.post0

@@ -1,11 +1,13 @@
 """
 app/utils/print_ticket.py — Impresión de tickets y comprobantes
 
-Soporta tres caminos de impresión:
+Soporta cuatro caminos de impresión:
   1. PDF via sistema operativo (Windows/Mac/Linux) — funciona OK con
      cualquier impresora reconocida por el SO.
   2. ESC/POS via TCP a impresora térmica de red (puerto 9100 RAW).
-  3. ESC/POS via USB a impresora térmica conectada localmente.
+  3. ESC/POS via USB directo a impresora térmica (pyusb).
+  4. ESC/POS RAW por el spooler del SO eligiendo la impresora por
+     nombre (Windows: Win32Raw) — RECOMENDADO: sin VID/PID ni libusb.
 
 FASE 2 — Fix 2.5 (cerrado):
    La vía vieja "PDF crudo al puerto 9100" sigue prohibida (las térmicas
@@ -253,6 +255,100 @@ def print_to_thermal_usb(
 
 
 # ═════════════════════════════════════════════════════════════
+# Camino 4 — ESC/POS RAW por el spooler del sistema (Windows)
+# ═════════════════════════════════════════════════════════════
+
+def print_to_system_printer(
+    data: bytes,
+    printer_name: str | None = None,
+    profile: Optional[str] = None,
+    job_name: str = "Violette POS",
+) -> None:
+    """
+    Envía bytes ESC/POS a una impresora instalada en el sistema
+    operativo, en modo RAW, a través del spooler.
+
+    Este es el camino RECOMENDADO en Windows: no requiere VID/PID ni un
+    backend libusb (Zadig). Usa el driver normal del fabricante y el
+    spooler de Windows. Internamente usa `escpos.printer.Win32Raw`, que
+    abre un trabajo con datatype "RAW" (StartDocPrinter) y escribe los
+    bytes con WritePrinter — el driver NO reinterpreta el contenido, así
+    que los comandos ESC/POS llegan intactos a la térmica.
+
+    El usuario selecciona la impresora por NOMBRE desde el desplegable
+    de Settings → Impresora (poblado por
+    `app.utils.printer_discovery.list_system_printers`).
+
+    Args:
+        data: Bytes ESC/POS (NO PDF).
+        printer_name: Nombre exacto de la impresora del sistema. Si es
+            None/"" se usa la impresora predeterminada del SO.
+        profile: Perfil python-escpos opcional (e.g. "TM-T20II").
+        job_name: Nombre del trabajo de impresión (visible en la cola).
+
+    Raises:
+        RuntimeError: si no se está en Windows / falta pywin32, si la
+            impresora no existe, o si falla el envío.
+    """
+    if not data:
+        raise ValueError("`data` está vacío. Nada para enviar.")
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError(
+            f"`data` debe ser bytes (got {type(data).__name__}). "
+            "Use app.utils.escpos_ticket para generar comandos ESC/POS."
+        )
+
+    if platform.system().lower() != "windows":
+        raise RuntimeError(
+            "El modo 'system' (spooler del SO) está soportado en Windows. "
+            "En este sistema use 'network' (IP) o 'usb' directo."
+        )
+
+    # Win32Raw vive en escpos.printer y depende de pywin32 (win32print).
+    try:
+        from escpos.printer import Win32Raw
+    except ImportError as e:
+        raise RuntimeError(
+            "Para impresión por el sistema se requieren `python-escpos` y "
+            "`pywin32` instalados. Detalle: " + str(e)
+        )
+
+    try:
+        logger.info(
+            f"Imprimiendo por spooler del sistema "
+            f"(printer={printer_name or 'predeterminada'})"
+        )
+
+        win_kwargs = {}
+        if profile:
+            win_kwargs["profile"] = profile
+
+        # printer_name vacío → Win32Raw.open() usa GetDefaultPrinter().
+        printer = Win32Raw(printer_name or "", **win_kwargs)
+        printer.open(job_name=job_name)
+        try:
+            # `_raw` escribe los bytes ya armados (incluido el corte).
+            printer._raw(bytes(data))
+        finally:
+            try:
+                printer.close()
+            except Exception:
+                pass
+
+        logger.info(
+            f"ESC/POS enviado al spooler '{printer_name or 'predeterminada'}' "
+            f"({len(data)} bytes)"
+        )
+
+    except Exception as e:
+        # DeviceNotFoundError (nombre incorrecto), pywintypes.error, etc.
+        raise RuntimeError(
+            f"Error imprimiendo por el sistema "
+            f"('{printer_name or 'predeterminada'}'): {e}"
+        )
+
+
+# ═════════════════════════════════════════════════════════════
 # Flujo integrado — comprobante electrónico (Hacienda CR)
 # ═════════════════════════════════════════════════════════════
 
@@ -265,6 +361,7 @@ def print_einvoice_ticket(
     thermal_port: Optional[int] = None,
     thermal_usb_vendor_id: Optional[int] = None,
     thermal_usb_product_id: Optional[int] = None,
+    thermal_system_name: Optional[str] = None,
     thermal_kind: str = "network",
     paper_width_mm: int = 80,
     profile: Optional[str] = None,
@@ -272,18 +369,17 @@ def print_einvoice_ticket(
     """
     Imprime un comprobante electrónico.
 
-    Dos modos:
-      - PDF via SO  (use_thermal=False, default): genera el PDF de
-        representación gráfica y lo manda al spool del SO. Es la vía
-        universal y la más robusta.
-      - ESC/POS térmica directa (use_thermal=True): genera comandos
-        ESC/POS para el ticket compacto y los manda por TCP o USB.
+    Modos (use_thermal=True):
+      - "system":  ESC/POS RAW por el spooler del SO (Windows). Usa
+        `thermal_system_name`. Recomendado: sin VID/PID ni libusb.
+      - "network": ESC/POS por TCP. Usa `thermal_ip` / `thermal_port`.
+      - "usb":     ESC/POS por USB directo. Usa los vendor/product IDs.
+      - use_thermal=False (default): genera el PDF y lo manda al spool
+        del SO (vía handler de PDF). Vía universal de respaldo.
 
-    Fase 2 — Fix 2.5: antes la vía térmica leía los bytes del PDF y los
-    enviaba al puerto 9100, lo cual produce basura impresa o cuelga la
-    impresora. Eso quedó eliminado. Hoy la vía térmica usa
-    `app.utils.escpos_ticket.build_einvoice_ticket_bytes` para generar
-    comandos válidos.
+    Fase 2 — Fix 2.5: la vía térmica genera comandos válidos con
+    `app.utils.escpos_ticket.build_einvoice_ticket_bytes` (antes mandaba
+    PDF crudo al 9100, que corrompe el output de las térmicas).
 
     Args:
         db: Sesión de SQLAlchemy.
@@ -292,14 +388,14 @@ def print_einvoice_ticket(
         thermal_ip / thermal_port: Para `thermal_kind="network"`.
         thermal_usb_vendor_id / thermal_usb_product_id: Para
             `thermal_kind="usb"`.
-        thermal_kind: "network" o "usb" (solo aplica si use_thermal=True).
+        thermal_system_name: Nombre de impresora para `thermal_kind="system"`.
+        thermal_kind: "system" | "network" | "usb".
         paper_width_mm: 58 o 80 (solo aplica si use_thermal=True).
         profile: Nombre de perfil python-escpos (e.g. "TM-T20II").
 
     Returns:
-        Ruta del PDF generado (siempre se genera el PDF, aunque se
-        imprima por térmica, para que quede archivado y para visualizar
-        desde la UI).
+        Ruta del PDF generado (siempre se genera, aunque se imprima por
+        térmica, para archivado y para visualizar desde la UI).
 
     Raises:
         ConnectionError / RuntimeError: si la térmica falla.
@@ -328,7 +424,14 @@ def print_einvoice_ticket(
     )
 
     kind = (thermal_kind or "network").lower()
-    if kind == "network":
+    if kind == "system":
+        # printer_system_name vacío → usa la impresora predeterminada.
+        print_to_system_printer(
+            data,
+            printer_name=thermal_system_name or None,
+            profile=profile,
+        )
+    elif kind == "network":
         if not thermal_ip:
             raise ValueError(
                 "thermal_kind='network' requiere thermal_ip. "
@@ -349,7 +452,9 @@ def print_einvoice_ticket(
             profile=profile,
         )
     else:
-        raise ValueError(f"thermal_kind inválido: '{kind}'. Use 'network' o 'usb'.")
+        raise ValueError(
+            f"thermal_kind inválido: '{kind}'. Use 'system', 'network' o 'usb'."
+        )
 
     return pdf_path
 
@@ -365,13 +470,13 @@ def print_test_page(
     thermal_port: Optional[int] = None,
     thermal_usb_vendor_id: Optional[int] = None,
     thermal_usb_product_id: Optional[int] = None,
+    thermal_system_name: Optional[str] = None,
     paper_width_mm: int = 80,
     profile: Optional[str] = None,
 ) -> None:
     """
     Imprime una página de prueba ESC/POS corta a la impresora térmica
-    configurada. Útil para validar IP/puerto/USB sin tener que armar
-    una venta completa.
+    configurada. Útil para validar sistema/IP/USB sin armar una venta.
 
     Raises:
         ConnectionError / RuntimeError: si la impresión falla.
@@ -398,7 +503,13 @@ def print_test_page(
     data = p.output
 
     kind = (thermal_kind or "network").lower()
-    if kind == "network":
+    if kind == "system":
+        print_to_system_printer(
+            data,
+            printer_name=thermal_system_name or None,
+            profile=profile,
+        )
+    elif kind == "network":
         if not thermal_ip:
             raise ValueError("Configure la IP de la impresora en Settings → Impresora.")
         print_to_thermal(data, ip=thermal_ip, port=thermal_port or 9100)
@@ -414,4 +525,6 @@ def print_test_page(
             profile=profile,
         )
     else:
-        raise ValueError(f"thermal_kind inválido: '{kind}'. Use 'network' o 'usb'.")
+        raise ValueError(
+            f"thermal_kind inválido: '{kind}'. Use 'system', 'network' o 'usb'."
+        )

@@ -351,6 +351,8 @@ class SettingsView(QWidget):
         # Referencias a hilos activos
         self._thread = None
         self._worker = None
+        # Detección de impresoras: se dispara una vez al abrir el tab.
+        self._printers_discovered_once = False
         # Pares (thread, worker) cuyo run() seguía bloqueado al reemplazarlos
         # o cerrar la vista; se destruyen vía deleteLater cuando finalizan.
         # Ver _cleanup_thread (caso 3b).
@@ -450,6 +452,9 @@ class SettingsView(QWidget):
         tab_text = self.tab_widget.tabText(index)
         if "Usuarios" in tab_text and not self._users_cache:
             self._load_users()
+        # Autodetección de impresoras la primera vez que se abre el tab.
+        if "Impresora" in tab_text and not self._printers_discovered_once:
+            self._discover_printers()
 
     # ----------------------------------------------------------
     # Tab: Empresa (datos)
@@ -767,6 +772,9 @@ class SettingsView(QWidget):
     # Tab: Impresora (Fase 4.3 + Fix 2.5 cerrado)
     # ----------------------------------------------------------
     def _build_tab_impresora(self) -> QWidget:
+        scroll = QScrollArea()          
+        scroll.setWidgetResizable(True) 
+        scroll.setStyleSheet("QScrollArea { border: none; }")  
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -777,10 +785,46 @@ class SettingsView(QWidget):
         form.setSpacing(10)
 
         self.combo_printer_type = QComboBox()
-        # Fix 2.5 (cerrado): los tres modos ahora funcionan de verdad.
-        # 'network' → ESC/POS por TCP, 'usb' → ESC/POS por USB,
-        # 'none' → desactiva el botón "Imprimir" del ticket.
-        self.combo_printer_type.addItems(["network", "usb", "none"])
+        # Autodetección: el modo "system" (RAW por spooler del SO) es el
+        # recomendado en Windows — no necesita VID/PID ni libusb. Usamos
+        # addItem(label, data) para mostrar etiquetas amigables guardando
+        # el valor canónico (system/network/usb/none) como itemData.
+        self.combo_printer_type.addItem("🖥️ Impresora del sistema (recomendado)", "system")
+        self.combo_printer_type.addItem("🌐 Red (IP / Ethernet)", "network")
+        self.combo_printer_type.addItem("🔌 USB directa (avanzado)", "usb")
+        self.combo_printer_type.addItem("🚫 Desactivada", "none")
+
+        # ── Botón de detección + estado (aplica a "system" y "usb") ──
+        self._detect_container = QWidget()
+        _detect_v = QVBoxLayout(self._detect_container)
+        _detect_v.setContentsMargins(0, 0, 0, 0)
+        _detect_v.setSpacing(4)
+        _detect_h = QHBoxLayout()
+        self.btn_detect_printers = QPushButton("🔄 Detectar impresoras")
+        self.btn_detect_printers.setMinimumHeight(30)
+        self.btn_detect_printers.setStyleSheet("""
+            QPushButton {
+                background-color: #334155; color: white;
+                font-weight: bold; font-size: 12px;
+                padding: 5px 16px; border-radius: 6px; border: none;
+            }
+            QPushButton:hover { background-color: #475569; }
+            QPushButton:disabled { background-color: #555; color: #999; }
+        """)
+        self.btn_detect_printers.clicked.connect(self._discover_printers)
+        _detect_h.addWidget(self.btn_detect_printers)
+        _detect_h.addStretch()
+        _detect_v.addLayout(_detect_h)
+        self._lbl_discovery_status = QLabel("")
+        self._lbl_discovery_status.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        self._lbl_discovery_status.setWordWrap(True)
+        _detect_v.addWidget(self._lbl_discovery_status)
+
+        # ── Campos para "system" ──
+        # Dropdown poblado por la detección con las impresoras del SO.
+        # Se guarda el NOMBRE de la impresora (printer_system_name).
+        self.combo_system_printer = QComboBox()
+        self.combo_system_printer.setMinimumWidth(280)
 
         # ── Campos para "network" ──
         self.input_printer_ip = QLineEdit()
@@ -790,10 +834,17 @@ class SettingsView(QWidget):
         self.input_printer_port.setRange(1, 65535)
         self.input_printer_port.setValue(9100)
 
-        # ── Campos para "usb" ──
-        # Vendor/Product IDs como strings hex ("0x04b8") — el user los
-        # copia textualmente desde lsusb o Administrador de dispositivos.
-        # Validación final ocurre en el schema Pydantic del backend.
+        # ── Campos para "usb" (avanzado) ──
+        # Dropdown de dispositivos USB detectados. Al elegir uno, se
+        # rellenan automáticamente los campos hex de abajo (que son la
+        # fuente de verdad que se guarda). El último ítem permite
+        # ingreso manual si la detección no encuentra el dispositivo.
+        self.combo_usb_device = QComboBox()
+        self.combo_usb_device.setMinimumWidth(280)
+        self.combo_usb_device.currentIndexChanged.connect(self._on_usb_device_changed)
+
+        # Vendor/Product IDs como strings hex ("0x04b8"). Quedan como
+        # respaldo manual; normalmente los rellena el dropdown de arriba.
         self.input_printer_usb_vendor = QLineEdit()
         self.input_printer_usb_vendor.setPlaceholderText("0x04b8 (ej. Epson)")
         self.input_printer_usb_vendor.setMaxLength(10)
@@ -802,7 +853,7 @@ class SettingsView(QWidget):
         self.input_printer_usb_product.setPlaceholderText("0x0202 (ej. TM-T20)")
         self.input_printer_usb_product.setMaxLength(10)
 
-        # ── Campos comunes (network + usb) ──
+        # ── Campos comunes (system + network + usb) ──
         self.input_printer_profile = QLineEdit()
         self.input_printer_profile.setPlaceholderText("(opcional) TM-T20II, TM-T88III…")
         self.input_printer_profile.setMaxLength(40)
@@ -811,18 +862,24 @@ class SettingsView(QWidget):
         self.combo_printer_paper_width.addItem("80 mm (común)", 80)
         self.combo_printer_paper_width.addItem("58 mm (POS pequeño)", 58)
 
-        # Filas del form. Guardamos referencia a las filas USB para
-        # mostrarlas/ocultarlas según printer_type.
+        # ── Filas del form ──
         form.addRow("Tipo de conexión:", self.combo_printer_type)
+        form.addRow("", self._detect_container)
 
-        # Etiquetas en variables para poder ocultarlas también (QFormLayout
-        # asocia un label con cada field; setRowVisible las maneja juntas
-        # en Qt6 pero acá guardamos refs para .setVisible explícito).
+        # system-only
+        self._lbl_system_printer = QLabel("Impresora:")
+        form.addRow(self._lbl_system_printer, self.combo_system_printer)
+
+        # network-only
         self._lbl_printer_ip = QLabel("Dirección IP:")
         form.addRow(self._lbl_printer_ip, self.input_printer_ip)
 
         self._lbl_printer_port = QLabel("Puerto:")
         form.addRow(self._lbl_printer_port, self.input_printer_port)
+
+        # usb-only
+        self._lbl_usb_device = QLabel("Dispositivo USB:")
+        form.addRow(self._lbl_usb_device, self.combo_usb_device)
 
         self._lbl_printer_usb_vendor = QLabel("USB Vendor ID:")
         form.addRow(self._lbl_printer_usb_vendor, self.input_printer_usb_vendor)
@@ -830,6 +887,7 @@ class SettingsView(QWidget):
         self._lbl_printer_usb_product = QLabel("USB Product ID:")
         form.addRow(self._lbl_printer_usb_product, self.input_printer_usb_product)
 
+        # comunes
         self._lbl_printer_profile = QLabel("Perfil python-escpos:")
         form.addRow(self._lbl_printer_profile, self.input_printer_profile)
 
@@ -860,17 +918,20 @@ class SettingsView(QWidget):
         note = QLabel(
             "ℹ️ Estos valores se usan al imprimir tickets de venta y "
             "comprobantes electrónicos.\n\n"
-            "Tipo 'network': impresora térmica en red — envía ESC/POS por TCP "
-            "al puerto configurado (típicamente 9100, modo RAW).\n"
-            "Tipo 'usb': impresora térmica USB — requiere instalar `pyusb` "
-            "y conocer Vendor/Product IDs (consulte `lsusb` en Linux o el "
-            "Administrador de dispositivos en Windows).\n"
-            "Tipo 'none': desactiva el botón 'Imprimir' del ticket; el PDF "
-            "se sigue generando para visualización.\n\n"
-            "💡 Antes de guardar cambios, use 'Probar impresión' para validar "
-            "la conectividad con un ticket corto. La primera vez que se "
-            "imprime puede tardar unos segundos mientras el SO inicializa "
-            "el driver USB."
+            "🖥️ 'Impresora del sistema' (recomendado): elija su impresora "
+            "del desplegable. Imprime por el spooler de Windows en modo RAW; "
+            "no necesita Vendor/Product ID ni instalar libusb. Funciona con "
+            "el driver normal del fabricante.\n"
+            "🌐 'Red': impresora térmica en red — envía ESC/POS por TCP al "
+            "puerto configurado (típicamente 9100, modo RAW).\n"
+            "🔌 'USB directa' (avanzado): habla USB directo con `pyusb`. "
+            "Use el desplegable para elegir el dispositivo detectado; en "
+            "Windows puede requerir un backend libusb (Zadig).\n"
+            "🚫 'Desactivada': desactiva el botón 'Imprimir' del ticket; el "
+            "PDF se sigue generando para visualización.\n\n"
+            "💡 Use '🔄 Detectar impresoras' para refrescar la lista, y "
+            "'Probar impresión' para validar con un ticket corto antes de "
+            "guardar. La primera impresión puede tardar unos segundos."
         )
         note.setStyleSheet("color: #888; font-size: 12px; margin-top: 12px;")
         note.setWordWrap(True)
@@ -928,6 +989,7 @@ class SettingsView(QWidget):
 
         # Dirty tracking
         self.combo_printer_type.currentIndexChanged.connect(self._mark_dirty)
+        self.combo_system_printer.currentIndexChanged.connect(self._mark_dirty)
         self.input_printer_ip.textChanged.connect(self._mark_dirty)
         self.input_printer_port.valueChanged.connect(self._mark_dirty)
         self.input_printer_usb_vendor.textChanged.connect(self._mark_dirty)
@@ -938,33 +1000,68 @@ class SettingsView(QWidget):
         # Mostrar/ocultar campos según printer_type seleccionado.
         # Conectamos DESPUÉS del dirty para que la sincronización
         # inicial (al cargar settings) no marque dirty=True.
-        self.combo_printer_type.currentTextChanged.connect(self._sync_printer_fields_visibility)
+        self.combo_printer_type.currentIndexChanged.connect(self._sync_printer_fields_visibility)
 
         layout.addStretch()
-        return tab
+        scroll.setWidget(tab)  
+        return scroll
 
     # ----------------------------------------------------------
-    # Fix 2.5 (cerrado): muestra/oculta campos según el tipo de
-    # impresora seleccionado. Mantiene la UI limpia: no tiene sentido
-    # mostrar el IP cuando elegiste USB.
+    # Helpers de impresora
+    # ----------------------------------------------------------
+    def _printer_type(self) -> str:
+        """Valor canónico del tipo de impresora seleccionado."""
+        return self.combo_printer_type.currentData() or "none"
+
+    def _usb_manual_mode(self) -> bool:
+        """
+        True si en USB hay que mostrar los campos hex manuales: cuando
+        el usuario eligió "ingresar manualmente" o cuando el desplegable
+        no tiene dispositivos detectados reales.
+        """
+        data = self.combo_usb_device.currentData()
+        if data == "__manual__":
+            return True
+        # ¿Hay al menos un dispositivo real (dict) en el combo?
+        has_devices = any(
+            isinstance(self.combo_usb_device.itemData(i), dict)
+            for i in range(self.combo_usb_device.count())
+        )
+        return not has_devices
+
+    # ----------------------------------------------------------
+    # Muestra/oculta campos según el tipo de impresora seleccionado.
+    # Mantiene la UI limpia: cada modo solo muestra lo que necesita.
     # ----------------------------------------------------------
     def _sync_printer_fields_visibility(self, *_args):
-        printer_type = self.combo_printer_type.currentText().lower()
+        printer_type = self._printer_type()
+        is_system = printer_type == "system"
         is_network = printer_type == "network"
         is_usb = printer_type == "usb"
-        is_active = is_network or is_usb  # "none" oculta todo lo demás
+        is_active = is_system or is_network or is_usb  # "none" oculta todo
 
-        # Network-only
+        # Botón de detección: útil para system y usb.
+        self._detect_container.setVisible(is_system or is_usb)
+
+        # system-only
+        self._lbl_system_printer.setVisible(is_system)
+        self.combo_system_printer.setVisible(is_system)
+
+        # network-only
         self._lbl_printer_ip.setVisible(is_network)
         self.input_printer_ip.setVisible(is_network)
         self._lbl_printer_port.setVisible(is_network)
         self.input_printer_port.setVisible(is_network)
 
-        # USB-only
-        self._lbl_printer_usb_vendor.setVisible(is_usb)
-        self.input_printer_usb_vendor.setVisible(is_usb)
-        self._lbl_printer_usb_product.setVisible(is_usb)
-        self.input_printer_usb_product.setVisible(is_usb)
+        # usb-only: el dropdown siempre visible en USB; los campos hex
+        # manuales solo cuando se eligió "manual" o no hay detección.
+        self._lbl_usb_device.setVisible(is_usb)
+        self.combo_usb_device.setVisible(is_usb)
+        show_manual = is_usb and self._usb_manual_mode()
+        self._lbl_printer_usb_vendor.setVisible(show_manual)
+        self.input_printer_usb_vendor.setVisible(show_manual)
+        self._lbl_printer_usb_product.setVisible(show_manual)
+        self.input_printer_usb_product.setVisible(show_manual)
 
         # Comunes (solo cuando hay impresora activa)
         self._lbl_printer_profile.setVisible(is_active)
@@ -974,6 +1071,140 @@ class SettingsView(QWidget):
 
         # Botón de prueba se deshabilita si está en "none"
         self.btn_test_printer.setEnabled(is_active)
+
+    # ----------------------------------------------------------
+    # USB: al elegir un dispositivo del desplegable, autocompletar los
+    # campos hex (fuente de verdad que se guarda). "manual" los revela.
+    # ----------------------------------------------------------
+    def _on_usb_device_changed(self, *_args):
+        data = self.combo_usb_device.currentData()
+        if isinstance(data, dict):
+            vid = data.get("vendor_id") or ""
+            pid = data.get("product_id") or ""
+            self.input_printer_usb_vendor.setText(vid)
+            self.input_printer_usb_product.setText(pid)
+        # Si es "__manual__" o None, no tocamos los campos (el usuario
+        # los edita). Refrescar visibilidad para mostrar/ocultar el manual.
+        self._sync_printer_fields_visibility()
+
+    # ----------------------------------------------------------
+    # Detección de impresoras (modo system + usb). No bloqueante.
+    # ----------------------------------------------------------
+    def _discover_printers(self):
+        self._printers_discovered_once = True
+        self.btn_detect_printers.setEnabled(False)
+        self.btn_detect_printers.setText("Detectando…")
+        self._lbl_discovery_status.setText("Buscando impresoras…")
+
+        def _do():
+            from ui.services.settings_service import discover_printers
+            import requests as _req
+            try:
+                return discover_printers()
+            except _req.HTTPError as e:
+                try:
+                    detail = e.response.json().get("detail", str(e))
+                except Exception:
+                    detail = str(e)
+                raise RuntimeError(detail) from None
+
+        def _on_done():
+            self.btn_detect_printers.setEnabled(True)
+            self.btn_detect_printers.setText("🔄 Detectar impresoras")
+
+        from ui.utils.http_worker import run_async
+        run_async(
+            _do,
+            on_success=self._on_printers_discovered,
+            on_error=self._on_discovery_error,
+            on_finished=_on_done,
+            owner=self,
+        )
+
+    def _on_discovery_error(self, msg: str):
+        self._lbl_discovery_status.setText(f"⚠️ No se pudo detectar: {msg}")
+
+    def _on_printers_discovered(self, data: dict):
+        data = data or {}
+        system_list = data.get("system") or []
+        usb_list = data.get("usb") or []
+        notes = data.get("notes") or []
+
+        # ── Poblar impresoras del sistema (preservar selección) ──
+        prev_name = self.combo_system_printer.currentData()
+        if not prev_name:
+            # Si aún no hay selección en runtime, respetar lo guardado.
+            prev_name = (self.settings_data or {}).get("printer_system_name")
+
+        self.combo_system_printer.blockSignals(True)
+        self.combo_system_printer.clear()
+        if not system_list:
+            self.combo_system_printer.addItem("— No se detectaron impresoras —", None)
+        else:
+            for p in system_list:
+                name = p.get("name")
+                if not name:
+                    continue
+                label = name + ("  (predeterminada)" if p.get("is_default") else "")
+                self.combo_system_printer.addItem(label, name)
+        # Si la guardada no aparece en la detección, agregarla igual para
+        # no perder la selección del usuario.
+        if prev_name and self.combo_system_printer.findData(prev_name) < 0:
+            self.combo_system_printer.addItem(f"{prev_name}  (no detectada)", prev_name)
+        # Restaurar selección
+        if prev_name:
+            idx = self.combo_system_printer.findData(prev_name)
+            if idx >= 0:
+                self.combo_system_printer.setCurrentIndex(idx)
+        self.combo_system_printer.blockSignals(False)
+
+        # ── Poblar dispositivos USB (preservar VID/PID) ──
+        cur_vid = (self.input_printer_usb_vendor.text() or "").strip().lower()
+        cur_pid = (self.input_printer_usb_product.text() or "").strip().lower()
+
+        self.combo_usb_device.blockSignals(True)
+        self.combo_usb_device.clear()
+        self.combo_usb_device.addItem("— Seleccione un dispositivo —", None)
+        matched_idx = -1
+        for dev in usb_list:
+            desc = dev.get("description") or "Dispositivo USB"
+            payload = {
+                "vendor_id": dev.get("vendor_id"),
+                "product_id": dev.get("product_id"),
+            }
+            self.combo_usb_device.addItem(desc, payload)
+            if (
+                cur_vid and cur_pid
+                and (dev.get("vendor_id") or "").lower() == cur_vid
+                and (dev.get("product_id") or "").lower() == cur_pid
+            ):
+                matched_idx = self.combo_usb_device.count() - 1
+        self.combo_usb_device.addItem("✏️ Ingresar manualmente…", "__manual__")
+        # Restaurar selección: dispositivo que coincide con VID/PID
+        # guardados; si no hay match pero hay VID/PID, ir a manual.
+        if matched_idx >= 0:
+            self.combo_usb_device.setCurrentIndex(matched_idx)
+        elif cur_vid and cur_pid:
+            man_idx = self.combo_usb_device.findData("__manual__")
+            if man_idx >= 0:
+                self.combo_usb_device.setCurrentIndex(man_idx)
+        self.combo_usb_device.blockSignals(False)
+
+        # ── Estado / notas ──
+        backends = data.get("backends") or {}
+        plat = data.get("platform") or "—"
+        parts = [
+            f"Plataforma: {plat}",
+            f"sistema: {len(system_list)}",
+            f"USB: {len(usb_list)}",
+        ]
+        status = " · ".join(parts)
+        if notes:
+            status += "\n" + "\n".join(f"• {n}" for n in notes)
+        self._lbl_discovery_status.setText(status)
+
+        # Refrescar visibilidad (puede haber cambiado el modo manual USB).
+        self._sync_printer_fields_visibility()
 
     # ----------------------------------------------------------
     # Fix 2.5 (cerrado): Botón "Probar impresión"
@@ -1038,9 +1269,7 @@ class SettingsView(QWidget):
             )
 
         def _on_done():
-            self.btn_test_printer.setEnabled(
-                self.combo_printer_type.currentText().lower() != "none"
-            )
+            self.btn_test_printer.setEnabled(self._printer_type() != "none")
             self.btn_test_printer.setText("🧾 Probar impresión")
 
         from ui.utils.http_worker import run_async
@@ -1215,20 +1444,41 @@ class SettingsView(QWidget):
         rate = data.get("exchange_rate")
         self.input_exchange_rate.setValue(float(rate) if rate else 1.00)
 
-        # --- Tab Impresora (4.3 + Fix 2.5 cerrado) ---
+        # --- Tab Impresora (autodetección) ---
+        # printer_type ahora usa itemData (system/network/usb/none).
         pt = data.get("printer_type", "network") or "network"
-        idx_pt = self.combo_printer_type.findText(pt)
+        idx_pt = self.combo_printer_type.findData(pt)
+        if idx_pt < 0:
+            # Config antigua o valor inesperado → caer a "network".
+            idx_pt = self.combo_printer_type.findData("network")
         if idx_pt >= 0:
             self.combo_printer_type.setCurrentIndex(idx_pt)
+
         self.input_printer_ip.setText(data.get("printer_ip", "192.168.0.120") or "192.168.0.120")
         self.input_printer_port.setValue(data.get("printer_port", 9100) or 9100)
 
-        # Fix 2.5 (cerrado): campos USB + perfil + ancho papel.
-        # Si la BD viene sin estos campos (instalación previa a la
-        # migración g7b8c9d0e1f2), get(...) devuelve None y los
-        # widgets quedan vacíos — que es lo correcto.
+        # Nombre de impresora del sistema (modo "system"). Lo mostramos
+        # como ítem aunque la detección aún no haya corrido, para no
+        # perder la selección guardada; la detección lo reconciliará.
+        sys_name = data.get("printer_system_name") or ""
+        self.combo_system_printer.blockSignals(True)
+        self.combo_system_printer.clear()
+        if sys_name:
+            self.combo_system_printer.addItem(sys_name, sys_name)
+        else:
+            self.combo_system_printer.addItem("— Detectando… —", None)
+        self.combo_system_printer.blockSignals(False)
+
+        # Campos USB hex (fuente de verdad). El dropdown de dispositivos
+        # se llena con la detección; al cargar dejamos placeholder.
         self.input_printer_usb_vendor.setText(data.get("printer_usb_vendor_id") or "")
         self.input_printer_usb_product.setText(data.get("printer_usb_product_id") or "")
+        self.combo_usb_device.blockSignals(True)
+        self.combo_usb_device.clear()
+        self.combo_usb_device.addItem("— Detectando… —", None)
+        self.combo_usb_device.addItem("✏️ Ingresar manualmente…", "__manual__")
+        self.combo_usb_device.blockSignals(False)
+
         self.input_printer_profile.setText(data.get("printer_profile") or "")
 
         paper_width = data.get("printer_paper_width_mm") or 80
@@ -1237,10 +1487,6 @@ class SettingsView(QWidget):
             self.combo_printer_paper_width.setCurrentIndex(idx_pw)
 
         # Sincronizar visibilidad de campos según el tipo cargado.
-        # Esto NO marca dirty porque ya conectamos la señal de visibilidad
-        # con currentTextChanged y el setCurrentIndex de arriba dispara
-        # ese mismo callback como efecto colateral. Llamamos explícito
-        # acá por si el índice no cambió (ya estaba en "network").
         self._sync_printer_fields_visibility()
 
         # --- Tab Facturación (4.1): Issuer Profile ---
@@ -1359,10 +1605,11 @@ class SettingsView(QWidget):
             "default_tax": self.input_default_tax.currentText(),
             "rounding_enabled": self.input_rounding.currentIndex() == 1,
             "default_supplier_id": self.combo_default_supplier.currentData(),
-            # Fase 4.3 + Fix 2.5 (cerrado)
-            "printer_type": self.combo_printer_type.currentText(),
+            # Impresora (autodetección)
+            "printer_type": self.combo_printer_type.currentData(),
             "printer_ip": self.input_printer_ip.text(),
             "printer_port": self.input_printer_port.value(),
+            "printer_system_name": self.combo_system_printer.currentData(),
             "printer_usb_vendor_id": self.input_printer_usb_vendor.text(),
             "printer_usb_product_id": self.input_printer_usb_product.text(),
             "printer_profile": self.input_printer_profile.text(),
@@ -2491,10 +2738,15 @@ class SettingsView(QWidget):
         self.users_table.setHorizontalHeaderLabels([
             "ID", "Usuario", "Nombre", "Rol", "Estado", "Acciones"
         ])
-        self.users_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.users_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.users_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.users_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        hh = self.users_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # ID
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)           # Usuario
+        hh.setSectionResizeMode(2, QHeaderView.Stretch)           # Nombre
+        hh.setSectionResizeMode(3, QHeaderView.Stretch)           # Rol
+        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Estado
+        hh.setSectionResizeMode(5, QHeaderView.Fixed)             # Acciones
+        self.users_table.setColumnWidth(5, 90)
+        self.users_table.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self.users_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.users_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.users_table.setAlternatingRowColors(True)

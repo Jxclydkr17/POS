@@ -109,6 +109,13 @@ hidden_imports += collect_submodules('ui')
 # (PyInstaller normalmente lo detecta, pero así no dependemos de eso).
 hidden_imports += ['importlib_resources']
 
+# ── Autodetección de impresoras en Windows (modo "system") ──
+# escpos.printer.Win32Raw y app.utils.printer_discovery usan win32print
+# (paquete pywin32). PyInstaller suele traer los hooks de pywin32, pero
+# declaramos los submódulos usados explícitamente para que el .exe pueda
+# enumerar e imprimir por el spooler sin depender de autodetección.
+hidden_imports += ['win32print', 'win32api', 'pywintypes']
+
 # ── Archivos de datos a incluir ──
 # (source, dest_folder_in_bundle)
 datas = [
