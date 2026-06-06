@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 from app.db.models.user import User, ALL_PERMISSIONS, DEFAULT_PERMISSIONS
-from app.core.security import hash_password, verify_password, create_access_token, create_refresh_token, decode_token as _decode_token, needs_rehash
+from app.core.security import (
+    hash_password, verify_password, create_access_token, create_refresh_token,
+    decode_token as _decode_token, needs_rehash, create_password_reset_token,
+    SECRET_KEY,
+)
 # ── FASE 3 — Fix 3.1: Fuente única para auth ──
 from app.core.dependencies import get_current_user, require_role
 # ── FASE 4 — Fix 4.3: Rate limiter para endpoints sin auth ──
@@ -15,6 +19,9 @@ from typing import Optional
 import logging
 import threading
 import time
+import hmac
+import hashlib
+import secrets
 from collections import deque
 
 logger = logging.getLogger(__name__)
@@ -39,6 +46,9 @@ class UserRegister(BaseModel):
     password: str = Field(..., min_length=8, max_length=255)
     full_name: Optional[str] = Field(None, max_length=150)
     role: str = Field("vendedor", pattern=r"^(admin|vendedor|cajero)$")
+    # Opcionales: solo el admin los necesita (para recuperar su contraseña).
+    cedula: Optional[str] = Field(None, max_length=50)
+    correo: Optional[EmailStr] = None
 
 
 class UserUpdate(BaseModel):
@@ -47,6 +57,10 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, max_length=150)
     role: Optional[str] = Field(None, pattern=r"^(admin|vendedor|cajero)$")
     is_active: Optional[bool] = None
+    # Permiten que un admin de una instalación existente complete su cédula
+    # y correo para habilitar la recuperación de contraseña.
+    cedula: Optional[str] = Field(None, max_length=50)
+    correo: Optional[EmailStr] = None
 
 
 class UserOut(BaseModel):
@@ -57,6 +71,8 @@ class UserOut(BaseModel):
     is_active: bool
     permissions: list[str] = []
     created_at: Optional[datetime]
+    cedula: Optional[str] = None
+    correo: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,6 +86,8 @@ class UserOut(BaseModel):
             is_active=user.is_active,
             permissions=user.get_permissions(),
             created_at=user.created_at,
+            cedula=user.cedula,
+            correo=user.correo,
         )
 
 
@@ -83,15 +101,42 @@ class RefreshTokenRequest(BaseModel):
 
 # ── FASE 3 — Fix 3.4: Schema para setup inicial ──
 class InitialSetupRequest(BaseModel):
-    """Solo se usa cuando la BD está vacía (cero usuarios)."""
+    """Solo se usa cuando la BD está vacía (cero usuarios).
+
+    Cédula y correo son OBLIGATORIOS: son los dos datos con los que el
+    administrador podrá demostrar su identidad si olvida la contraseña
+    (flujo "¿Olvidó su contraseña?").
+    """
     username: str = Field(..., min_length=3, max_length=100)
     password: str = Field(..., min_length=8, max_length=255)
     full_name: Optional[str] = Field("Administrador", max_length=150)
+    cedula: str = Field(..., min_length=9, max_length=50)
+    correo: EmailStr
 
 
 # ── FASE 6 — Fix 6.1: Schema para cambio de contraseña ──
 class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., min_length=1)
+    new_password: str = Field(..., min_length=8, max_length=255)
+
+
+# ── Recuperación de contraseña del administrador (estilo Google) ──
+class RecoverRequestPayload(BaseModel):
+    """Paso A/B: el admin demuestra identidad con cédula + correo."""
+    cedula: str = Field(..., min_length=1, max_length=50)
+    correo: EmailStr
+
+
+class RecoverVerifyPayload(BaseModel):
+    """Paso D: el admin envía el código de 6 dígitos recibido por correo."""
+    cedula: str = Field(..., min_length=1, max_length=50)
+    correo: EmailStr
+    code: str = Field(..., min_length=6, max_length=6, pattern=r"^\d{6}$")
+
+
+class RecoverResetPayload(BaseModel):
+    """Paso E: con el reset_token válido, el admin fija su nueva contraseña."""
+    reset_token: str = Field(..., min_length=10)
     new_password: str = Field(..., min_length=8, max_length=255)
 
 
@@ -135,6 +180,8 @@ def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
         full_name=data.full_name or "Administrador",
         role="admin",
         is_active=True,
+        cedula=(data.cedula or "").strip(),
+        correo=str(data.correo).strip().lower(),
     )
     db.add(admin)
     try:
@@ -159,6 +206,264 @@ def initial_setup(data: InitialSetupRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail="Error interno al crear el administrador.")
     logger.info(f"Setup inicial completado — admin '{admin.username}' creado.")
     return {"message": "Administrador creado exitosamente", "username": admin.username}
+
+
+# ════════════════════════════════════════════════════════════
+#  Recuperación de contraseña del ADMIN (estilo Google)
+#
+#  Flujo de 3 pasos, EXCLUSIVO para el usuario administrador (los
+#  demás roles los resetea el admin desde adentro del sistema):
+#
+#    1. POST /users/recover-password/request  (cédula + correo)
+#         → valida identidad contra el admin. Si coincide, genera un
+#           código de 6 dígitos, lo guarda en memoria (hasheado, con
+#           vencimiento) y lo envía al correo del admin.
+#    2. POST /users/recover-password/verify   (cédula + correo + código)
+#         → valida el código. Si es correcto, devuelve un reset_token
+#           JWT de un solo uso y corta duración (10 min).
+#    3. POST /users/recover-password/reset     (reset_token + nueva clave)
+#         → valida el reset_token y actualiza la contraseña del admin.
+#
+#  El código vive SOLO en memoria del proceso (nunca se persiste), igual
+#  que el rate limiter de login. Se guarda hasheado con HMAC-SHA256 y se
+#  compara en tiempo constante. Tras N intentos fallidos el código se
+#  invalida. El backend es un único proceso (uvicorn embebido en el
+#  launcher de escritorio), por lo que el dict en memoria es suficiente.
+# ════════════════════════════════════════════════════════════
+RECOVERY_CODE_TTL_SECONDS = 600        # vigencia del código: 10 minutos
+RECOVERY_MAX_VERIFY_ATTEMPTS = 5       # intentos de código antes de invalidarlo
+_recovery_lock = threading.Lock()
+
+# username → {"code_hash": str, "expires_at": float(monotonic), "attempts": int}
+_recovery_codes: dict[str, dict] = {}
+
+
+def _normalize_cedula(value: str) -> str:
+    """Normaliza una cédula para comparar: minúsculas, sin espacios ni guiones."""
+    return "".join(ch for ch in (value or "").lower() if ch.isalnum())
+
+
+def _hash_code(code: str) -> str:
+    """HMAC-SHA256 del código usando el SECRET_KEY como clave."""
+    return hmac.new(SECRET_KEY.encode("utf-8"), code.encode("utf-8"),
+                    hashlib.sha256).hexdigest()
+
+
+def _mask_email(email: str) -> str:
+    """Enmascara un correo para mostrarlo sin revelarlo completo.
+
+    'jackob.ferreteria@gmail.com' → 'ja••••••••@gmail.com'
+    """
+    email = (email or "").strip()
+    if "@" not in email:
+        return email
+    local, _, domain = email.partition("@")
+    if len(local) <= 2:
+        shown = local[:1]
+    else:
+        shown = local[:2]
+    return f"{shown}{'•' * max(4, len(local) - len(shown))}@{domain}"
+
+
+def _find_recovery_admin(db: Session, cedula: str, correo: str) -> Optional[User]:
+    """Busca el admin activo cuya cédula Y correo coincidan con lo provisto.
+
+    Devuelve None si no hay coincidencia exacta. La comparación de cédula
+    ignora guiones/espacios; la del correo ignora mayúsculas/espacios.
+    """
+    target_cedula = _normalize_cedula(cedula)
+    target_correo = (correo or "").strip().lower()
+    if not target_cedula or not target_correo:
+        return None
+
+    admins = db.query(User).filter(
+        User.role == "admin",
+        User.is_active == True,  # noqa: E712
+    ).all()
+
+    for admin in admins:
+        if not admin.cedula or not admin.correo:
+            continue
+        if (_normalize_cedula(admin.cedula) == target_cedula
+                and admin.correo.strip().lower() == target_correo):
+            return admin
+    return None
+
+
+def _store_recovery_code(username: str, code: str) -> None:
+    """Guarda (hasheado) el código de recuperación para un usuario."""
+    with _recovery_lock:
+        _recovery_codes[username] = {
+            "code_hash": _hash_code(code),
+            "expires_at": time.monotonic() + RECOVERY_CODE_TTL_SECONDS,
+            "attempts": 0,
+        }
+
+
+def _verify_recovery_code(username: str, code: str) -> bool:
+    """Verifica el código en tiempo constante; consume intentos y vencimiento.
+
+    En caso de éxito, invalida (consume) el código para que no se reutilice.
+    """
+    with _recovery_lock:
+        entry = _recovery_codes.get(username)
+        if not entry:
+            return False
+
+        # Vencido → limpiar y rechazar.
+        if time.monotonic() > entry["expires_at"]:
+            _recovery_codes.pop(username, None)
+            return False
+
+        # Demasiados intentos → invalidar.
+        if entry["attempts"] >= RECOVERY_MAX_VERIFY_ATTEMPTS:
+            _recovery_codes.pop(username, None)
+            return False
+
+        entry["attempts"] += 1
+        ok = hmac.compare_digest(entry["code_hash"], _hash_code(code))
+        if ok:
+            # Un solo uso: consumir el código al verificar correctamente.
+            _recovery_codes.pop(username, None)
+        return ok
+
+
+def _business_name(db: Session) -> Optional[str]:
+    """Nombre comercial del negocio para el correo (best-effort)."""
+    try:
+        from app.db.models.issuer_profile import IssuerProfile
+        issuer = db.query(IssuerProfile).first()
+        if issuer:
+            return issuer.commercial_name or issuer.legal_name
+    except Exception:
+        pass
+    return None
+
+
+@router.post(
+    "/recover-password/request",
+    dependencies=[rate_limit("pwd_recovery_request", 5, 300)],
+)
+def recover_password_request(data: RecoverRequestPayload, db: Session = Depends(get_db)):
+    """Paso A/B/C: valida identidad del admin y envía el código por correo."""
+    admin = _find_recovery_admin(db, data.cedula, data.correo)
+
+    # Paso B: error amigable si no coinciden los datos.
+    if admin is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mmm, esos no son… 🤔 Revisá tu cédula y tu correo e intentá de nuevo.",
+        )
+
+    # Paso C: generar y enviar el código de 6 dígitos.
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    _store_recovery_code(admin.username, code)
+
+    from app.utils.email_utils import send_password_recovery_code
+    sent = send_password_recovery_code(
+        recipient=admin.correo,
+        code=code,
+        business_name=_business_name(db),
+    )
+
+    if not sent:
+        # No pudimos enviar: invalidar el código que acabamos de crear para
+        # no dejar uno "huérfano" que nadie recibió.
+        with _recovery_lock:
+            _recovery_codes.pop(admin.username, None)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "Encontramos tu cuenta, pero no pudimos enviar el correo. "
+                "Verificá que el correo del sistema esté configurado en "
+                "Configuración → Correo, y volvé a intentar."
+            ),
+        )
+
+    logger.info("Código de recuperación generado para admin '%s'.", admin.username)
+    return {
+        "message": "Te enviamos un código de verificación a tu correo.",
+        "correo_masked": _mask_email(admin.correo),
+        "expires_in_seconds": RECOVERY_CODE_TTL_SECONDS,
+    }
+
+
+@router.post(
+    "/recover-password/verify",
+    dependencies=[rate_limit("pwd_recovery_verify", 10, 300)],
+)
+def recover_password_verify(data: RecoverVerifyPayload, db: Session = Depends(get_db)):
+    """Paso D: valida el código y, si es correcto, emite un reset_token."""
+    admin = _find_recovery_admin(db, data.cedula, data.correo)
+    if admin is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Mmm, esos no son… 🤔 Revisá tu cédula y tu correo e intentá de nuevo.",
+        )
+
+    if not _verify_recovery_code(admin.username, data.code):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="El código no es válido o ya venció. Pedí uno nuevo e intentá de nuevo.",
+        )
+
+    # Código correcto → token de reseteo de un solo paso (10 min).
+    reset_token = create_password_reset_token({
+        "sub": admin.username,
+        "purpose": "password_recovery",
+    })
+    logger.info("Código verificado para admin '%s' — reset_token emitido.", admin.username)
+    return {"message": "Código verificado.", "reset_token": reset_token}
+
+
+@router.post(
+    "/recover-password/reset",
+    dependencies=[rate_limit("pwd_recovery_reset", 5, 300)],
+)
+def recover_password_reset(data: RecoverResetPayload, db: Session = Depends(get_db)):
+    """Paso E: con el reset_token válido, fija la nueva contraseña del admin."""
+    payload = _decode_token(data.reset_token)
+    if not payload or payload.get("type") != "password_reset":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="La sesión de recuperación expiró. Iniciá el proceso de nuevo.",
+        )
+
+    username = payload.get("sub")
+    admin = db.query(User).filter(
+        User.username == username,
+        User.role == "admin",
+    ).first()
+    if not admin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No encontramos la cuenta de administrador. Iniciá el proceso de nuevo.",
+        )
+
+    # Aplicar la nueva contraseña.
+    admin.password = hash_password(data.new_password)
+    admin.must_change_password = False
+    # Revocar tokens existentes (cualquier sesión activa queda invalidada).
+    from app.utils.dt import utcnow as _utcnow
+    admin.token_revoked_at = _utcnow().replace(microsecond=0)
+
+    try:
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error("Error al resetear contraseña de '%s': %s", username, e)
+        raise HTTPException(status_code=500, detail="Error interno al actualizar la contraseña.")
+
+    # Por las dudas, limpiar cualquier código pendiente de este usuario.
+    with _recovery_lock:
+        _recovery_codes.pop(username, None)
+
+    logger.info("Contraseña del admin '%s' restablecida vía recuperación.", username)
+    return {"message": "Tu contraseña fue actualizada. Ya podés iniciar sesión."}
+
 
 # ────────────────────────────────────────────────────────────
 #  Rate limiter de login — in-memory con deque
@@ -250,6 +555,8 @@ def register_user(
         password=hashed_pw,
         full_name=data.full_name,
         role=data.role,
+        cedula=(data.cedula or "").strip() or None,
+        correo=(str(data.correo).strip().lower() if data.correo else None),
     )
     db.add(new_user)
     try:
@@ -490,6 +797,12 @@ def update_user(
 
     if data.full_name is not None:
         user.full_name = data.full_name
+
+    # Cédula y correo (habilitan la recuperación de contraseña del admin).
+    if data.cedula is not None:
+        user.cedula = data.cedula.strip() or None
+    if data.correo is not None:
+        user.correo = str(data.correo).strip().lower() or None
 
     if data.role is not None:
         # Protección: no permitir quitarse el rol admin a sí mismo si es el último admin

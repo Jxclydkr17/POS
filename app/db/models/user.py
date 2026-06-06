@@ -60,6 +60,20 @@ class User(Base):
     permissions = Column(Text, nullable=True)  # JSON list de permisos
     created_at = Column(DateTime, default=utcnow)
 
+    # ── Recuperación de contraseña (estilo Google) ──
+    # Cédula y correo del usuario. Se capturan obligatoriamente al crear el
+    # administrador inicial (ver /users/setup) y habilitan el flujo de
+    # "¿Olvidó su contraseña?": el admin demuestra identidad con cédula +
+    # correo, recibe un código de 6 dígitos a su correo y resetea su clave.
+    #
+    # Son nullable porque:
+    #   - Las instalaciones existentes (admin creado antes de esta función)
+    #     no los tienen hasta que el admin los complete en Configuración.
+    #   - Los demás roles (vendedor/cajero) no los necesitan; el admin
+    #     resetea sus contraseñas desde adentro del sistema.
+    cedula = Column(String(50), nullable=True)
+    correo = Column(String(255), nullable=True)
+
     # ── FASE 3 — Fix 3.3: Revocación de tokens ──
     # Cuando se establece, todos los tokens con iat < token_revoked_at
     # son rechazados. Se actualiza al desactivar usuario o cambiar password.

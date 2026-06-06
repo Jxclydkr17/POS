@@ -160,6 +160,18 @@ class UserDialog(QDialog):
         self.input_full_name.setPlaceholderText("Nombre completo")
         form.addRow("Nombre:", self.input_full_name)
 
+        # ── Cédula y correo ──────────────────────────────────────
+        # Solo son imprescindibles para el ADMIN: habilitan la recuperación
+        # de contraseña ("¿Olvidó su contraseña?"). Para vendedor/cajero son
+        # opcionales. El placeholder lo recuerda.
+        self.input_cedula = QLineEdit()
+        self.input_cedula.setPlaceholderText("1-1234-5678 (recomendado para el admin)")
+        form.addRow("Cédula:", self.input_cedula)
+
+        self.input_correo = QLineEdit()
+        self.input_correo.setPlaceholderText("correo@ejemplo.com (para recuperar la contraseña)")
+        form.addRow("Correo:", self.input_correo)
+
         self.combo_role = QComboBox()
         self.combo_role.addItems(["vendedor", "cajero", "admin"])
         self.combo_role.currentTextChanged.connect(self._on_role_changed)
@@ -241,6 +253,8 @@ class UserDialog(QDialog):
     def _populate(self, data: dict):
         self.input_username.setText(data.get("username", ""))
         self.input_full_name.setText(data.get("full_name", "") or "")
+        self.input_cedula.setText(data.get("cedula", "") or "")
+        self.input_correo.setText(data.get("correo", "") or "")
 
         role = data.get("role", "vendedor")
         idx = self.combo_role.findText(role)
@@ -295,6 +309,8 @@ class UserDialog(QDialog):
         username = self.input_username.text().strip()
         password = self.input_password.text()
         full_name = self.input_full_name.text().strip()
+        cedula = self.input_cedula.text().strip()
+        correo = self.input_correo.text().strip()
         role = self.combo_role.currentText()
 
         # Validaciones
@@ -310,6 +326,23 @@ class UserDialog(QDialog):
             QMessageBox.warning(self, "Error", "La contraseña debe tener al menos 8 caracteres.")
             return
 
+        # Validar formato de correo si se ingresó algo.
+        if correo and ("@" not in correo or "." not in correo.split("@")[-1]):
+            QMessageBox.warning(self, "Error", "Ingresá un correo electrónico válido.")
+            return
+
+        # Aviso (no bloqueante) si el admin queda sin datos de recuperación.
+        if role == "admin" and (not cedula or not correo):
+            resp = QMessageBox.question(
+                self, "Recuperación de contraseña",
+                "Sin cédula y correo, este administrador no podrá recuperar su "
+                "contraseña con \"¿Olvidó su contraseña?\".\n\n¿Guardar de todos modos?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                return
+
         # Recopilar permisos seleccionados
         selected_perms = [
             perm for perm, chk in self.perm_checkboxes.items() if chk.isChecked()
@@ -320,6 +353,10 @@ class UserDialog(QDialog):
             "full_name": full_name or None,
             "role": role,
             "permissions": selected_perms,
+            # None (no "") cuando están vacíos: el backend valida `correo`
+            # como EmailStr y rechazaría una cadena vacía.
+            "cedula": cedula or None,
+            "correo": correo or None,
         }
 
         if password:

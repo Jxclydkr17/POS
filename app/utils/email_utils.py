@@ -37,6 +37,58 @@ def send_sale_email(recipient: str, pdf_path: str, sale_id: int, business_name: 
         return False
 
 
+def send_password_recovery_code(recipient: str, code: str, business_name: str = None) -> bool:
+    """
+    Envía el código de verificación de 6 dígitos para recuperar la contraseña
+    del administrador (flujo "¿Olvidó su contraseña?", estilo Google).
+
+    Retorna True si el correo se envió, False si falló o no hay credenciales
+    de correo configuradas. El caller decide qué mensaje mostrar al usuario.
+    """
+    biz = business_name or _DEFAULT_BUSINESS
+
+    if not email_user() or not email_pass():
+        logger.warning(
+            "No se puede enviar código de recuperación: correo no configurado."
+        )
+        return False
+
+    try:
+        subject = f"Código de recuperación de contraseña - {biz}"
+
+        # Mostramos el código grande y aislado para que sea fácil de copiar.
+        body = f"""
+        <div style="font-family: Arial, sans-serif; max-width: 480px; margin:auto;">
+            <h2 style="color:#6c3db5;">Recuperación de contraseña</h2>
+            <p>Recibimos una solicitud para restablecer la contraseña del
+               administrador de <b>{biz}</b>.</p>
+            <p>Tu código de verificación es:</p>
+            <div style="font-size:34px; font-weight:bold; letter-spacing:10px;
+                        color:#1a0a2e; background:#f1ebfa; border-radius:10px;
+                        padding:18px 0; text-align:center; margin:18px 0;">
+                {code}
+            </div>
+            <p style="color:#555;">El código vence en <b>10 minutos</b>.</p>
+            <hr style="border:none; border-top:1px solid #eee; margin:20px 0;">
+            <p style="color:#999; font-size:12px;">
+                Si vos no solicitaste este cambio, ignorá este correo: tu
+                contraseña seguirá siendo la misma.<br>
+                Mensaje automático de {biz} — por favor no responder.
+            </p>
+        </div>
+        """
+
+        yag = yagmail.SMTP(email_user(), email_pass())
+        yag.send(to=recipient, subject=subject, contents=[body])
+
+        logger.info("Código de recuperación enviado a %s", recipient)
+        return True
+
+    except Exception as e:
+        logger.error(f"Error al enviar código de recuperación: {e}")
+        return False
+
+
 def send_purchase_expiry_alert(recipient: str, purchases_data: list, business_name: str = None):
     """
     Envía alerta por correo de facturas a punto de vencer o ya vencidas.

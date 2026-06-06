@@ -2909,6 +2909,8 @@ class SettingsView(QWidget):
                 "password": dlg.result_data["password"],
                 "full_name": dlg.result_data.get("full_name"),
                 "role": dlg.result_data["role"],
+                "cedula": dlg.result_data.get("cedula"),
+                "correo": dlg.result_data.get("correo"),
             }
 
             self._set_users_buttons_enabled(False)
@@ -2979,6 +2981,10 @@ class SettingsView(QWidget):
                 update_payload["username"] = dlg.result_data["username"]
             if dlg.result_data.get("full_name") != user_data.get("full_name"):
                 update_payload["full_name"] = dlg.result_data["full_name"]
+            if dlg.result_data.get("cedula") != user_data.get("cedula"):
+                update_payload["cedula"] = dlg.result_data.get("cedula")
+            if dlg.result_data.get("correo") != user_data.get("correo"):
+                update_payload["correo"] = dlg.result_data.get("correo")
             if dlg.result_data.get("role") != user_data.get("role"):
                 update_payload["role"] = dlg.result_data["role"]
             if "is_active" in dlg.result_data:

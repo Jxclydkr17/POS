@@ -127,6 +127,26 @@ def create_refresh_token(data: dict):
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+# ── Recuperación de contraseña: token de reseteo de un solo paso ──
+PASSWORD_RESET_TOKEN_EXPIRE_MINUTES = 10  # ventana corta tras verificar el código
+
+
+def create_password_reset_token(data: dict):
+    """Genera un token JWT de RESETEO de contraseña (corta duración).
+
+    Se emite SOLO después de que el usuario verificó correctamente el código
+    de 6 dígitos enviado a su correo. El endpoint /users/recover-password/reset
+    lo exige (y valida `type == "password_reset"`) antes de permitir escribir
+    la nueva contraseña, de modo que el cliente no puede saltarse la
+    verificación del código.
+    """
+    to_encode = data.copy()
+    now = utcnow()
+    expire = now + timedelta(minutes=PASSWORD_RESET_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire, "iat": now, "type": "password_reset"})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
 def decode_token(token: str):
     """Decodifica un token JWT"""
     try:

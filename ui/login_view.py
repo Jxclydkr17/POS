@@ -278,7 +278,37 @@ class LoginWindow(QWidget):
         self.password_input = IconLineEdit("🔒", "Contraseña", QLineEdit.Password)
         form_layout.addWidget(self.password_input)
 
-        form_layout.addSpacing(28)
+        # ── Link "¿Olvidó su contraseña?" ───────────────────────────
+        # Justo debajo de la contraseña y arriba de "Ingresar". Estilo
+        # sutil (texto morado tenue, sin fondo) coherente con la estética
+        # oscura. Alineado a la derecha, como en la mayoría de los logins.
+        form_layout.addSpacing(8)
+        self.forgot_button = QPushButton("¿Olvidó su contraseña?")
+        self.forgot_button.setCursor(Qt.PointingHandCursor)
+        self.forgot_button.setFlat(True)
+        self.forgot_button.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: none;
+                color: {TEXT_MUTED};
+                font-size: 12px;
+                font-weight: 600;
+                text-align: right;
+                padding: 0px;
+            }}
+            QPushButton:hover {{
+                color: {VIOLET_ACCENT};
+                text-decoration: underline;
+            }}
+        """)
+        self.forgot_button.clicked.connect(self._open_password_recovery)
+        forgot_row = QHBoxLayout()
+        forgot_row.setContentsMargins(0, 0, 0, 0)
+        forgot_row.addStretch()
+        forgot_row.addWidget(self.forgot_button)
+        form_layout.addLayout(forgot_row)
+
+        form_layout.addSpacing(20)
 
         # Botón Ingresar (glow)
         self.login_button = QPushButton("  Ingresar  →")
@@ -323,6 +353,26 @@ class LoginWindow(QWidget):
 
         root.addWidget(form_panel)
 
+    # ── Recuperación de contraseña (estilo Google) ─────────────────
+    def _open_password_recovery(self):
+        """Abre el diálogo multi-paso de recuperación de contraseña.
+
+        Import diferido: PasswordRecoveryDialog importa de ui.api/ui.utils,
+        y lo cargamos solo al hacer clic para no acoplar el arranque del
+        login a ese módulo.
+        """
+        from ui.dialogs.password_recovery_dialog import PasswordRecoveryDialog
+        dlg = PasswordRecoveryDialog(self)
+        if dlg.exec() == QDialog.Accepted:
+            # Pre-cargar el usuario "admin" para que el siguiente login sea
+            # de un solo paso (escribir la nueva contraseña recién creada).
+            try:
+                self.username_input.line_edit.setText("admin")
+                self.password_input.line_edit.clear()
+                self.password_input.line_edit.setFocus()
+            except Exception:
+                pass
+
     # ── FASE 3 — Fix 3.4 + Fix 4.3: Setup inicial (asíncrono) ──────
     def _check_needs_setup(self):
         """Consulta al backend si la BD tiene cero usuarios (sin bloquear UI)."""
@@ -364,7 +414,7 @@ class LoginWindow(QWidget):
         """Diálogo para crear el primer administrador cuando la BD está vacía."""
         dlg = QDialog(self)
         dlg.setWindowTitle("Configuración inicial — Violette POS")
-        dlg.setFixedSize(420, 340)
+        dlg.setFixedSize(440, 540)
         dlg.setStyleSheet(f"""
             QDialog {{
                 background-color: {PANEL_BG};
@@ -449,6 +499,22 @@ class LoginWindow(QWidget):
         setup_user.setText("admin")
         layout.addWidget(setup_user)
 
+        # ── Cédula y correo: obligatorios para poder recuperar la
+        #    contraseña más adelante (flujo "¿Olvidó su contraseña?"). ──
+        lbl_cedula = QLabel("Cédula")
+        lbl_cedula.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_cedula)
+        setup_cedula = QLineEdit()
+        setup_cedula.setPlaceholderText("1-1234-5678")
+        layout.addWidget(setup_cedula)
+
+        lbl_correo = QLabel("Correo electrónico (para recuperar tu contraseña)")
+        lbl_correo.setStyleSheet("font-size: 13px; font-weight: 600;")
+        layout.addWidget(lbl_correo)
+        setup_correo = QLineEdit()
+        setup_correo.setPlaceholderText("correo@ejemplo.com")
+        layout.addWidget(setup_correo)
+
         lbl_pass = QLabel("Contraseña (mínimo 8 caracteres)")
         lbl_pass.setStyleSheet("font-size: 13px; font-weight: 600;")
         layout.addWidget(lbl_pass)
@@ -471,11 +537,20 @@ class LoginWindow(QWidget):
 
         def _do_setup():
             username = setup_user.text().strip()
+            cedula = setup_cedula.text().strip()
+            correo = setup_correo.text().strip()
             password = setup_pass.text()
             confirm = setup_confirm.text()
 
             if not username or len(username) < 3:
                 QMessageBox.warning(dlg, "Error", "El usuario debe tener al menos 3 caracteres.")
+                return
+            if len(cedula) < 9:
+                QMessageBox.warning(dlg, "Error", "Ingresá una cédula válida (al menos 9 caracteres).")
+                return
+            if not correo or "@" not in correo or "." not in correo.split("@")[-1]:
+                QMessageBox.warning(dlg, "Error", "Ingresá un correo electrónico válido.\n"
+                                                  "Lo usarás para recuperar tu contraseña si la olvidás.")
                 return
             if len(password) < 8:
                 QMessageBox.warning(dlg, "Error", "La contraseña debe tener al menos 8 caracteres.")
@@ -502,7 +577,12 @@ class LoginWindow(QWidget):
 
             api_call(
                 "post", f"{BASE_URL}/users/setup",
-                json={"username": username, "password": password},
+                json={
+                    "username": username,
+                    "password": password,
+                    "cedula": cedula,
+                    "correo": correo,
+                },
                 timeout=(5, 10),
                 on_success=_on_ok,
                 on_error=_on_err,
