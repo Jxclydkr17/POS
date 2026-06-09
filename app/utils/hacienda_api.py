@@ -25,6 +25,7 @@ from app.einvoice.hacienda_client import (
     HaciendaConfigError,
 )
 from app.utils.dt import utcnow, to_cr_iso
+from app.einvoice.xml_builder_v44 import extract_fecha_emision
 from app.constants.status_enums import InvoiceStatus
 
 logger = logging.getLogger(__name__)
@@ -87,10 +88,13 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
     # FASE 2.1 — Fix 2.1: usar TZ_CR explícita en lugar de la TZ del sistema.
     # Hacienda requiere `fecha` con offset -06:00; `astimezone()` sin argumento
     # devolvía la TZ del SO (problema si la PC estaba mal configurada).
-    if sale and sale.created_at:
-        fecha = to_cr_iso(sale.created_at)
-    else:
-        fecha = to_cr_iso(None)  # → now_cr() en CR
+    # Consistencia de fechas: `fecha` debe coincidir con la FechaEmision del
+    # comprobante (y con la fecha de su clave). La fuente de verdad es el XML
+    # ya firmado, NO sale.created_at (que puede ser de otro día en ventas
+    # encoladas o reintentos).
+    fecha = extract_fecha_emision(einv.xml_signed)
+    if not fecha:
+        fecha = to_cr_iso(sale.created_at) if (sale and sale.created_at) else to_cr_iso(None)
 
     xml_b64 = base64.b64encode(einv.xml_signed.encode("utf-8")).decode("ascii")
 
@@ -277,7 +281,9 @@ def send_rep_to_hacienda(db: Session, rep_id: int) -> dict:
     receptor_numero = getattr(customer, "id_number", None) if customer else None
 
     # FASE 2.1 — Fix 2.1: garantizar offset -06:00 también para REPs.
-    fecha = to_cr_iso(rep.created_at)
+    # Consistencia: `fecha` se toma de la FechaEmision del XML firmado (fuente
+    # de verdad), no de rep.created_at.
+    fecha = extract_fecha_emision(rep.xml_signed) or to_cr_iso(rep.created_at)
     xml_b64 = base64.b64encode(rep.xml_signed.encode("utf-8")).decode("ascii")
 
     client = get_hacienda_client()

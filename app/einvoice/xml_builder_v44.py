@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional, List
 import xml.etree.ElementTree as ET
@@ -7,6 +8,7 @@ import xml.etree.ElementTree as ET
 from sqlalchemy.orm import Session
 from app.db.models.issuer_profile import IssuerProfile
 from app.db.models.product import Product
+from app.db.models.cabys import Cabys
 from app.utils.dt import now_cr, to_cr_iso
 # FASE 4.2 — Fix 4.2: serialización con declaración XML estándar (comillas dobles)
 from app.einvoice._xml_emit import xml_to_bytes, xml_to_str
@@ -88,12 +90,16 @@ _IMPUESTOS_CON_TARIFA = {"01", "02", "07", "08", "12", "99"}
 # "pintura mezclada al momento". El SaleDetail tiene `is_common=True`
 # y `product_id=None`. Para Hacienda igual hay que emitir un XML válido.
 #
-# Valor de CABYS por defecto:
-#   "8399000000000" → catálogo CABYS "Otros servicios n.c.p."
-# Es un código genérico aceptado por Hacienda como fallback cuando el
-# producto no tiene un código CABYS específico asignado. La ferretería
-# debería poco a poco mover sus productos comunes recurrentes al
-# inventario con su código CABYS correcto.
+# Valor de CABYS por defecto para líneas comunes SIN código propio:
+#   "8399000000000" → "Servicios profesionales, técnicos y empresariales
+#   n.c.p." (tarifa IVA 13%). Es un código de SERVICIO válido en el catálogo.
+#
+# IMPORTANTE: por empezar con 8 se clasifica como SERVICIO. Es correcto solo
+# cuando el "común" es efectivamente un servicio. Para un PRODUCTO FÍSICO
+# (mercancía) este default lo clasifica mal: se debe enviar el CABYS de
+# mercancía correcto en SaleDetail.common_cabys_code (la creación de venta ya
+# lo persiste y el builder ya lo usa). El default es solo el último recurso
+# cuando la línea no trae código propio.
 DEFAULT_COMMON_CABYS_CODE = "8399000000000"
 DEFAULT_COMMON_UNIT_TYPE = "Unid"
 
@@ -176,8 +182,38 @@ def _is_common_detail(d: Any) -> bool:
     return False
 
 
+def _rfc3339(dt: datetime) -> str:
+    """Formatea un datetime al string RFC3339 que usa FechaEmision/clave."""
+    return dt.isoformat(timespec="seconds")
+
+
 def _rfc3339_now() -> str:
-    return now_cr().isoformat(timespec="seconds")
+    return _rfc3339(now_cr())
+
+
+def extract_fecha_emision(xml_string) -> Optional[str]:
+    """Devuelve el texto de <FechaEmision> del comprobante (hijo directo de la
+    raíz), o None si no se puede leer.
+
+    Se usa para mantener la consistencia de fechas: la FechaEmision del XML ya
+    firmado es la fuente de verdad tanto al re-construir un comprobante (debe
+    coincidir con la fecha embebida en su clave) como al enviarlo a Hacienda
+    (el campo `fecha` del API debe coincidir con la del comprobante). Busca solo
+    el hijo directo de la raíz para no confundirlo con FechaEmisionEX
+    (exoneración) ni FechaEmisionIR (referencia), que son fechas distintas.
+    """
+    if not xml_string:
+        return None
+    try:
+        data = xml_string.encode("utf-8") if isinstance(xml_string, str) else xml_string
+        root = ET.fromstring(data)
+    except Exception:
+        return None
+    for child in root:
+        if child.tag.rsplit("}", 1)[-1] == "FechaEmision":
+            text = (child.text or "").strip()
+            return text or None
+    return None
 
 def _add(parent: ET.Element, tag: str, text: Optional[str] = None) -> ET.Element:
     # Inherit namespace from parent so sub-elements validate against XSD
@@ -304,6 +340,12 @@ class _ResumenAccumulators:
         # {(codigo_impuesto, codigo_tarifa_or_empty): monto_total}
         self.desglose: dict[tuple[str, str], Decimal] = {}
         self.desglose_asumidos: dict[tuple[str, str], bool] = {}
+
+        # Caché por-build para la validación de CABYS contra el catálogo local.
+        # _cabys_catalog_loaded: None=sin verificar, True/False luego.
+        # _cabys_checked: code -> bool (existe en catálogo). Evita repetir query.
+        self._cabys_catalog_loaded: Optional[bool] = None
+        self._cabys_checked: dict[str, bool] = {}
 
     def add_line(self, *, is_svc: bool, monto_total: Decimal, descuento: Decimal,
                  impuesto: Decimal, codigo_tarifa: str, rate_pct: Decimal,
@@ -447,6 +489,78 @@ def _prefetch_products(db: Session, details) -> dict:
     return {p.id: p for p in products}
 
 
+def _collect_registro_fiscal_8707(db: Session, details, products_map: dict = None) -> Optional[str]:
+    """Obtiene el Registrofiscal8707 (Ley 8707) para el nodo Emisor.
+
+    Es un dato del EMISOR —el número de registro de bebidas alcohólicas que
+    otorga la Dirección General de Aduanas—, no de la línea de detalle. Se
+    deriva de los productos facturados (Product.registro_fiscal_8707) y se
+    emite UNA sola vez en el Emisor. En la práctica todas las líneas de un
+    mismo emisor comparten el mismo registro; si varias lo traen, se usa el
+    primero no vacío (en orden de línea, determinístico). Las líneas de
+    productos comunes (sin inventario) no aportan este dato.
+
+    Devuelve el registro (máx. 12 caracteres) o None si ninguna línea lo tiene.
+    """
+    for d in details:
+        if _is_common_detail(d):
+            continue
+        product = None
+        pid = getattr(d, "product_id", None)
+        if products_map and pid in products_map:
+            product = products_map[pid]
+        elif pid:
+            product = db.query(Product).filter(Product.id == pid).first()
+        if product is None:
+            continue
+        reg = _getv(d, "registro_fiscal_8707") or _getv(product, "registro_fiscal_8707")
+        if reg:
+            return _safe(reg, 12)
+    return None
+
+
+def _validate_line_cabys(db: Session, acc: _ResumenAccumulators, code: Optional[str]) -> None:
+    """Valida que `code` exista en el catálogo CABYS local (tabla `cabys`).
+
+    Convierte un futuro rechazo de Hacienda (código inválido → comprobante
+    rechazado) en un error LOCAL claro, antes de firmar/enviar. Cubre tanto el
+    CABYS de respaldo como productos con códigos viejos eliminados/reclasificados
+    en una actualización del catálogo (p. ej. CABYS 2025).
+
+    Degradación elegante: si el catálogo no está importado (tabla vacía) la
+    validación se desactiva y no bloquea, igual que el validador XSD. La caché
+    vive en `acc` (un objeto por build), así que no hay estado obsoleto entre
+    solicitudes.
+    """
+    if not code:
+        return
+    # ¿Está cargado el catálogo? Se resuelve una sola vez por build.
+    if acc._cabys_catalog_loaded is None:
+        try:
+            acc._cabys_catalog_loaded = db.query(Cabys.code).first() is not None
+        except Exception:
+            acc._cabys_catalog_loaded = False
+    if not acc._cabys_catalog_loaded:
+        return  # catálogo no importado → no validar
+
+    if code not in acc._cabys_checked:
+        try:
+            acc._cabys_checked[code] = (
+                db.query(Cabys.code).filter(Cabys.code == code).first() is not None
+            )
+        except Exception:
+            # Ante cualquier problema de consulta, no bloquear la emisión.
+            acc._cabys_checked[code] = True
+
+    if not acc._cabys_checked[code]:
+        raise ValueError(
+            f"El código CABYS '{code}' no existe en el catálogo CABYS local. "
+            f"Puede estar desactualizado o haber sido eliminado/reclasificado "
+            f"en la versión vigente (CABYS 2025). Actualice el catálogo CABYS o "
+            f"corrija el código del producto/línea antes de emitir."
+        )
+
+
 def _process_detail_line(
     db: Session, detalle: ET.Element, d: Any, line_num: int,
     doc_type: str, acc: _ResumenAccumulators,
@@ -480,6 +594,11 @@ def _process_detail_line(
     # cabys_code ya proviene de SaleDetail.common_cabys_code, así que el
     # snapshot de la línea (d.cabys_code) es None y se usa ese valor.
     cabys_code = _getv(d, "cabys_code") or getattr(product, "cabys_code", None)
+
+    # Red de seguridad: el CABYS debe existir en el catálogo local. Si no
+    # (catálogo desactualizado, código eliminado en CABYS 2025, o respaldo
+    # inválido), corta con un error local claro en vez de que Hacienda rechace.
+    _validate_line_cabys(db, acc, cabys_code)
 
     qty = Decimal(str(d.quantity))
     unit_gross = Decimal(str(d.unit_price))
@@ -638,10 +757,11 @@ def _process_detail_line(
     if cabys_code:
         _add(linea, "CodigoCABYS", _safe(cabys_code, 13))
 
-    # FASE 1.1: RegistroFiscal8707
-    reg_fiscal = _getv(product, "registro_fiscal_8707")
-    if reg_fiscal:
-        _add(linea, "Registrofiscal8707", _safe(reg_fiscal, 12))
+    # NOTA: Registrofiscal8707 (Ley 8707) NO va aquí. Según el XSD oficial es
+    # un campo del nodo Emisor (después de Identificacion). Se recolecta de los
+    # productos vía _collect_registro_fiscal_8707() y se emite una sola vez en
+    # _write_emisor_std(). Emitirlo dentro de LineaDetalle hacía que Hacienda
+    # rechazara el comprobante (estructura inválida).
 
     _add(linea, "Cantidad", f"{qty:.3f}".rstrip("0").rstrip("."))
     _add(linea, "UnidadMedida", product.unit_type or "Unid")
@@ -924,10 +1044,13 @@ def _write_condicion_venta(root: ET.Element, sale: Any, doc_type: str):
 # FASE 4: Helpers para emisor y receptor con campos completos
 # ═════════════════════════════════════════════════════════════
 
-def _write_emisor_std(root: ET.Element, issuer: Any) -> ET.Element:
+def _write_emisor_std(root: ET.Element, issuer: Any,
+                      registro_fiscal_8707: Optional[str] = None) -> ET.Element:
     """
     Escribe el nodo Emisor estándar (usado en FE, TE, NC, ND, FEE).
     FASE 4.4: Incluye Teléfono del emisor cuando existe.
+    Registrofiscal8707 (Ley 8707): va después de Identificacion según el XSD
+    (EmisorType). Se pasa ya resuelto por _collect_registro_fiscal_8707().
     Retorna el nodo emisor por si se necesita agregar más hijos.
     """
     emisor = _add(root, "Emisor")
@@ -935,6 +1058,10 @@ def _write_emisor_std(root: ET.Element, issuer: Any) -> ET.Element:
     eid = _add(emisor, "Identificacion")
     _add(eid, "Tipo", _safe(issuer.id_type, 2))
     _add(eid, "Numero", _safe(issuer.id_number, 20))
+    # Registrofiscal8707 — orden XSD: Nombre, Identificacion, Registrofiscal8707,
+    # NombreComercial, Ubicacion, Telefono, CorreoElectronico.
+    if registro_fiscal_8707:
+        _add(emisor, "Registrofiscal8707", _safe(registro_fiscal_8707, 12))
     if issuer.commercial_name:
         _add(emisor, "NombreComercial", _safe(issuer.commercial_name, 80))
     ubi = _add(emisor, "Ubicacion")
@@ -1041,6 +1168,7 @@ def build_xml_for_sale_v44(
     referencia_doc: Optional[Any] = None,
     codigo_referencia: str = "04",
     razon_referencia: str = "Referencia",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     """
     Builder FE/TE.
@@ -1071,9 +1199,11 @@ def build_xml_for_sale_v44(
         if car:
             _add(root, "CodigoActividadReceptor", _zfill(car, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
-    _write_emisor_std(root, issuer)
+    _pmap = _prefetch_products(db, sale_details)
+    _reg_8707 = _collect_registro_fiscal_8707(db, sale_details, _pmap)
+    _write_emisor_std(root, issuer, registro_fiscal_8707=_reg_8707)
 
     if doc_type != "TE":
         if not _has_receptor(customer):
@@ -1086,7 +1216,6 @@ def build_xml_for_sale_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
-    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
         _process_detail_line(db, detalle, d, i, doc_type, acc, products_map=_pmap)
 
@@ -1124,6 +1253,7 @@ def build_xml_for_rep_v44(
     referenced_einvoices: List[Any], clave: str, consecutivo: str,
     condicion_venta_rep: str = "11", codigo_referencia: str = "01",
     razon_referencia: str = "Pago registrado",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     if condicion_venta_rep not in ("09", "11"):
         raise ValueError("En REP, CondicionVenta solo permite 09 o 11 (v4.4).")
@@ -1149,7 +1279,7 @@ def build_xml_for_rep_v44(
     _add(root, "ProveedorSistemas", _safe(issuer.provider_system_id, 20))
     _add(root, "CodigoActividadEmisor", _zfill(issuer.economic_activity_code, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
     _write_emisor_std(root, issuer)
     _write_receptor(root, customer, "REP")
@@ -1221,6 +1351,7 @@ def build_xml_for_nc_v44(
     db: Session, *, sale: Any, sale_details: List[Any], clave: str,
     consecutivo: str, customer: Optional[Any] = None,
     original_einv: Any, razon: str = "Anulación de comprobante",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     schema = SCHEMAS_V44["NC"]
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
@@ -1239,16 +1370,17 @@ def build_xml_for_nc_v44(
     _add(root, "ProveedorSistemas", _safe(issuer.provider_system_id, 20))
     _add(root, "CodigoActividadEmisor", _zfill(issuer.economic_activity_code, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
-    _write_emisor_std(root, issuer)
+    _pmap = _prefetch_products(db, sale_details)
+    _reg_8707 = _collect_registro_fiscal_8707(db, sale_details, _pmap)
+    _write_emisor_std(root, issuer, registro_fiscal_8707=_reg_8707)
     _write_receptor(root, customer, "NC")
 
     _add(root, "CondicionVenta", "01")
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
-    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
         _process_detail_line(db, detalle, d, i, "NC", acc, products_map=_pmap)
 
@@ -1287,6 +1419,7 @@ def build_xml_for_nd_v44(
     consecutivo: str, customer: Optional[Any] = None,
     original_einv: Any, razon: str = "Corrección de monto",
     codigo_referencia: str = "02",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     schema = SCHEMAS_V44["ND"]
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
@@ -1305,16 +1438,17 @@ def build_xml_for_nd_v44(
     _add(root, "ProveedorSistemas", _safe(issuer.provider_system_id, 20))
     _add(root, "CodigoActividadEmisor", _zfill(issuer.economic_activity_code, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
-    _write_emisor_std(root, issuer)
+    _pmap = _prefetch_products(db, sale_details)
+    _reg_8707 = _collect_registro_fiscal_8707(db, sale_details, _pmap)
+    _write_emisor_std(root, issuer, registro_fiscal_8707=_reg_8707)
     _write_receptor(root, customer, "ND")
 
     _add(root, "CondicionVenta", "01")
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
-    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
         _process_detail_line(db, detalle, d, i, "ND", acc, products_map=_pmap)
 
@@ -1353,6 +1487,7 @@ def build_xml_for_fec_v44(
     supplier: Any, clave: str, consecutivo: str,
     condicion_venta: str = "01", referencia_doc: Optional[Any] = None,
     razon_referencia: str = "Compra a proveedor", codigo_referencia: str = "04",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     schema = SCHEMAS_V44["FEC"]
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
@@ -1383,7 +1518,7 @@ def build_xml_for_fec_v44(
         _add(root, "CodigoActividadEmisor", _zfill(sup_act, 6))
     _add(root, "CodigoActividadReceptor", _zfill(issuer.economic_activity_code, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
     emisor = _add(root, "Emisor")
     _add(emisor, "Nombre", _safe(supplier.name, 100))
@@ -1503,6 +1638,7 @@ def build_xml_for_fee_v44(
     db: Session, *, sale: Any, sale_details: List[Any],
     clave: str, consecutivo: str, customer: Any,
     moneda: str = "USD", tipo_cambio: str = "1.00",
+    fecha_emision: Optional[datetime] = None,
 ) -> str:
     schema = SCHEMAS_V44["FEE"]
     issuer = db.query(IssuerProfile).order_by(IssuerProfile.id.asc()).first()
@@ -1523,9 +1659,11 @@ def build_xml_for_fee_v44(
     _add(root, "ProveedorSistemas", _safe(issuer.provider_system_id, 20))
     _add(root, "CodigoActividadEmisor", _zfill(issuer.economic_activity_code, 6))
     _add(root, "NumeroConsecutivo", consecutivo)
-    _add(root, "FechaEmision", _rfc3339_now())
+    _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
-    _write_emisor_std(root, issuer)
+    _pmap = _prefetch_products(db, sale_details)
+    _reg_8707 = _collect_registro_fiscal_8707(db, sale_details, _pmap)
+    _write_emisor_std(root, issuer, registro_fiscal_8707=_reg_8707)
     _write_receptor(root, customer, "FEE")
 
     forced = (_getv(sale, "condicion_venta_code") or "").strip()
@@ -1538,7 +1676,6 @@ def build_xml_for_fee_v44(
 
     detalle = _add(root, "DetalleServicio")
     acc = _ResumenAccumulators()
-    _pmap = _prefetch_products(db, sale_details)
     for i, d in enumerate(sale_details, start=1):
         _process_detail_line(db, detalle, d, i, "FEE", acc, products_map=_pmap)
 

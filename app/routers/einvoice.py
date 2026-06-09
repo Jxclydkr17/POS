@@ -11,6 +11,7 @@ from app.db.models.sale import Sale
 from app.db.models.sale_detail import SaleDetail
 from app.db.models.issuer_profile import IssuerProfile
 from app.einvoice.xml_builder import build_xml_for_sale, build_xml_for_nc, build_xml_for_nd
+from app.einvoice.xml_builder_v44 import extract_fecha_emision
 
 from app.einvoice.sequence import build_consecutivo, build_clave, next_sequence_number
 
@@ -32,11 +33,38 @@ from app.einvoice.hacienda_poller import get_pending_summary, parse_hacienda_res
 import base64
 import os
 import logging
-from app.utils.dt import utcnow
+from datetime import datetime
+from app.utils.dt import utcnow, now_cr
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/einvoices", tags=["Facturación electrónica"])
+
+
+def _emission_dt_from_clave(clave: str) -> datetime:
+    """Reconstruye una fecha de emisión a partir de la clave (posiciones 4-9 =
+    DDMMYY). Conserva la zona horaria de CR; la hora del día es la actual (a
+    Hacienda solo le importa que la FECHA coincida con la de la clave)."""
+    base = now_cr()
+    try:
+        dd = int(clave[3:5]); mm = int(clave[5:7]); yy = 2000 + int(clave[7:9])
+        return base.replace(year=yy, month=mm, day=dd)
+    except Exception:
+        return base
+
+
+def _emission_dt_for_retry(einv) -> datetime:
+    """Fecha de emisión a reutilizar al RE-construir un comprobante que ya tiene
+    clave/consecutivo asignados. Debe coincidir con la fecha embebida en la
+    clave guardada, así que se toma de la FechaEmision del XML ya almacenado
+    (la fuente de verdad). Si no se puede leer, se deriva de la clave."""
+    fe = extract_fecha_emision(einv.xml_signed) if einv.xml_signed else None
+    if fe:
+        try:
+            return datetime.fromisoformat(fe)
+        except ValueError:
+            pass
+    return _emission_dt_from_clave(einv.clave or "")
 
 
 def _try_sign_xml(xml: str) -> tuple[str, bool, str | None]:
@@ -361,23 +389,26 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     # Helper interno: construye el XML para este einv con el consecutivo
     # y clave dados. Se invoca dos veces: una en dry-run, otra con el
     # consecutivo real reservado.
-    def _build_with(_clave: str, _consecutivo: str) -> str:
+    def _build_with(_clave: str, _consecutivo: str, _fecha_emision: datetime | None = None) -> str:
         if doc_type in ("01", "04"):
             return build_xml_for_sale(
                 db, sale=sale, sale_details=details,
                 clave=_clave, consecutivo=_consecutivo, customer=customer,
+                fecha_emision=_fecha_emision,
             )
         elif doc_type == "03":
             return build_xml_for_nc(
                 db, sale=sale, sale_details=details,
                 clave=_clave, consecutivo=_consecutivo, customer=customer,
                 original_einv=original_einv,
+                fecha_emision=_fecha_emision,
             )
         elif doc_type == "02":
             return build_xml_for_nd(
                 db, sale=sale, sale_details=details,
                 clave=_clave, consecutivo=_consecutivo, customer=customer,
                 original_einv=original_einv,
+                fecha_emision=_fecha_emision,
             )
         else:
             # Defensivo; ya validamos arriba
@@ -390,8 +421,12 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     if einv.consecutivo and einv.clave:
         consecutivo = einv.consecutivo
         clave = einv.clave
+        # Reusar la MISMA fecha de emisión del intento original (la que está
+        # embebida en la clave guardada) para que clave y FechaEmision sigan
+        # coincidiendo aunque el reintento ocurra otro día.
+        emission_dt = _emission_dt_for_retry(einv)
         try:
-            xml = _build_with(clave, consecutivo)
+            xml = _build_with(clave, consecutivo, emission_dt)
         except Exception as e:
             # El XML ya no se puede construir aunque tengamos consecutivo
             # (probablemente bug nuevo o datos corruptos). Marcar error
@@ -404,7 +439,10 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
                 detail={"message": "Error reconstruyendo XML", "error": str(e), "einvoice_id": einv.id},
             )
 
-        xsd_errors = validate_xml(xml, doc_label)
+        # Fase 1 (dry-run): validar el cuerpo SIN exigir la firma. El nodo
+        # ds:Signature lo agrega _try_sign_xml más abajo; exigirlo aquí
+        # rechazaría TODO comprobante antes de poder firmarlo.
+        xsd_errors = validate_xml(xml, doc_label, require_signature=False)
         if xsd_errors:
             einv.xml_signed = xml
             einv.status = "XSD_ERROR"
@@ -422,6 +460,17 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
         if sign_error:
             einv.status = "SIGN_ERROR"
         elif was_signed:
+            # Fase 2: validar el XML YA FIRMADO contra el XSD completo
+            # (incluye ds:Signature), que es lo que verificará Hacienda.
+            signed_errors = validate_xml(xml_final, doc_label)
+            if signed_errors:
+                einv.status = "XSD_ERROR"
+                einv.last_error = "; ".join(signed_errors[:5])
+                db.commit()
+                raise HTTPException(
+                    status_code=422,
+                    detail={"message": "XML firmado no paso XSD", "errors": signed_errors[:10], "einvoice_id": einv.id},
+                )
             einv.status = "XML_READY"
         else:
             einv.status = "XML_UNSIGNED"
@@ -445,10 +494,14 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     # fallan, el consecutivo real nunca se incrementa.
     placeholder_seq = 1  # valor irrelevante; el XML se reconstruirá si pasa todo
     placeholder_consecutivo = build_consecutivo(branch, terminal, doc_type, placeholder_seq)
-    placeholder_clave = build_clave(issuer.id_number, placeholder_consecutivo)
+    # Una sola fecha de emisión para todo este comprobante: se usa para la
+    # clave (DDMMYY) y para FechaEmision, de modo que SIEMPRE coincidan. Se fija
+    # aquí (antes del dry-run) y se reutiliza al reservar el consecutivo real.
+    emission_dt = now_cr()
+    placeholder_clave = build_clave(issuer.id_number, placeholder_consecutivo, dt=emission_dt)
 
     try:
-        xml_dry = _build_with(placeholder_clave, placeholder_consecutivo)
+        xml_dry = _build_with(placeholder_clave, placeholder_consecutivo, emission_dt)
     except HTTPException:
         raise
     except Exception as e:
@@ -461,8 +514,11 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
             detail={"message": "No se pudo construir el XML", "error": str(e), "einvoice_id": einv.id},
         )
 
-    # XSD del dry-run: detecta errores estructurales antes de gastar consecutivo
-    xsd_errors = validate_xml(xml_dry, doc_label)
+    # XSD del dry-run: detecta errores estructurales antes de gastar consecutivo.
+    # require_signature=False porque el XML aún no está firmado; el nodo
+    # ds:Signature lo agrega la firma después (el firmado se valida completo
+    # más abajo, ya con su firma).
+    xsd_errors = validate_xml(xml_dry, doc_label, require_signature=False)
     if xsd_errors:
         einv.status = "XSD_ERROR"
         einv.last_error = "; ".join(xsd_errors[:5])
@@ -481,10 +537,11 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     # junto con el resto de cambios al einv.
     seq = next_sequence_number(db, branch, terminal, doc_type)
     consecutivo = build_consecutivo(branch, terminal, doc_type, seq)
-    clave = build_clave(issuer.id_number, consecutivo)
+    clave = build_clave(issuer.id_number, consecutivo, dt=emission_dt)
 
-    # Reconstruir XML con consecutivo real (rápido: ~10ms)
-    xml = _build_with(clave, consecutivo)
+    # Reconstruir XML con consecutivo real (rápido: ~10ms). Misma emission_dt
+    # que el dry-run y que la clave → clave.fecha == FechaEmision.
+    xml = _build_with(clave, consecutivo, emission_dt)
 
     # Firmar
     xml_final, was_signed, sign_error = _try_sign_xml(xml)
@@ -496,6 +553,20 @@ def build_xml(einvoice_id: int, db: Session = Depends(get_db)):
     if sign_error:
         einv.status = "SIGN_ERROR"
     elif was_signed:
+        # Fase 2: validar el XML YA FIRMADO contra el XSD completo (incluye
+        # ds:Signature), que es lo que verificará Hacienda. El consecutivo ya
+        # quedó reservado; si la firma rompiera la estructura se marca
+        # XSD_ERROR (dejando un hueco en la numeración, algo que Hacienda
+        # permite) en lugar de enviar un comprobante que sería rechazado.
+        signed_errors = validate_xml(xml_final, doc_label)
+        if signed_errors:
+            einv.status = "XSD_ERROR"
+            einv.last_error = "; ".join(signed_errors[:5])
+            db.commit()
+            raise HTTPException(
+                status_code=422,
+                detail={"message": "XML firmado no paso XSD", "errors": signed_errors[:10], "einvoice_id": einv.id},
+            )
         einv.status = "XML_READY"
     else:
         einv.status = "XML_UNSIGNED"
@@ -571,7 +642,9 @@ def preview_v44(sale_id: int, db: Session = Depends(get_db)):
     customer = getattr(sale, "customer", None)
     xml = build_xml_for_sale(db, sale=sale, sale_details=details, clave=clave, consecutivo=consecutivo, customer=customer)
     doc_label = _DOC_LABELS.get(doc_type, "FE")
-    xsd_errors = validate_xml(xml, doc_label)
+    # Preview del XML SIN firmar: no exigir ds:Signature (se agrega al firmar),
+    # así el preview no aparece como "XSD inválido" solo por faltarle la firma.
+    xsd_errors = validate_xml(xml, doc_label, require_signature=False)
     return {"ok": True, "doc": doc_label, "xml": xml, "xsd_valid": len(xsd_errors) == 0, "xsd_errors": xsd_errors[:10] if xsd_errors else []}
 
 

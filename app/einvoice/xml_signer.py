@@ -138,8 +138,18 @@ def get_cert_info(cert_path: str, cert_pass: str) -> dict:
 # ═══════════════════════════════════════════════════════════════
 
 def _c14n_exc(node: etree._Element) -> bytes:
-    """Canonicaliza un nodo con Exclusive C14n."""
-    return etree.tostring(node, method="c14n2", exclusive=True, with_comments=False)
+    """Canonicaliza un nodo con Exclusive XML Canonicalization 1.0
+    (http://www.w3.org/2001/10/xml-exc-c14n#), que es EXACTAMENTE el algoritmo
+    declarado en CanonicalizationMethod/Transform y el que usa el validador de
+    Hacienda (libxmlsec / Apache Santuario).
+
+    Se usa method="c14n" (C14N 1.0) + exclusive=True, NO method="c14n2": "c14n2"
+    es Canonical XML 2.0, un algoritmo distinto cuyo resultado puede divergir
+    según la versión de lxml/libxml2. Aunque hoy coincidan byte a byte, fijar
+    "c14n" elimina el riesgo de que una futura actualización del runtime rompa
+    las firmas en silencio.
+    """
+    return etree.tostring(node, method="c14n", exclusive=True, with_comments=False)
 
 
 def _digest_sha256(data: bytes) -> str:

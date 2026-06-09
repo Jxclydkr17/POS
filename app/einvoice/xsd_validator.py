@@ -33,6 +33,25 @@ from app.core.config import resolve_resource
 
 logger = logging.getLogger(__name__)
 
+# Namespace de la firma XML-DSig (para detectar/ignorar ds:Signature).
+_NS_DS = "http://www.w3.org/2000/09/xmldsig#"
+
+
+def _is_missing_signature_error(message: str) -> bool:
+    """True si el error de XSD corresponde a la ausencia del nodo ds:Signature.
+
+    El XSD oficial exige ds:Signature (minOccurs=1) como último hijo del
+    comprobante. Cuando se valida el XML ANTES de firmar (dry-run), lxml
+    reporta exactamente este error de completitud. Lo identificamos de forma
+    conservadora: el mensaje debe mencionar 'Signature' Y ser un error de
+    "falta un hijo"/"se esperaba". Cualquier otro error —aunque mencione
+    Signature por casualidad— NO se ignora.
+    """
+    if not message or "Signature" not in message:
+        return False
+    return ("Missing child" in message) or ("Expected is" in message)
+
+
 # True si corremos dentro del .exe empaquetado (PyInstaller).
 _FROZEN = bool(getattr(sys, "frozen", False))
 
@@ -134,13 +153,20 @@ def _load_schema(doc_type: str):
         return None
 
 
-def validate_xml(xml_string: str, doc_type: str) -> list[str]:
+def validate_xml(xml_string: str, doc_type: str, require_signature: bool = True) -> list[str]:
     """
     Valida un XML contra el XSD correspondiente.
 
     Args:
         xml_string: El XML como string (output de xml_builder_v44)
         doc_type: Tipo de documento ("FE", "TE", "NC", "ND", "REP", etc.)
+        require_signature: Si True (por defecto), exige el nodo ds:Signature
+            tal como manda el XSD oficial (minOccurs=1) — usar para validar el
+            XML YA FIRMADO. Si False, se ignora ÚNICAMENTE el error de
+            completitud por ausencia de ds:Signature, y solo cuando el
+            documento todavía no tiene firma — usar para el "dry-run" del XML
+            sin firmar, antes de gastar un consecutivo. Cualquier otro error
+            estructural se reporta igual.
 
     Returns:
         Lista de errores. Lista vacía = XML válido.
@@ -172,9 +198,30 @@ def validate_xml(xml_string: str, doc_type: str) -> list[str]:
             logger.debug("XML %s pasó validación XSD ✓", doc_type)
             return []
 
+        # ── Validación en dos fases (require_signature) ──
+        # El XSD oficial declara ds:Signature como obligatorio (minOccurs=1).
+        # En el "dry-run" se valida el XML ANTES de firmar (xml_signer.sign_xml
+        # agrega la firma después), por lo que el único error esperado y
+        # legítimo en ese punto es la ausencia de ds:Signature. Con
+        # require_signature=False se descarta EXCLUSIVAMENTE ese error de
+        # completitud —y solo si el documento aún no tiene firma—, dejando
+        # pasar cualquier otro error estructural del cuerpo.
+        ignore_missing_sig = (not require_signature) and (
+            xml_doc.find(f".//{{{_NS_DS}}}Signature") is None
+        )
+
         errors = []
         for error in schema.error_log:
+            if ignore_missing_sig and _is_missing_signature_error(error.message):
+                continue
             errors.append(f"Línea {error.line}: {error.message}")
+
+        if not errors:
+            logger.debug(
+                "XML %s válido salvo la firma (dry-run, require_signature=False) ✓",
+                doc_type,
+            )
+            return []
 
         logger.warning(f"XML {doc_type} falló validación XSD: {len(errors)} errores")
         for err in errors[:5]:  # Log solo los primeros 5
