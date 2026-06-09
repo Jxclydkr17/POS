@@ -33,6 +33,7 @@ API_URL_SUPPLIERS = f"{BASE_URL}/suppliers"
 API_URL_ISSUER = f"{BASE_URL}/settings/issuer-profile"
 API_URL_UPLOAD_LOGO = f"{BASE_URL}/settings/upload-logo"
 API_URL_UPLOAD_CERT = f"{BASE_URL}/settings/hacienda-cert"
+API_URL_HACIENDA_CONFIG = f"{BASE_URL}/settings/hacienda-config"
 API_URL_ENV_STATUS = f"{BASE_URL}/settings/env-status"
 API_URL_BACKUP = f"{BASE_URL}/settings/backup"
 API_URL_RESTORE = f"{BASE_URL}/settings/restore"
@@ -142,6 +143,30 @@ def upload_hacienda_cert(filepath: str, password: str = "") -> dict:
         )
     r.raise_for_status()
     return r.json()
+
+
+# ─────────────────────────────────────────────────────────
+# Hacienda config (credenciales + ambiente)
+# ─────────────────────────────────────────────────────────
+
+def fetch_hacienda_config() -> dict:
+    """Obtiene la configuración actual de Hacienda (valores enmascarados)."""
+    r = requests.get(API_URL_HACIENDA_CONFIG, headers=_headers(), timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
+
+
+def save_hacienda_config(payload: dict) -> dict:
+    """
+    Actualiza las credenciales de Hacienda.
+    El payload puede incluir: hacienda_env, hacienda_api,
+    hacienda_user, hacienda_password (todos opcionales excepto env).
+    """
+    headers = _headers()
+    headers["Content-Type"] = "application/json"
+    r = requests.put(API_URL_HACIENDA_CONFIG, headers=headers, json=payload, timeout=10)
+    r.raise_for_status()
+    return r.json().get("data", {})
 
 
 # ─────────────────────────────────────────────────────────
