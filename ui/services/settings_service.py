@@ -32,6 +32,7 @@ API_URL_CABYS = f"{BASE_URL}/settings/update-cabys"
 API_URL_SUPPLIERS = f"{BASE_URL}/suppliers"
 API_URL_ISSUER = f"{BASE_URL}/settings/issuer-profile"
 API_URL_UPLOAD_LOGO = f"{BASE_URL}/settings/upload-logo"
+API_URL_UPLOAD_CERT = f"{BASE_URL}/settings/hacienda-cert"
 API_URL_ENV_STATUS = f"{BASE_URL}/settings/env-status"
 API_URL_BACKUP = f"{BASE_URL}/settings/backup"
 API_URL_RESTORE = f"{BASE_URL}/settings/restore"
@@ -113,6 +114,32 @@ def upload_logo(filepath: str) -> dict:
     with open(filepath, "rb") as f:
         files = {"file": (filename, f, ct)}
         r = requests.post(API_URL_UPLOAD_LOGO, headers=_headers(), files=files, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+# ─────────────────────────────────────────────────────────
+# Certificado Hacienda (.p12)
+# ─────────────────────────────────────────────────────────
+
+def upload_hacienda_cert(filepath: str, password: str = "") -> dict:
+    """
+    Sube el archivo .p12 de Hacienda al backend junto con su contraseña.
+    El backend lo guarda en DATA_DIR/certs/firma.p12 y persiste el path
+    y la contraseña encriptados en la DB.
+    """
+    filename = os.path.basename(filepath)
+    with open(filepath, "rb") as f:
+        files = {"file": (filename, f, "application/x-pkcs12")}
+        # El backend espera el campo como 'cert_password' (Form field)
+        data = {"cert_password": password} if password else {}
+        r = requests.post(
+            API_URL_UPLOAD_CERT,
+            headers=_headers(),
+            files=files,
+            data=data,
+            timeout=30,
+        )
     r.raise_for_status()
     return r.json()
 
