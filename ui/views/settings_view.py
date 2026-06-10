@@ -1561,7 +1561,7 @@ class SettingsView(QWidget):
             self.label_email_status.setText(f"✅ Email configurado — usuario: {hint}")
             self.label_email_status.setStyleSheet("font-size: 12px; color: #10b981;")
         else:
-            self.label_email_status.setText("⚠️ Email NO configurado en .env")
+            self.label_email_status.setText("⚠️ Email NO configurado")
             self.label_email_status.setStyleSheet("font-size: 12px; color: #f59e0b;")
 
         # Hacienda (4.5)
@@ -1577,7 +1577,7 @@ class SettingsView(QWidget):
             exists = "archivo existe" if hac_info.get("cert_file_exists") else "⚠️ ARCHIVO NO ENCONTRADO"
             parts.append(f"✅ Certificado configurado — {exists}")
         else:
-            parts.append("⚠️ Certificado NO configurado en .env")
+            parts.append("⚠️ Certificado NO configurado")
 
         color = "#10b981" if hac_info.get("api_configured") and hac_info.get("cert_configured") else "#f59e0b"
         self.label_hacienda_status.setText("\n".join(parts))
@@ -2557,6 +2557,15 @@ class SettingsView(QWidget):
             QLineEdit.Password,
         )
         if not ok:
+            return
+
+        # La contraseña es obligatoria: sin ella el certificado queda
+        # inutilizable y en estado "pendiente".
+        if not password:
+            show_toast(
+                "Debés ingresar la contraseña del certificado .p12.",
+                success=False, parent=self.main_window,
+            )
             return
 
         self.btn_upload_cert.setEnabled(False)

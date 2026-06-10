@@ -21,7 +21,7 @@ import logging
 import platform
 import tempfile
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -204,27 +204,37 @@ def update_cabys_catalog(db: Session = Depends(get_db), current_user=Depends(get
 # GET /settings/env-status
 # ============================================================
 @router.get("/env-status", dependencies=[Depends(get_current_user)])
-def get_env_status():
-    from app.core.config import settings as env
+def get_env_status(db: Session = Depends(get_db)):
+    # Las credenciales pueden estar guardadas en la base de datos (subidas
+    # desde la interfaz, vía secure_config) o en el .env (método antiguo).
+    # get_secure consulta AMBOS —DB primero, .env como respaldo— de modo que
+    # este indicador refleje el estado REAL. Antes leía solo el .env y por eso
+    # mostraba "Certificado NO configurado en .env" pese a que el .p12 estaba
+    # correctamente cargado en la base de datos.
+    from app.services.secure_config_service import get_secure as _get_secure
 
-    email_configured = bool(env.email_user and env.email_pass)
-    hacienda_api_configured = bool(env.hacienda_api)
-    hacienda_cert_configured = bool(env.hacienda_cert_path and env.hacienda_cert_pass)
+    email_user = _get_secure(db, "email_user")
+    email_pass = _get_secure(db, "email_pass")
+    hacienda_api = _get_secure(db, "hacienda_api")
+    hacienda_cert_path = _get_secure(db, "hacienda_cert_path")
+    hacienda_cert_pass = _get_secure(db, "hacienda_cert_pass")
 
-    cert_exists = False
-    if env.hacienda_cert_path:
-        cert_exists = os.path.isfile(env.hacienda_cert_path)
+    email_configured = bool(email_user and email_pass)
+    hacienda_api_configured = bool(hacienda_api)
+    hacienda_cert_configured = bool(hacienda_cert_path and hacienda_cert_pass)
+
+    cert_exists = bool(hacienda_cert_path) and os.path.isfile(hacienda_cert_path)
 
     return APIResponse(
-        message="Estado de configuración de entorno",
+        message="Estado de configuración",
         data={
             "email": {
                 "configured": email_configured,
-                "user_hint": _mask(env.email_user) if env.email_user else None,
+                "user_hint": _mask(email_user) if email_user else None,
             },
             "hacienda": {
                 "api_configured": hacienda_api_configured,
-                "api_url_hint": env.hacienda_api[:30] + "..." if env.hacienda_api and len(env.hacienda_api) > 30 else env.hacienda_api,
+                "api_url_hint": (hacienda_api[:30] + "...") if hacienda_api and len(hacienda_api) > 30 else hacienda_api,
                 "cert_configured": hacienda_cert_configured,
                 "cert_file_exists": cert_exists,
             },
@@ -959,7 +969,11 @@ def update_hacienda_config(
 @router.post("/hacienda-cert", dependencies=[Depends(require_role("admin"))])
 def upload_hacienda_cert(
     file: UploadFile = File(...),
-    cert_password: str = "",
+    # CRÍTICO: debe ser Form(...) — si se declara como `str = ""` sin Form,
+    # FastAPI lo trata como query param y NUNCA lee la contraseña que la UI
+    # envía en el multipart/form-data. Eso dejaba `hacienda_cert_pass` vacío
+    # y el certificado quedaba en estado "pendiente" pese al 200 OK.
+    cert_password: str = Form(""),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -968,32 +982,39 @@ def upload_hacienda_cert(
     if not fname.lower().endswith(".p12"):
         raise HTTPException(status_code=400, detail="El archivo debe ser .p12")
 
+    # La contraseña es obligatoria: un .p12 de Hacienda siempre tiene PIN y,
+    # sin él, el firmador XAdES no puede cargar la llave privada (el cert
+    # quedaría inutilizable y en estado "pendiente").
+    if not cert_password:
+        raise HTTPException(
+            status_code=400,
+            detail="Debés ingresar la contraseña del certificado .p12."
+        )
+
     contents = file.file.read()
     if len(contents) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="El certificado excede 5MB.")
 
-    # Validar que el .p12 se puede abrir con el password
-    if cert_password:
-        try:
-            from cryptography.hazmat.primitives.serialization import pkcs12
-            pkcs12.load_key_and_certificates(
-                contents, cert_password.encode("utf-8")
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=400,
-                detail="No se pudo abrir el .p12 con la contraseña proporcionada."
-            )
+    # Validar que el .p12 se puede abrir con la contraseña antes de guardarlo.
+    try:
+        from cryptography.hazmat.primitives.serialization import pkcs12
+        pkcs12.load_key_and_certificates(
+            contents, cert_password.encode("utf-8")
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo abrir el .p12 con la contraseña proporcionada."
+        )
 
     # Guardar archivo
     filepath = os.path.join(CERT_DIR, "firma.p12")
     with open(filepath, "wb") as f:
         f.write(contents)
 
-    # Guardar path y password encriptados
+    # Guardar path y password encriptados (ambos, siempre).
     set_secure(db, "hacienda_cert_path", filepath)
-    if cert_password:
-        set_secure(db, "hacienda_cert_pass", cert_password)
+    set_secure(db, "hacienda_cert_pass", cert_password)
 
     log_audit(db, "upload_hacienda_cert", {"filename": fname},
               user_id=getattr(current_user, "id", None),

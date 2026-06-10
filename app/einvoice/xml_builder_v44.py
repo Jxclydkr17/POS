@@ -49,7 +49,9 @@ SCHEMAS_V44 = {
         "xmlns": "https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/reciboElectronicoPago",
         "schemaLocation": "https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/reciboElectronicoPago "
                           "https://cdn.comprobanteselectronicos.go.cr/xml-schemas/v4.4/reciboElectronicoPago.xsd",
-        "resumen_tag": "ResumenReciboPago",
+        # El XSD de REP nombra el nodo resumen como "ResumenFactura" (no
+        # "ResumenReciboPago"), igual que los demás comprobantes.
+        "resumen_tag": "ResumenFactura",
     },
     "FEC": {
         "root_tag": "FacturaElectronicaCompra",
@@ -1277,15 +1279,76 @@ def build_xml_for_rep_v44(
 
     _add(root, "Clave", clave)
     _add(root, "ProveedorSistemas", _safe(issuer.provider_system_id, 20))
-    _add(root, "CodigoActividadEmisor", _zfill(issuer.economic_activity_code, 6))
+    # NOTA: el esquema de REP (reciboElectronicoPago.xsd) NO incluye
+    # CodigoActividadEmisor — su secuencia es Clave, ProveedorSistemas,
+    # NumeroConsecutivo, FechaEmision, Emisor, ... Emitirlo hacía que el XSD
+    # rechazara el comprobante ("CodigoActividadEmisor no esperado").
     _add(root, "NumeroConsecutivo", consecutivo)
     _add(root, "FechaEmision", _rfc3339(fecha_emision) if fecha_emision else _rfc3339_now())
 
-    _write_emisor_std(root, issuer)
-    _write_receptor(root, customer, "REP")
+    # El EmisorType de REP es REDUCIDO: solo Nombre, Identificacion y
+    # CorreoElectronico (este último OBLIGATORIO). No admite NombreComercial,
+    # Ubicacion, Telefono ni Registrofiscal8707 (a diferencia de FE/NC/ND).
+    if not _getv(issuer, "email"):
+        raise ValueError("El REP requiere CorreoElectronico del emisor (obligatorio en el XSD).")
+    emisor = _add(root, "Emisor")
+    _add(emisor, "Nombre", _safe(issuer.legal_name, 100))
+    eid = _add(emisor, "Identificacion")
+    _add(eid, "Tipo", _safe(issuer.id_type, 2))
+    _add(eid, "Numero", _safe(issuer.id_number, 20))
+    _add(emisor, "CorreoElectronico", _safe(issuer.email, 160))
+
+    # El ReceptorType de REP también es reducido: Nombre, Identificacion y
+    # CorreoElectronico (opcional).
+    receptor = _add(root, "Receptor")
+    _add(receptor, "Nombre", _safe(customer.name, 100))
+    rid = _add(receptor, "Identificacion")
+    _add(rid, "Tipo", _safe(customer.id_type, 2))
+    _add(rid, "Numero", _safe(customer.id_number, 20))
+    if _getv(customer, "email"):
+        _add(receptor, "CorreoElectronico", _safe(customer.email, 160))
 
     _add(root, "CondicionVenta", condicion_venta_rep)
 
+    detalle = _add(root, "DetalleServicio")
+    amt = Decimal(str(getattr(payment, "amount", 0) or 0)).quantize(Decimal("0.00001"))
+    linea = _add(detalle, "LineaDetalle")
+    # El LineaDetalle de REP es reducido: NumeroLinea, Detalle, MontoTotal,
+    # SubTotal, Impuesto(opc), ImpuestoNeto, MontoTotalLinea. No lleva
+    # Cantidad, UnidadMedida ni PrecioUnitario.
+    _add(linea, "NumeroLinea", "1")
+    _add(linea, "Detalle", "Pago / Abono")
+    _add(linea, "MontoTotal", str(amt))
+    _add(linea, "SubTotal", str(amt))
+    imp = _add(linea, "Impuesto")
+    _add(imp, "Codigo", "01")
+    _add(imp, "CodigoTarifaIVA", "10")
+    _add(imp, "Tarifa", "0")
+    _add(imp, "Monto", "0")
+    _add(linea, "ImpuestoNeto", "0")
+    _add(linea, "MontoTotalLinea", str(amt))
+
+    resumen = _add(root, schema["resumen_tag"])
+    moneda = _add(resumen, "CodigoTipoMoneda")
+    _add(moneda, "CodigoMoneda", "CRC")
+    _add(moneda, "TipoCambio", "1.00")
+    # El ResumenFactura de REP no incluye TotalExento. Orden del XSD:
+    # CodigoTipoMoneda, TotalVenta, TotalVentaNeta, TotalDesgloseImpuesto,
+    # TotalImpuesto(opc), MedioPago, TotalComprobante.
+    _add(resumen, "TotalVenta", str(amt))
+    _add(resumen, "TotalVentaNeta", str(amt))
+    nodo_desglose = _add(resumen, "TotalDesgloseImpuesto")
+    _add(nodo_desglose, "Codigo", "01")
+    _add(nodo_desglose, "CodigoTarifaIVA", "10")
+    _add(nodo_desglose, "TotalMontoImpuesto", "0")
+    pm_raw = (getattr(payment, "payment_method", "") or "").strip().lower()
+    tipo_medio = PAYMENT_MAP.get(pm_raw, "01")
+    mp_node = _add(resumen, "MedioPago")
+    _add(mp_node, "TipoMedioPago", tipo_medio)
+    _add(resumen, "TotalComprobante", str(amt))
+
+    # InformacionReferencia va DESPUÉS del resumen en el XSD de REP:
+    # ...DetalleServicio, ResumenFactura, InformacionReferencia, Signature.
     ALLOWED = {"01", "02", "03", "04", "07", "08", "10"}
     for einv in referenced_einvoices:
         tipo_doc_ir = (getattr(einv, "document_type", None) or "").zfill(2)
@@ -1304,41 +1367,6 @@ def build_xml_for_rep_v44(
         _add(ir, "FechaEmisionIR", to_cr_iso(sale_ref.created_at))
         _add(ir, "Codigo", _safe(codigo_referencia, 2))
         _add(ir, "Razon", _safe(razon_referencia, 180))
-
-    detalle = _add(root, "DetalleServicio")
-    amt = Decimal(str(getattr(payment, "amount", 0) or 0)).quantize(Decimal("0.00001"))
-    linea = _add(detalle, "LineaDetalle")
-    _add(linea, "NumeroLinea", "1")
-    _add(linea, "Cantidad", "1.000")
-    _add(linea, "UnidadMedida", "Unid")
-    _add(linea, "Detalle", "Pago / Abono")
-    _add(linea, "PrecioUnitario", str(amt))
-    _add(linea, "MontoTotal", str(amt))
-    _add(linea, "SubTotal", str(amt))
-    imp = _add(linea, "Impuesto")
-    _add(imp, "Codigo", "01")
-    _add(imp, "CodigoTarifaIVA", "10")
-    _add(imp, "Tarifa", "0")
-    _add(imp, "Monto", "0")
-    _add(linea, "ImpuestoNeto", "0")
-    _add(linea, "MontoTotalLinea", str(amt))
-
-    resumen = _add(root, schema["resumen_tag"])
-    moneda = _add(resumen, "CodigoTipoMoneda")
-    _add(moneda, "CodigoMoneda", "CRC")
-    _add(moneda, "TipoCambio", "1.00")
-    _add(resumen, "TotalExento", str(amt))
-    _add(resumen, "TotalVenta", str(amt))
-    _add(resumen, "TotalVentaNeta", str(amt))
-    nodo_desglose = _add(resumen, "TotalDesgloseImpuesto")
-    _add(nodo_desglose, "Codigo", "01")
-    _add(nodo_desglose, "CodigoTarifaIVA", "10")
-    _add(nodo_desglose, "TotalMontoImpuesto", "0")
-    pm_raw = (getattr(payment, "payment_method", "") or "").strip().lower()
-    tipo_medio = PAYMENT_MAP.get(pm_raw, "01")
-    mp_node = _add(resumen, "MedioPago")
-    _add(mp_node, "TipoMedioPago", tipo_medio)
-    _add(resumen, "TotalComprobante", str(amt))
 
     xml_bytes = xml_to_bytes(root)
     return xml_bytes.decode("utf-8")

@@ -132,8 +132,10 @@ def upload_hacienda_cert(filepath: str, password: str = "") -> dict:
     filename = os.path.basename(filepath)
     with open(filepath, "rb") as f:
         files = {"file": (filename, f, "application/x-pkcs12")}
-        # El backend espera el campo como 'cert_password' (Form field)
-        data = {"cert_password": password} if password else {}
+        # El backend espera 'cert_password' como campo Form del multipart.
+        # Siempre lo enviamos (aunque sea vacío) para que el endpoint lo
+        # reciba como Form y no como query param.
+        data = {"cert_password": password or ""}
         r = requests.post(
             API_URL_UPLOAD_CERT,
             headers=_headers(),
