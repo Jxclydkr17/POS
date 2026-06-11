@@ -104,6 +104,7 @@ class HaciendaClient:
         # Token cache (thread-safe)
         self._lock = threading.Lock()
         self._access_token: Optional[str] = None
+        self._token_type: Optional[str] = None
         self._token_expires_at: float = 0  # epoch
 
         logger.info(f"HaciendaClient inicializado | env={env} | api={self._urls['api']}")
@@ -172,16 +173,30 @@ class HaciendaClient:
             if not self._access_token:
                 raise HaciendaAuthError("El IdP no retornó access_token")
 
+            # Según la Guía de IdP de Hacienda, el header Authorization se arma
+            # con el token_type que devuelve el IdP + espacio + access_token
+            # (normalmente "bearer"). Usamos el valor real en vez de fijarlo.
+            self._token_type = (token_data.get("token_type") or "bearer").strip()
+
             expires_in = token_data.get("expires_in", 300)  # default 5 min
             self._token_expires_at = now + expires_in
 
-            logger.info(f"Token OAuth2 obtenido | expira en {expires_in}s")
+            logger.info(f"Token OAuth2 obtenido | tipo={self._token_type} | expira en {expires_in}s")
             return self._access_token
 
     def _auth_header(self) -> dict:
         """Retorna el header Authorization con el token vigente."""
-        token = self._get_token()
-        return {"Authorization": f"bearer {token}"}
+        token = (self._get_token() or "").strip()
+        if not token:
+            raise HaciendaAuthError(
+                "El token de acceso llegó vacío al construir el header Authorization."
+            )
+        # El valor del header es token_type + espacio + access_token, tal como
+        # indica la Guía de IdP de Hacienda. El access_token va sin espacios ni
+        # saltos de línea (un valor sucio provoca el 403 de AWS API Gateway
+        # "Invalid key=value pair ... in Authorization header").
+        token_type = getattr(self, "_token_type", None) or "bearer"
+        return {"Authorization": f"{token_type} {token}"}
 
     def invalidate_token(self):
         """Fuerza la renovación del token en la próxima llamada."""

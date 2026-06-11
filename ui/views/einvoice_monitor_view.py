@@ -59,7 +59,13 @@ class _LoadInvoicesWorker(QObject):
 
             # Fix 1.3: parsear JSON una sola vez
             data = r.json()
-            sales = data if isinstance(data, list) else data.get("data", [])
+            # El endpoint /reports/sales/history responde {"sales": [...]}.
+            # Antes se buscaba la clave "data" (que no existe), por eso la
+            # tabla quedaba vacía aunque el resumen contara comprobantes.
+            if isinstance(data, list):
+                sales = data
+            else:
+                sales = data.get("sales") or data.get("data") or []
 
             # Fix 1.2: obtener einvoices en UN solo request batch
             sale_ids = [s.get("id") for s in sales[:200] if s.get("id")]
@@ -84,7 +90,8 @@ class _LoadInvoicesWorker(QObject):
                     sid = int(sid_str)
                     sale = sales_map.get(sid, {})
                     einv["sale_total"] = sale.get("total", 0)
-                    einv["sale_customer"] = sale.get("customer", "")
+                    # El historial devuelve "customer_name", no "customer".
+                    einv["sale_customer"] = sale.get("customer_name") or sale.get("customer", "")
                     einv["sale_date"] = sale.get("created_at", "")
                     results.append(einv)
 
@@ -449,7 +456,12 @@ class EinvoiceMonitorView(QWidget):
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda data: self._on_summary(data))
+        # IMPORTANTE: conectar a un método ENLAZADO (self._on_summary), no a un
+        # lambda. Un lambda sin contexto se ejecuta en el hilo del worker
+        # (conexión directa), y tocar la GUI desde ahí crashea Qt
+        # ("Cannot set parent... different thread"). El método enlazado lleva
+        # la afinidad de hilo de la vista → se ejecuta en el hilo de la GUI.
+        worker.finished.connect(self._on_summary)
         worker.finished.connect(thread.quit)
         worker.failed.connect(lambda e: logger.warning(f"Summary failed: {e}"))
         worker.failed.connect(thread.quit)
@@ -481,9 +493,13 @@ class EinvoiceMonitorView(QWidget):
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda data: self._populate_table(data))
+        # Métodos enlazados, no lambdas: ver nota en _load_summary. Esta es la
+        # conexión que causaba el crash al entrar a la vista, porque
+        # _populate_table crea QPushButton/QWidget y antes corría en el hilo
+        # del worker.
+        worker.finished.connect(self._populate_table)
         worker.finished.connect(thread.quit)
-        worker.failed.connect(lambda e: self.detail_lbl.setText(f"❌ Error: {e}"))
+        worker.failed.connect(self._on_load_error)
         worker.failed.connect(thread.quit)
         thread.start()
         self._threads.append((thread, worker))
@@ -576,32 +592,72 @@ class EinvoiceMonitorView(QWidget):
         self._cleanup_finished_threads()
         self.detail_lbl.setText("⏳ Procesando...")
         worker = _ActionWorker(url, method)
+        # Guardamos los mensajes en el worker para que los handlers (métodos
+        # enlazados) los recuperen vía sender(), sin usar lambdas con contexto.
+        worker._msg_ok = msg_ok
+        worker._msg_err = msg_err
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
-        worker.finished.connect(lambda data: self._on_action_done(data, msg_ok, msg_err))
+        worker.finished.connect(self._on_action_done)
         worker.finished.connect(thread.quit)
-        worker.failed.connect(lambda e: self._on_action_fail(e, msg_err))
+        worker.failed.connect(self._on_action_fail)
         worker.failed.connect(thread.quit)
         thread.start()
         self._threads.append((thread, worker))
 
-    def _on_action_done(self, data, msg_ok, msg_err):
+    def _on_action_done(self, data):
+        w = self.sender()
+        msg_ok = getattr(w, "_msg_ok", "OK")
+        msg_err = getattr(w, "_msg_err", "Error")
         http = data.get("_http_status", 0)
         if http in (200, 202):
             show_toast(msg_ok, success=True, parent=self._main)
             self.detail_lbl.setText(f"✅ {msg_ok}")
         else:
-            err = data.get("detail", data.get("error", data.get("message", str(data))))
-            if isinstance(err, dict):
-                err = err.get("message", str(err))
+            # El backend devuelve la causa REAL en detail.error (excepción de
+            # construcción) o detail.errors (lista de fallos XSD). Antes se
+            # mostraba solo detail.message ("No se pudo construir el XML"), que
+            # oculta el motivo. Ahora se arma un mensaje con la causa concreta.
+            err = self._extract_error(data)
             self.detail_lbl.setText(f"⚠️ {err}")
-            show_toast(f"{msg_err}: {str(err)[:80]}", success=False, parent=self._main)
+            self.detail_lbl.setToolTip(err)
+            show_toast(f"{msg_err}: {err[:120]}", success=False,
+                       parent=self._main, duration=6000)
         QTimer.singleShot(1500, self._load_all)
 
-    def _on_action_fail(self, error, msg_err):
+    @staticmethod
+    def _extract_error(data: dict) -> str:
+        """Extrae el mensaje de error más informativo de la respuesta."""
+        detail = data.get("detail", data)
+        if isinstance(detail, str):
+            return detail
+        if isinstance(detail, dict):
+            parts = []
+            if detail.get("message"):
+                parts.append(str(detail["message"]))
+            if detail.get("error"):
+                parts.append(str(detail["error"]))
+            errors = detail.get("errors")
+            if errors:
+                parts.append("; ".join(str(e) for e in errors[:5]))
+            if parts:
+                return " — ".join(parts)
+            return str(detail)
+        return str(detail)
+
+    def _on_action_fail(self, error):
+        msg_err = getattr(self.sender(), "_msg_err", "Error")
         self.detail_lbl.setText(f"❌ {msg_err}: {error}")
-        show_toast(f"{msg_err}", success=False, parent=self._main)
+        self.detail_lbl.setToolTip(str(error))
+        show_toast(f"{msg_err}: {str(error)[:120]}", success=False,
+                   parent=self._main, duration=6000)
+
+    def _on_load_error(self, error):
+        self.detail_lbl.setText(f"❌ Error: {error}")
+
+    def _on_cert_error(self, error):
+        self.lbl_cert_status.setText(f"❌ {error}")
 
     def _action_build(self, einv_id):
         self._run_action(f"{API}/einvoices/{einv_id}/build-xml", "XML generado", "Error generando XML")
@@ -664,7 +720,7 @@ class EinvoiceMonitorView(QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_connection_result)
         worker.finished.connect(thread.quit)
-        worker.failed.connect(lambda e: self._on_connection_fail(e))
+        worker.failed.connect(self._on_connection_fail)
         worker.failed.connect(thread.quit)
         thread.start()
         self._threads.append((thread, worker))
@@ -699,7 +755,7 @@ class EinvoiceMonitorView(QWidget):
         thread.started.connect(worker.run)
         worker.finished.connect(self._on_cert_result)
         worker.finished.connect(thread.quit)
-        worker.failed.connect(lambda e: self.lbl_cert_status.setText(f"❌ {e}"))
+        worker.failed.connect(self._on_cert_error)
         worker.failed.connect(thread.quit)
         thread.start()
         self._threads.append((thread, worker))

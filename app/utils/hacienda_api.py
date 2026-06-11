@@ -150,18 +150,27 @@ def send_einvoice_to_hacienda(db: Session, einvoice_id: int) -> dict:
                 "tries": (einv.tries or 0) + 1,
             }
 
-        # Error no de red (rechazo de Hacienda, datos inválidos, etc.)
+        # Error no de red (rechazo de Hacienda, datos inválidos, etc.).
+        # str(e) solo dice "HTTP 400"; el motivo REAL viene en response_body
+        # (Hacienda explica ahí qué campo/dato rechazó). Lo incluimos para que
+        # el error sea diagnosticable desde la interfaz.
+        detail = str(e)
+        body = (getattr(e, "response_body", "") or "").strip()
+        http = getattr(e, "http_status", 0) or 0
+        if body:
+            detail = f"{detail} | Respuesta Hacienda: {body}"
         einv.tries = (einv.tries or 0) + 1
-        einv.last_error = str(e)[:500]
+        einv.last_error = detail[:500]
         einv.status = "SEND_ERROR"
         db.commit()
 
-        logger.error(f"Error enviando comprobante | id={einv.id} | error={e}")
+        logger.error(f"Error enviando comprobante | id={einv.id} | http={http} | error={detail}")
         return {
             "success": False,
             "einvoice_id": einv.id,
             "status": einv.status,
-            "error": str(e),
+            "error": detail,
+            "http_status": http,
             "tries": einv.tries,
         }
 

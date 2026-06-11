@@ -1070,7 +1070,9 @@ def _write_emisor_std(root: ET.Element, issuer: Any,
     _add(ubi, "Provincia", _zfill(issuer.provincia, 1))
     _add(ubi, "Canton", _zfill(issuer.canton, 2))
     _add(ubi, "Distrito", _zfill(issuer.distrito, 2))
-    _add(ubi, "Barrio", _zfill(issuer.barrio, 5))
+    # Barrio es opcional en el XSD (min=0): emitir solo si el emisor lo tiene.
+    if _getv(issuer, "barrio"):
+        _add(ubi, "Barrio", _zfill(issuer.barrio, 5))
     _add(ubi, "OtrasSenas", _safe(issuer.otras_senas, 250))
     # FASE 4.4: Teléfono del emisor (opcional)
     iss_phone = _getv(issuer, "phone")
@@ -1186,7 +1188,7 @@ def build_xml_for_sale_v44(
         raise ValueError("No existe IssuerProfile. Configura el emisor en /settings/issuer-profile")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
 
     ET.register_namespace("", schema["xmlns"])
@@ -1268,7 +1270,7 @@ def build_xml_for_rep_v44(
         raise ValueError("No existe IssuerProfile.")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
     if not _has_receptor(customer):
         raise ValueError("REP requiere un receptor.")
@@ -1387,7 +1389,7 @@ def build_xml_for_nc_v44(
         raise ValueError("No existe IssuerProfile.")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
 
     ET.register_namespace("", schema["xmlns"])
@@ -1455,7 +1457,7 @@ def build_xml_for_nd_v44(
         raise ValueError("No existe IssuerProfile.")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
 
     ET.register_namespace("", schema["xmlns"])
@@ -1523,7 +1525,7 @@ def build_xml_for_fec_v44(
         raise ValueError("No existe IssuerProfile.")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
     _require(supplier, "name", "Proveedor.nombre")
     _require(supplier, "id_type", "Proveedor.id_type")
@@ -1674,7 +1676,7 @@ def build_xml_for_fee_v44(
         raise ValueError("No existe IssuerProfile.")
     _require(issuer, "provider_system_id", "ProveedorSistemas")
     _require(issuer, "economic_activity_code", "CodigoActividadEmisor")
-    for f in ("provincia", "canton", "distrito", "barrio", "otras_senas"):
+    for f in ("provincia", "canton", "distrito", "otras_senas"):  # Barrio es opcional en el XSD (min=0)
         _require(issuer, f, f"Emisor.{f}")
     if not _has_receptor(customer):
         raise ValueError("FEE requiere un receptor con identificación.")
