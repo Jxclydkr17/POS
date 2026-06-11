@@ -469,6 +469,36 @@ class MigrationFailedError(Exception):
         self.details = details or []
 
 
+class SchemaAheadError(Exception):
+    """
+    FASE 5 — Gate de version-skew (MySQL multi-caja).
+
+    La base de datos está en una revisión de Alembic que ESTE binario no
+    conoce, lo que indica que otra terminal con una versión MÁS NUEVA de
+    Violette POS ya migró la base compartida. Operar con un binario viejo
+    sobre un esquema nuevo es inseguro (la app podría leer/escribir columnas
+    que no entiende, o corromper datos). En vez de intentar migrar —y fallar
+    de forma confusa— abortamos y pedimos actualizar ESTA terminal.
+
+    A diferencia de MigrationFailedError, NO se ofrece restaurar un backup: la
+    base compartida está correcta y es más nueva; revertirla rompería a las
+    demás terminales. La acción correcta es actualizar este equipo.
+
+    En instalaciones SQLite de una sola caja este caso prácticamente no ocurre
+    (un binario, una BD, se actualizan juntos), así que el gate es inocuo allí
+    y solo entra en acción en despliegues MySQL con varias terminales.
+    """
+
+    def __init__(self, db_revision: str | None = None,
+                 binary_head: str | None = None):
+        self.db_revision = db_revision
+        self.binary_head = binary_head
+        super().__init__(
+            "La base de datos está en una versión más reciente que esta "
+            "instalación de Violette POS."
+        )
+
+
 def _verify_schema_consistency(expected_head: str | None = None) -> tuple[bool, list[str]]:
     """
     FASE 2.5 — Fix 2.5: Verifica que la BD está en el estado esperado
@@ -793,6 +823,25 @@ def _auto_migrate():
             "Omitiendo auto-migración.", e,
         )
         return
+
+    # ── FASE 5 — Gate de version-skew (MySQL multi-caja) ──────────────
+    # Si la BD está en una revisión que ESTE binario NO conoce, otra terminal
+    # con una versión más nueva ya migró la base compartida. Abortar con un
+    # mensaje claro ANTES de crear un backup inútil o de que Alembic falle de
+    # forma confusa ("no puede localizar la revisión X"). Solo aplica cuando
+    # hay una revisión registrada distinta del head local; en SQLite de una
+    # sola caja la revisión siempre es conocida, así que esto es un no-op.
+    if current_rev is not None and current_rev != head_rev:
+        try:
+            _db_rev_known = script.get_revision(current_rev) is not None
+        except Exception:
+            _db_rev_known = False
+        if not _db_rev_known:
+            logger.error(
+                "Esquema de BD (rev %s) más nuevo que el binario (head %s). "
+                "Esta terminal está desactualizada.", current_rev, head_rev,
+            )
+            raise SchemaAheadError(db_revision=current_rev, binary_head=head_rev)
 
     if current_rev == head_rev:
         logger.debug("Base de datos al día, sin migraciones pendientes.")
@@ -1173,6 +1222,42 @@ def _start_ui():
 # FASE 2.5 — Fix 2.5: Handler del diálogo de recovery
 # ═══════════════════════════════════════════════════════════════
 
+def _handle_schema_ahead(error: "SchemaAheadError") -> None:
+    """
+    FASE 5 — Diálogo cuando la BD está MÁS ADELANTE que el binario.
+
+    Otra terminal ya se actualizó y migró la base compartida. Informamos y NO
+    ofrecemos restaurar: la base está correcta y más nueva; lo que debe
+    actualizarse es ESTA terminal. La BD no fue modificada.
+    """
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from app.core.config import APP_VERSION
+
+    if QApplication.instance() is None:
+        QApplication(sys.argv)
+
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle("Actualización requerida — Violette POS")
+    box.setText("Esta terminal tiene una versión desactualizada de Violette POS.")
+    box.setInformativeText(
+        "La base de datos fue actualizada por otra terminal con una versión "
+        "más reciente del sistema. Para proteger los datos, esta terminal "
+        f"(versión {APP_VERSION}) no continuará.\n\n"
+        "Actualice Violette POS en este equipo a la última versión y vuelva a "
+        "abrirlo. La base de datos no fue modificada."
+    )
+    box.setDetailedText(
+        f"Revisión de esquema en la base de datos: {error.db_revision}\n"
+        f"Revisión máxima que conoce esta instalación: {error.binary_head}\n\n"
+        "Importante: NO restaure ningún backup. La base compartida está "
+        "correcta y es más nueva que este equipo; revertirla afectaría a las "
+        "demás terminales. La solución es actualizar esta terminal."
+    )
+    box.addButton("Cerrar", QMessageBox.RejectRole)
+    box.exec()
+
+
 def _handle_migration_failure(error: MigrationFailedError) -> bool:
     """
     Muestra un diálogo modal al usuario cuando la auto-migración falla y
@@ -1291,6 +1376,12 @@ def main():
         # Las demás excepciones siguen el flujo de "error fatal genérico".
         try:
             _first_run_check()
+        except SchemaAheadError as se:
+            # FASE 5 — La BD está más adelante que el binario (otra terminal ya
+            # se actualizó). Informar y cerrar; NO se ofrece restaurar.
+            app_logger.error("Esquema de BD más nuevo que el binario: %s", se)
+            _handle_schema_ahead(se)
+            sys.exit(3)
         except MigrationFailedError as me:
             app_logger.error("Migración fallida: %s", me)
             _handle_migration_failure(me)

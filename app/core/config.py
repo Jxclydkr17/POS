@@ -250,6 +250,21 @@ class Settings(BaseSettings):
     hacienda_user: str | None = None
     hacienda_password: str | None = None
 
+    # ── Actualizaciones automáticas (GitHub Releases) ──────────
+    # El updater consulta la API pública de GitHub:
+    #   https://api.github.com/repos/<GITHUB_OWNER>/<GITHUB_REPO>/releases/latest
+    # Requiere que el repositorio sea PÚBLICO (así no hace falta token).
+    # Si owner/repo quedan vacíos, el chequeo de actualizaciones se
+    # desactiva solo (get_github_releases_api_url() devuelve None) y la app
+    # funciona normal — útil en desarrollo o instalaciones sin updates.
+    github_owner: str = ""
+    github_repo: str = ""
+
+    # Chequeo automático al iniciar sesión (solo lo ve el admin).
+    # Poner UPDATE_CHECK_ENABLED=False en el .env para desactivarlo sin
+    # tocar github_owner/github_repo (p. ej. durante una jornada de ventas).
+    update_check_enabled: bool = True
+
     @field_validator('db_port', mode='before')
     @classmethod
     def _empty_port_to_default(cls, v):
@@ -334,6 +349,23 @@ def _read_version() -> str:
     return "1.0.0"
 
 APP_VERSION = _read_version()
+
+
+# ── Actualizaciones automáticas — URL de la API de GitHub Releases ──────
+# Construye la URL del endpoint "latest release" a partir de GITHUB_OWNER /
+# GITHUB_REPO (definidos en el .env). Devuelve None si no están configurados,
+# en cuyo caso el updater queda inactivo sin romper nada.
+#
+# El repositorio debe ser PÚBLICO: así la API responde sin token y no hace
+# falta embeber credenciales (un PAT dentro del .exe sería extraíble por
+# cualquiera). Ver app/services/updater.py para el consumo de esta URL.
+def get_github_releases_api_url() -> str | None:
+    """Retorna la URL de la API de GitHub para el último release, o None."""
+    owner = (settings.github_owner or "").strip()
+    repo = (settings.github_repo or "").strip()
+    if not owner or not repo:
+        return None
+    return f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
 
 
 # ── FASE 5 — Fix 5.2: Directorio de datos externo ───────────

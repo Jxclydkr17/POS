@@ -47,6 +47,19 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 
+; ── FASE 6 — Actualización in-place (auto-update silencioso) ──
+; CloseApplications=yes → si algún archivo a reemplazar está en uso, Windows
+;   usa el Restart Manager para cerrar la app. Es una RED DE SEGURIDAD: el
+;   actualizador integrado ya cierra Violette POS antes de lanzar este
+;   instalador, pero esto cubre el caso de que el cierre no haya terminado, o
+;   de que el usuario ejecute el instalador con la app abierta.
+; RestartApplications=no → NO dejar que el Restart Manager relance la app: del
+;   relanzamiento nos encargamos nosotros (ver [Run] para la instalación
+;   interactiva y [Code] ssDone para la silenciosa). Así evitamos un doble
+;   arranque.
+CloseApplications=yes
+RestartApplications=no
+
 ; Icono del instalador
 ; SetupIconFile=ui\assets\logo.ico
 
@@ -79,7 +92,10 @@ Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-; Ejecutar la app despues de instalar (opcional)
+; Iniciar la app después de una instalación INTERACTIVA (primer install o
+; update manual). skipifsilent lo omite en /VERYSILENT a propósito: en ese
+; caso (update automático) el relanzamiento lo hace [Code] ssDone, evitando
+; un doble arranque.
 Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
@@ -96,6 +112,8 @@ Type: filesandordirs; Name: "{app}\__pycache__"
 // updates. Antes el installer creaba {app}\certs (huérfano: backend
 // escribía a {app}\_internal\app\certs, borrado en cada update).
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
@@ -104,5 +122,18 @@ begin
     ForceDirectories(ExpandConstant('{app}\data\certs'));
     ForceDirectories(ExpandConstant('{app}\data\uploads\logos'));
     ForceDirectories(ExpandConstant('{app}\data\uploads\purchases'));
+  end;
+
+  // ── FASE 6 — Relanzar la app tras una actualización SILENCIOSA ──
+  // En instalación interactiva, el [Run] postinstall (con skipifsilent) lanza
+  // la app cuando el usuario termina el asistente. En instalación silenciosa
+  // —la que dispara el actualizador integrado con /VERYSILENT— ese [Run] se
+  // omite, así que relanzamos aquí. WizardSilent() es True solo en /SILENT o
+  // /VERYSILENT, por lo que NUNCA hay doble arranque (interactiva = [Run],
+  // silenciosa = este Exec). ewNoWait: no bloquear el cierre del instalador.
+  if CurStep = ssDone then
+  begin
+    if WizardSilent() then
+      Exec(ExpandConstant('{app}\{#MyAppExeName}'), '', '', SW_SHOW, ewNoWait, ResultCode);
   end;
 end;

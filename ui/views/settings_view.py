@@ -1308,6 +1308,28 @@ class SettingsView(QWidget):
         box_cabys.setLayout(cabys_layout)
         layout.addWidget(box_cabys)
 
+        # --- Actualizaciones de la aplicación (GitHub Releases) ---
+        box_update = QGroupBox("🚀 Actualizaciones de Violette POS")
+        update_layout = QVBoxLayout()
+        from app.core.config import APP_VERSION
+        self.label_app_version = QLabel(f"Versión instalada: {APP_VERSION}")
+        update_layout.addWidget(self.label_app_version)
+        # Instalar una actualización reemplaza el binario: acción solo de admin
+        # (el endpoint del backend también es admin-only). Para no-admin se
+        # muestra la versión, pero no el botón.
+        if getattr(self.main_window, "role", None) == "admin":
+            self.btn_check_update = QPushButton("🔍 Buscar actualizaciones")
+            self.btn_check_update.setMinimumHeight(36)
+            self.btn_check_update.clicked.connect(self._on_check_app_update)
+            update_layout.addWidget(self.btn_check_update)
+        else:
+            _note = QLabel("Solo un administrador puede instalar actualizaciones.")
+            _note.setStyleSheet("color: #8b7aaa;")
+            _note.setWordWrap(True)
+            update_layout.addWidget(_note)
+        box_update.setLayout(update_layout)
+        layout.addWidget(box_update)
+
         # --- 6.1: Backup y Restauración ---
         box_backup = QGroupBox("💾 Backup y Restauración de Base de Datos")
         backup_layout = QVBoxLayout()
@@ -1814,6 +1836,48 @@ class SettingsView(QWidget):
         self.btn_update_cabys.setText("🔄 Actualizar CABYS desde Hacienda")
         logger.error(f"Error actualizando CABYS: {error}")
         show_toast(f"Error CABYS: {error}", success=False, parent=self.main_window)
+
+    # ==========================================================
+    # Actualizaciones de la app (GitHub Releases) — solo admin
+    # ==========================================================
+    def _on_check_app_update(self):
+        """Busca actualizaciones manualmente (solo admin)."""
+        self.btn_check_update.setEnabled(False)
+        self.btn_check_update.setText("Buscando…")
+        from ui.services.update_manager import check_async
+        check_async(
+            on_success=self._on_app_update_result,
+            on_finished=self._reset_check_update_btn,
+        )
+
+    def _on_app_update_result(self, result: dict):
+        result = result or {}
+        if not result.get("configured", True):
+            show_toast(
+                "Actualizaciones no configuradas (falta el repositorio en .env).",
+                success=False, parent=self.main_window,
+            )
+            return
+        if result.get("error"):
+            show_toast(f"No se pudo verificar: {result['error']}", success=False, parent=self.main_window)
+            return
+        if not result.get("available"):
+            show_toast(
+                f"Ya tienes la última versión ({result.get('current_version', '')}).",
+                success=True, parent=self.main_window,
+            )
+            return
+        # Diferir la apertura del modal a que el ciclo de run_async termine.
+        QTimer.singleShot(0, lambda: self._open_app_update_dialog(result))
+
+    def _open_app_update_dialog(self, result: dict):
+        from ui.dialogs.update_dialog import UpdateDialog
+        UpdateDialog(result, parent=self.main_window).exec()
+
+    def _reset_check_update_btn(self):
+        if hasattr(self, "btn_check_update") and self.btn_check_update:
+            self.btn_check_update.setEnabled(True)
+            self.btn_check_update.setText("🔍 Buscar actualizaciones")
 
     # ==========================================================
     # 6.5: Populate system info

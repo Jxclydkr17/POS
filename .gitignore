@@ -48,6 +48,9 @@ data/backup_status.json
 data/.secret_key_fingerprint
 data/login_attempts.json
 
+# ── Actualizaciones descargadas (instaladores .exe + temporales) ──
+updates/
+
 # ── Sesión de usuario ──
 session.json
 

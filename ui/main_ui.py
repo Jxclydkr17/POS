@@ -166,6 +166,10 @@ class MainWindow(QMainWindow):
         self.setup_ui()
         self.showMaximized()
 
+        # ── Chequeo de actualizaciones tras iniciar sesión (solo admin) ──
+        # Diferido para no competir con la carga inicial de la vista de ventas.
+        self._schedule_update_check()
+
     def resizeEvent(self, event):
         super().resizeEvent(event)
 
@@ -175,6 +179,57 @@ class MainWindow(QMainWindow):
             self.sidebar_widget.setGeometry(0, 0, self.sidebar_expanded_width, h)
 
         self._position_floating_chat()
+
+    # ==========================================================
+    # Chequeo de actualizaciones (GitHub Releases) — solo admin
+    # ==========================================================
+    def _schedule_update_check(self):
+        """Programa el chequeo de actualizaciones tras el arranque.
+
+        Solo para administradores y si está habilitado en la configuración.
+        El chequeo real se difiere unos segundos para no competir con la carga
+        inicial de datos, y es totalmente NO bloqueante: si no hay internet o
+        falla, simplemente no pasa nada (no molesta al usuario).
+        """
+        if getattr(self, "role", None) != "admin":
+            return
+        try:
+            from app.core.config import settings
+            if not settings.update_check_enabled:
+                return
+        except Exception:
+            pass
+        # 3.5 s de margen: la vista de ventas carga a los 100 ms.
+        QTimer.singleShot(3500, self._run_update_check)
+
+    def _run_update_check(self):
+        """Verifica si hay una versión nueva y, si la hay, abre el diálogo."""
+        try:
+            from ui.services.update_manager import check_async
+        except Exception as e:
+            logging.getLogger(__name__).debug("Updater no disponible: %s", e)
+            return
+
+        def _on_result(result: dict):
+            result = result or {}
+            # Silencioso ante "no configurado", error de red o sin novedades:
+            # el chequeo automático solo INTERRUMPE cuando hay algo que ofrecer.
+            if not result.get("available") or result.get("error"):
+                return
+            # Diferir la apertura del modal a que el ciclo de run_async termine
+            # (restaura el cursor de espera antes de mostrar el diálogo).
+            QTimer.singleShot(0, lambda: self._open_update_dialog(result))
+
+        # check_async es no bloqueante y defensivo; cualquier error queda en el
+        # dict (no lanza), así que on_error es solo una red de seguridad.
+        check_async(on_success=_on_result)
+
+    def _open_update_dialog(self, result: dict):
+        try:
+            from ui.dialogs.update_dialog import UpdateDialog
+            UpdateDialog(result, parent=self).exec()
+        except Exception as e:
+            logging.getLogger(__name__).warning("No se pudo abrir el diálogo de update: %s", e)
 
     # ==========================================================
     # MÉTODOS PARA CREAR BOTONES DE GRUPO Y SUBMENUS
